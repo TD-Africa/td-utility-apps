@@ -849,7 +849,7 @@
             { key: "ft20", label: "20ft", w: 50, type: "number", group: "id" },
             { key: "shipping_line", label: "Shipping line", w: 120, type: "text", group: "id" },
             { key: "eta_port", label: "ETA to port", w: 115, type: "date", group: "dates" },
-            { key: "est_delivery", label: "Est delivery to WH", w: 140, type: "date", group: "dates" },
+            { key: "est_delivery", label: "Est delivery to WH", w: 140, type: "computed", group: "dates" },
             { key: "act_delivery", label: "Actual delivery to WH", w: 150, type: "date", group: "dates" },
             { key: "lead_time_est", label: "Est lead time (days)", w: 145, type: "computed", group: "dates" },
             { key: "lead_time_act", label: "Act lead time (days)", w: 145, type: "computed", group: "dates" },
@@ -936,13 +936,60 @@
 
         // ── Helpers ──────────────────────────────────────────────────────────────────
         const pn = v => { if (v === null || v === undefined || v === "") return 0; const n = parseFloat(String(v).replace(/,/g, "")); return isNaN(n) ? 0 : n; };
+        // Normalise any date-ish value to "YYYY-MM-DD" — strips any time component or stray ISO suffixes.
+        // Sheets sometimes returns "2026-01-12T00:00:00.000Z" or "Mon Jan 12 2026 ..."; this trims to date-only.
+        const normDate = v =>
+        {
+            if (!v) return "";
+            const s = String(v).trim();
+            if (!s) return "";
+            // Already YYYY-MM-DD?
+            const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (m) return m[1] + "-" + m[2] + "-" + m[3];
+            // Otherwise let Date parse, then format
+            const d = new Date(s);
+            if (isNaN(d)) return s; // leave as-is if unparseable
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            return yyyy + "-" + mm + "-" + dd;
+        };
+        // Add N days to a YYYY-MM-DD string and return YYYY-MM-DD
+        const addDays = (dateStr, n) =>
+        {
+            const base = normDate(dateStr);
+            if (!base) return "";
+            const d = new Date(base + "T00:00:00");
+            if (isNaN(d)) return "";
+            d.setDate(d.getDate() + n);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            return yyyy + "-" + mm + "-" + dd;
+        };
+        const EST_DELIVERY_OFFSET_DAYS = 10;
         const daysBetween = (a, b) => { if (!a || !b) return null; const d1 = new Date(a), d2 = new Date(b); if (isNaN(d1) || isNaN(d2)) return null; return Math.round((d2 - d1) / 86400000); };
         const daysFromToday = d => { if (!d) return null; return Math.round((new Date(d) - new Date()) / 86400000); };
         const nextSno = rows => rows.length ? Math.max(...rows.map(r => r.sno || 0)) + 1 : 1;
         const emptyRow = sno => { const o = { sno }; COLS.forEach(c => { if (c.type !== "computed") o[c.key] = c.key === "sno" ? sno : c.key === "status" ? "Booked" : ""; }); return o; };
         const CSV_HDR = COLS.filter(c => c.type !== "computed").map(c => c.label);
         const fmt = (v, type) => { if (v === null || v === undefined || v === "") return ""; if (type === "currency") return Number(v).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return v; };
-        const computeRow = r => ({ ...r, lead_time_est: daysBetween(r.eta_port, r.est_delivery), lead_time_act: daysBetween(r.eta_port, r.act_delivery), lead_time_var: (daysBetween(r.eta_port, r.est_delivery) !== null && daysBetween(r.eta_port, r.act_delivery) !== null) ? daysBetween(r.eta_port, r.act_delivery) - daysBetween(r.eta_port, r.est_delivery) : null });
+        const computeRow = r =>
+        {
+            // Derive est_delivery from eta_port + offset days (read-only field)
+            const estDelivery = addDays(r.eta_port, EST_DELIVERY_OFFSET_DAYS);
+            const ltEst = daysBetween(r.eta_port, estDelivery);
+            const ltAct = daysBetween(r.eta_port, r.act_delivery);
+            return {
+                ...r,
+                eta_port: normDate(r.eta_port),
+                act_delivery: normDate(r.act_delivery),
+                est_delivery: estDelivery,
+                lead_time_est: ltEst,
+                lead_time_act: ltAct,
+                lead_time_var: (ltEst !== null && ltAct !== null) ? ltAct - ltEst : null,
+            };
+        };
         const naira = v => v !== "" && v !== null && v !== undefined ? "₦" + pn(v).toLocaleString("en-NG", { maximumFractionDigits: 0 }) : "—";
         const cS = v => { const n = Math.abs(v); if (n >= 1e9) return (v / 1e9).toFixed(1) + "B"; if (n >= 1e6) return (v / 1e6).toFixed(1) + "M"; if (n >= 1e3) return (v / 1e3).toFixed(0) + "K"; return v.toFixed(0); };
         const escHtml = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -1136,10 +1183,25 @@
         function cancelEdit() { state.editId = null; state.editData = {}; render(); }
         function updateEditField(key, val) { state.editData[key] = val; }
 
+        // Normalise a row before saving:
+        //  • strip computed fields (they're re-derived on display)
+        //  • normalise date fields to YYYY-MM-DD (no time component)
+        //  • if act_delivery is set, force status to "Delivered"
+        function normalizeRowOnSave(row)
+        {
+            const r = { ...row };
+            delete r.lead_time_est; delete r.lead_time_act; delete r.lead_time_var;
+            delete r.est_delivery; // derived from eta_port + 10 days, not stored
+            if (r.eta_port) r.eta_port = normDate(r.eta_port);
+            if (r.act_delivery) r.act_delivery = normDate(r.act_delivery);
+            // Auto-set status to Delivered when actual delivery date is recorded
+            if (r.act_delivery && r.act_delivery !== "") r.status = "Delivered";
+            return r;
+        }
+
         async function saveEdit()
         {
-            const clean = { ...state.editData };
-            delete clean.lead_time_est; delete clean.lead_time_act; delete clean.lead_time_var;
+            const clean = normalizeRowOnSave(state.editData);
             state.rows = state.rows.map(r => r.sno === state.editId ? clean : r);
             state.editId = null; state.editData = {};
             render();
@@ -1154,8 +1216,7 @@
         async function addRow()
         {
             const sno = nextSno(state.rows);
-            const row = { ...emptyRow(sno), ...state.newRow, sno };
-            delete row.lead_time_est; delete row.lead_time_act; delete row.lead_time_var;
+            const row = normalizeRowOnSave({ ...emptyRow(sno), ...state.newRow, sno });
             state.rows = [...state.rows, row];
             state.showAdd = false; state.newRow = {};
             render();
@@ -1182,10 +1243,11 @@
             for (let i = 0; i < dataLines.length; i++)
             {
                 const vals = parseCsvLine(dataLines[i]); if (vals.length < 2) continue;
-                const row = emptyRow(nextSno([...state.rows, ...newRows]));
+                let row = emptyRow(nextSno([...state.rows, ...newRows]));
                 if (isHdr) { header.forEach((h, idx) => { const col = inputCols.find(c => c.label.toLowerCase() === h.toLowerCase() || c.key === h.toLowerCase()); if (col && vals[idx] !== undefined) row[col.key] = vals[idx]; }); }
                 else { inputCols.forEach((c, idx) => { if (vals[idx] !== undefined) row[c.key] = vals[idx]; }); }
                 if (!row.status || !STATUSES.includes(row.status)) row.status = "Booked";
+                row = normalizeRowOnSave(row);
                 newRows.push(row);
             }
             if (!newRows.length) { errEl.textContent = "Could not parse any rows."; return; }
@@ -1329,16 +1391,18 @@
             {
                 const cr = computeRow(r); const ltV = cr.lead_time_var;
                 const ltC = ltV === null ? "var(--text-secondary)" : ltV > 0 ? "var(--text-danger)" : ltV < 0 ? "var(--text-success)" : "inherit";
-                const isOverdue = r.est_delivery && new Date(r.est_delivery) < today;
+                const isOverdue = cr.est_delivery && new Date(cr.est_delivery) < today;
                 const isEdit = state.editId === r.sno;
                 if (isEdit)
                 {
+                    // In edit mode, derive est_delivery live from the (possibly edited) eta_port so the user sees it update
+                    const liveEstDelivery = addDays(state.editData.eta_port, EST_DELIVERY_OFFSET_DAYS);
                     return `<tr class="${isOverdue ? 'row-overdue' : ''}">
             <td class="fw-500">${escHtml(r.bl_ref)}</td>
             <td><input class="field-edit" value="${escHtml(state.editData.brand || '')}" oninput="updateEditField('brand', this.value)"></td>
             <td><input class="field-edit" value="${escHtml(state.editData.product || '')}" oninput="updateEditField('product', this.value)"></td>
-            <td><input class="field-edit" type="date" value="${escHtml(state.editData.eta_port || '')}" oninput="updateEditField('eta_port', this.value)"></td>
-            <td><input class="field-edit" type="date" value="${escHtml(state.editData.est_delivery || '')}" oninput="updateEditField('est_delivery', this.value)"></td>
+            <td><input class="field-edit" type="date" value="${escHtml(state.editData.eta_port || '')}" oninput="updateEditField('eta_port', this.value); render();"></td>
+            <td class="text-secondary" title="Auto: ETA + ${EST_DELIVERY_OFFSET_DAYS} days">${escHtml(liveEstDelivery || "—")}</td>
             <td><input class="field-edit" type="date" value="${escHtml(state.editData.act_delivery || '')}" oninput="updateEditField('act_delivery', this.value)"></td>
             <td class="text-center">${cr.lead_time_est !== null ? cr.lead_time_est + "d" : "—"}</td>
             <td class="text-center">${cr.lead_time_act !== null ? cr.lead_time_act + "d" : "—"}</td>
@@ -1352,9 +1416,9 @@
           <td class="fw-500">${escHtml(r.bl_ref)}</td>
           <td>${escHtml(r.brand || "")}</td>
           <td>${escHtml(r.product || "")}</td>
-          <td>${escHtml(r.eta_port || "—")}</td>
-          <td style="color:${isOverdue ? 'var(--text-danger)' : 'inherit'}">${escHtml(r.est_delivery || "—")}</td>
-          <td>${escHtml(r.act_delivery || "—")}</td>
+          <td>${escHtml(cr.eta_port || "—")}</td>
+          <td style="color:${isOverdue ? 'var(--text-danger)' : 'inherit'}">${escHtml(cr.est_delivery || "—")}</td>
+          <td>${escHtml(cr.act_delivery || "—")}</td>
           <td class="text-center">${cr.lead_time_est !== null ? cr.lead_time_est + "d" : "—"}</td>
           <td class="text-center">${cr.lead_time_act !== null ? cr.lead_time_act + "d" : "—"}</td>
           <td class="text-center" style="color:${ltC};font-weight:500;">${ltV !== null ? (ltV > 0 ? "+" + ltV : ltV) + "d" : "—"}</td>
