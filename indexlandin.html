@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TD Utility Apps — TD Africa</title>
+    <meta name="description" content="Internal utility applications for TD Africa operations.">
+    <script>
+        // Set theme before render to prevent flash-of-light
+        (function ()
+        {
+            const stored = localStorage.getItem('td-theme');
+            document.documentElement.setAttribute('data-theme', stored || 'light');
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            /* Brand */
+            --burgundy: #6B1F2E;
+            --burgundy-hover: #571826;
+            --burgundy-tint: rgba(107, 31, 46, 0.08);
+
+            /* Surfaces — light mode */
+            --bg: #ffffff;
+            --bg-subtle: #fafafa;
+            --bg-muted: #f5f5f4;
+            --bg-card: #ffffff;
+            --bg-card-hover: #fafaf9;
+
+            /* Text */
+            --text: #0f0f0f;
+            --text-secondary: #525252;
+            --text-tertiary: #8a8a8a;
+            --text-quaternary: #b0b0b0;
+
+            /* Borders & lines */
+            --border: rgba(0, 0, 0, 0.08);
+            --border-strong: rgba(0, 0, 0, 0.12);
+            --border-subtle: rgba(0, 0, 0, 0.04);
+
+            /* Shadows — Linear style */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.04);
+            --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.06);
+
+            /* Status */
+            --status-live: #15803d;
+            --status-live-bg: rgba(34, 197, 94, 0.1);
+            --status-beta: #b45309;
+            --status-beta-bg: rgba(251, 191, 36, 0.12);
+            --status-soon: #737373;
+            --status-soon-bg: rgba(115, 115, 115, 0.1);
+
+            /* Type */
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            --font-mono: 'JetBrains Mono', ui-monospace, "SF Mono", Menlo, monospace;
+
+            /* Radii */
+            --r-sm: 6px;
+            --r-md: 8px;
+            --r-lg: 12px;
+        }
+
+        [data-theme="dark"] {
+            --burgundy: #c2415a;
+            --burgundy-hover: #d05068;
+            --burgundy-tint: rgba(194, 65, 90, 0.12);
+
+            --bg: #0a0a0a;
+            --bg-subtle: #111111;
+            --bg-muted: #181818;
+            --bg-card: #131313;
+            --bg-card-hover: #1a1a1a;
+
+            --text: #f5f5f5;
+            --text-secondary: #a8a8a8;
+            --text-tertiary: #737373;
+            --text-quaternary: #525252;
+
+            --border: rgba(255, 255, 255, 0.08);
+            --border-strong: rgba(255, 255, 255, 0.14);
+            --border-subtle: rgba(255, 255, 255, 0.04);
+
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+            --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+
+            --status-live: #4ade80;
+            --status-live-bg: rgba(34, 197, 94, 0.15);
+            --status-beta: #fbbf24;
+            --status-beta-bg: rgba(251, 191, 36, 0.12);
+            --status-soon: #a3a3a3;
+            --status-soon-bg: rgba(163, 163, 163, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            font-size: 15px;
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            transition: background 0.2s, color 0.2s;
+            font-feature-settings: "cv11", "ss01";
+        }
+
+        /* ── Top nav ── */
+        .nav {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: color-mix(in srgb, var(--bg) 85%, transparent);
+            backdrop-filter: saturate(180%) blur(12px);
+            -webkit-backdrop-filter: saturate(180%) blur(12px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: var(--text);
+        }
+
+        .brand-mark {
+            width: 28px;
+            height: 28px;
+            flex-shrink: 0;
+        }
+
+        .brand-name {
+            font-weight: 600;
+            font-size: 14px;
+            letter-spacing: -0.01em;
+        }
+
+        .brand-divider {
+            width: 1px;
+            height: 14px;
+            background: var(--border-strong);
+            margin: 0 4px;
+        }
+
+        .brand-suffix {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            border-radius: var(--r-sm);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--status-live);
+            background: var(--status-live-bg);
+        }
+
+        .nav-status .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .nav-status span:not(.dot) {
+                display: none;
+            }
+
+            .brand-suffix {
+                display: none;
+            }
+
+            .brand-divider {
+                display: none;
+            }
+        }
+
+        .theme-toggle {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 32px;
+            height: 32px;
+            border-radius: var(--r-sm);
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            transition: all 0.15s;
+        }
+
+        .theme-toggle:hover {
+            background: var(--bg-muted);
+            color: var(--text);
+            border-color: var(--border-strong);
+        }
+
+        .theme-toggle svg {
+            width: 15px;
+            height: 15px;
+        }
+
+        .theme-toggle .icon-sun {
+            display: none;
+        }
+
+        .theme-toggle .icon-moon {
+            display: block;
+        }
+
+        [data-theme="dark"] .theme-toggle .icon-sun {
+            display: block;
+        }
+
+        [data-theme="dark"] .theme-toggle .icon-moon {
+            display: none;
+        }
+
+        /* ── Hero ── */
+        .hero {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 72px 24px 48px;
+        }
+
+        .hero-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 10px 4px 8px;
+            background: var(--burgundy-tint);
+            color: var(--burgundy);
+            border-radius: 100px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            margin-bottom: 24px;
+        }
+
+        .hero-eyebrow .badge-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--burgundy);
+        }
+
+        h1 {
+            font-size: clamp(32px, 5vw, 48px);
+            font-weight: 600;
+            line-height: 1.1;
+            letter-spacing: -0.025em;
+            margin-bottom: 16px;
+            max-width: 720px;
+        }
+
+        .hero-lede {
+            font-size: 17px;
+            line-height: 1.55;
+            color: var(--text-secondary);
+            max-width: 600px;
+            font-weight: 400;
+        }
+
+        /* ── Search bar (Raycast-inspired, cosmetic) ── */
+        .search {
+            max-width: 1200px;
+            margin: 32px auto 0;
+            padding: 0 24px;
+        }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 11px 14px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            box-shadow: var(--shadow-sm);
+            max-width: 420px;
+            transition: all 0.15s;
+        }
+
+        .search-box:focus-within {
+            border-color: var(--burgundy);
+            box-shadow: 0 0 0 3px var(--burgundy-tint);
+        }
+
+        .search-box svg {
+            width: 15px;
+            height: 15px;
+            stroke: var(--text-tertiary);
+            flex-shrink: 0;
+        }
+
+        .search-box input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--text);
+        }
+
+        .search-box input::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        .search-shortcut {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-tertiary);
+            padding: 2px 6px;
+            background: var(--bg-muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+
+        /* ── Apps grid ── */
+        .apps-section {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 64px 24px 80px;
+        }
+
+        .section-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }
+
+        .section-meta {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .apps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+        }
+
+        .app-card {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--r-lg);
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.15s ease;
+            overflow: hidden;
+            min-height: 220px;
+        }
+
+        .app-card:not(.disabled):hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-strong);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-1px);
+        }
+
+        .app-card.disabled {
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .app-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            gap: 12px;
+        }
+
+        .app-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--r-sm);
+            background: var(--burgundy-tint);
+            color: var(--burgundy);
+            display: grid;
+            place-items: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+
+        .app-card.disabled .app-icon {
+            background: var(--bg-muted);
+            color: var(--text-tertiary);
+        }
+
+        .app-icon svg {
+            width: 18px;
+            height: 18px;
+            stroke: currentColor;
+            stroke-width: 1.75;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .app-name {
+            font-size: 16px;
+            font-weight: 600;
+            line-height: 1.3;
+            letter-spacing: -0.01em;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .app-desc {
+            font-size: 13.5px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            margin-bottom: auto;
+            padding-bottom: 20px;
+        }
+
+        .app-foot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 8px;
+            border-radius: 100px;
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+        }
+
+        .status .indicator {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .status.live {
+            color: var(--status-live);
+            background: var(--status-live-bg);
+        }
+
+        .status.live .indicator {
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status.beta {
+            color: var(--status-beta);
+            background: var(--status-beta-bg);
+        }
+
+        .status.soon {
+            color: var(--status-soon);
+            background: var(--status-soon-bg);
+        }
+
+        .app-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-tertiary);
+            transition: all 0.15s;
+        }
+
+        .app-action svg {
+            width: 12px;
+            height: 12px;
+            stroke: currentColor;
+            stroke-width: 1.75;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            transition: transform 0.15s;
+        }
+
+        .app-card:not(.disabled):hover .app-action {
+            color: var(--burgundy);
+        }
+
+        .app-card:not(.disabled):hover .app-action svg {
+            transform: translateX(2px);
+        }
+
+        /* Card entrance */
+        .app-card {
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards;
+        }
+
+        .app-card:nth-child(1) {
+            animation-delay: 0.1s;
+        }
+
+        .app-card:nth-child(2) {
+            animation-delay: 0.18s;
+        }
+
+        .app-card:nth-child(3) {
+            animation-delay: 0.26s;
+        }
+
+        .hero-eyebrow,
+        h1,
+        .hero-lede,
+        .search {
+            animation: fadeUp 0.5s ease both;
+        }
+
+        .hero-eyebrow {
+            animation-delay: 0.05s;
+        }
+
+        h1 {
+            animation-delay: 0.1s;
+        }
+
+        .hero-lede {
+            animation-delay: 0.15s;
+        }
+
+        .search {
+            animation-delay: 0.2s;
+        }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* ── Footer ── */
+        footer {
+            border-top: 1px solid var(--border);
+            margin-top: 32px;
+            padding: 32px 24px;
+            background: var(--bg-subtle);
+        }
+
+        .footer-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .footer-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .footer-brand-mark {
+            width: 22px;
+            height: 22px;
+        }
+
+        .footer-text {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .footer-text strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .footer-meta {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-tertiary);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .footer-meta a {
+            color: inherit;
+            text-decoration: none;
+            transition: color 0.15s;
+        }
+
+        .footer-meta a:hover {
+            color: var(--text);
+        }
+
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* Focus ring */
+        a:focus-visible,
+        button:focus-visible {
+            outline: 2px solid var(--burgundy);
+            outline-offset: 2px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Inline brand mark — simplified diamond-and-circuit lockup inspired by your logo -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+            <symbol id="td-mark" viewBox="0 0 32 32">
+                <!-- Diamond -->
+                <rect x="6" y="6" width="20" height="20" transform="rotate(45 16 16)" fill="#6B1F2E" />
+                <!-- Stylised TD letterform inside -->
+                <text x="16" y="20" text-anchor="middle" font-family="Inter, sans-serif" font-size="11"
+                    font-weight="700" fill="#ffffff" letter-spacing="-0.5">td</text>
+            </symbol>
+        </defs>
+    </svg>
+
+    <nav class="nav">
+        <div class="nav-inner">
+            <a href="#" class="brand">
+                <svg class="brand-mark">
+                    <use href="#td-mark" />
+                </svg>
+                <span class="brand-name">TD Africa</span>
+                <span class="brand-divider"></span>
+                <span class="brand-suffix">Utility Apps</span>
+            </a>
+            <div class="nav-actions">
+                <span class="nav-status">
+                    <span class="dot"></span>
+                    <span>All systems operational</span>
+                </span>
+                <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+                    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                    </svg>
+                    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="4" />
+                        <path
+                            d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="hero-eyebrow">
+            <span class="badge-dot"></span>
+            <span>Internal · v1.0</span>
+        </div>
+        <h1>Utility apps for TD Africa operations.</h1>
+        <p class="hero-lede">A single home for the dashboards, trackers, and analyzers that keep our supply chain,
+            clearing, and reporting moving.</p>
+    </section>
+
+    <div class="search">
+        <label class="search-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.3-4.3" />
+            </svg>
+            <input id="search-input" type="text" placeholder="Search apps…" oninput="filterApps(this.value)">
+            <span class="search-shortcut">⌘K</span>
+        </label>
+    </div>
+
+    <section class="apps-section">
+        <div class="section-head">
+            <h2 class="section-title">Applications</h2>
+            <span class="section-meta" id="app-count">3 apps</span>
+        </div>
+
+        <div class="apps-grid" id="apps-grid">
+
+            <a href="./td-clearing-tracker/" class="app-card"
+                data-name="td clearing tracker container shipment lead time">
+                <div class="app-head">
+                    <div class="app-icon">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M3 7l9-4 9 4v10l-9 4-9-4V7z" />
+                            <path d="M3 7l9 4 9-4" />
+                            <path d="M12 11v10" />
+                        </svg>
+                    </div>
+                    <span class="status live"><span class="indicator"></span>Live</span>
+                </div>
+                <h3 class="app-name">TD Clearing Tracker</h3>
+                <p class="app-desc">Track containers from booking to warehouse — lead times, costs, and live KPIs across
+                    all incoming shipments.</p>
+                <div class="app-foot">
+                    <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary);">No.
+                        01</span>
+                    <span class="app-action">Open
+                        <svg viewBox="0 0 24 24">
+                            <path d="M5 12h14M13 6l6 6-6 6" />
+                        </svg>
+                    </span>
+                </div>
+            </a>
+
+            <a href="./supply-chain-command/" class="app-card"
+                data-name="supply chain command centre procurement inventory logistics">
+                <div class="app-head">
+                    <div class="app-icon">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="12" cy="12" r="3" />
+                            <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                            <path d="M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" />
+                        </svg>
+                    </div>
+                    <span class="status beta"><span class="indicator"></span>In development</span>
+                </div>
+                <h3 class="app-name">Supply Chain Command Centre</h3>
+                <p class="app-desc">Real-time visibility across procurement, inventory, logistics, and fulfilment — your
+                    operational nerve centre.</p>
+                <div class="app-foot">
+                    <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary);">No.
+                        02</span>
+                    <span class="app-action">Open
+                        <svg viewBox="0 0 24 24">
+                            <path d="M5 12h14M13 6l6 6-6 6" />
+                        </svg>
+                    </span>
+                </div>
+            </a>
+
+            <a href="#" class="app-card disabled" onclick="event.preventDefault();" aria-disabled="true"
+                data-name="report analyzer dashboard analytics">
+                <div class="app-head">
+                    <div class="app-icon">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+                        </svg>
+                    </div>
+                    <span class="status soon"><span class="indicator"></span>Coming soon</span>
+                </div>
+                <h3 class="app-name">Report Analyzer</h3>
+                <p class="app-desc">Upload, parse, and explore operational reports — find the story behind the numbers
+                    without spreadsheet gymnastics.</p>
+                <div class="app-foot">
+                    <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary);">No.
+                        03</span>
+                    <span class="app-action">Soon
+                        <svg viewBox="0 0 24 24">
+                            <path
+                                d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                        </svg>
+                    </span>
+                </div>
+            </a>
+
+        </div>
+    </section>
+
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <svg class="footer-brand-mark">
+                    <use href="#td-mark" />
+                </svg>
+                <span class="footer-text"><strong>TD Africa</strong> · Empowering You</span>
+            </div>
+            <div class="footer-meta">
+                <span>© 2026 · Internal use only</span>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Theme toggle (initial value already set in <head> to prevent flash)
+        function toggleTheme()
+        {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('td-theme', next);
+        }
+
+        // Search filter
+        function filterApps(query)
+        {
+            const q = query.toLowerCase().trim();
+            const cards = document.querySelectorAll('.app-card');
+            let visible = 0;
+            cards.forEach(card =>
+            {
+                const name = card.dataset.name || '';
+                const match = !q || name.includes(q);
+                card.style.display = match ? '' : 'none';
+                if (match) visible++;
+            });
+            document.getElementById('app-count').textContent = visible + (visible === 1 ? ' app' : ' apps');
+        }
+
+        // ⌘K / Ctrl+K to focus search
+        document.addEventListener('keydown', (e) =>
+        {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k')
+            {
+                e.preventDefault();
+                document.getElementById('search-input').focus();
+            }
+        });
+    </script>
+
+</body>
+
+</html>
