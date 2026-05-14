@@ -1131,42 +1131,16 @@
             "In clearing": "#1D9E75", "Cleared": "#639922", "Delivered": "#3C3489", "Cancelled": "#E24B4A"
         };
 
-        const SEA_SEED = [
-            { sno: 1, bl_ref: "TD/SFA218/006 & TD/SFA221/001B", brand: "Samsung", product: "TVs", ft40: 2, ft20: 0, shipping_line: "", eta_port: "2026-01-12", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 20000000, act_duty: 11491023.58, est_paar: 200000, act_paar: 200000, est_clearing: 3000000, act_clearing: 2700000, est_transport: 1515014, act_transport: 1115050, est_shipping: 2860000, act_shipping: 4649063.81, est_terminal: 7614211.56, act_terminal: 14527362, est_son: 511000, act_son: 511000, total_required: 35189225.56, act_spent: 35193499.39, variance: -4273.83, remarks: "" },
-            { sno: 2, bl_ref: "SHZ7810838B", brand: "Huawei", product: "Ideahub", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-03-05", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 2237212.72, est_paar: 100000, act_paar: 100000, est_clearing: 1165000, act_clearing: 1165000, est_transport: 757507, act_transport: 507550, est_shipping: 602000, act_shipping: 1308867.89, est_terminal: 846525.78, act_terminal: 3788308, est_son: 0, act_son: 0, total_required: 8971032.78, act_spent: 9106938.61, variance: -135905.83, remarks: "" },
-            { sno: 3, bl_ref: "YGG0145597", brand: "Synix", product: "Refrigerator", ft40: 3, ft20: 0, shipping_line: "", eta_port: "2026-03-19", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 16500000, act_duty: 0, est_paar: 200000, act_paar: 0, est_clearing: 4500000, act_clearing: 0, est_transport: 2272521, act_transport: 0, est_shipping: 1806000, act_shipping: 0, est_terminal: 2539577.34, act_terminal: 0, est_son: 0, act_son: 0, total_required: 27818098.34, act_spent: 0, variance: 27818098.34, remarks: "" },
-            { sno: 4, bl_ref: "NGP3271298", brand: "Synix", product: "Refrigerator", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-03-12", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 2237051.98, est_paar: 200000, act_paar: 100000, est_clearing: 1500000, act_clearing: 1350000, est_transport: 757507, act_transport: 556000, est_shipping: 602000, act_shipping: 1147182.51, est_terminal: 846525.78, act_terminal: 2874350, est_son: 0, act_son: 0, total_required: 9406032.78, act_spent: 8264584.49, variance: 1141448.29, remarks: "" },
-            { sno: 5, bl_ref: "SHZ7762671", brand: "Synix", product: "TVs", ft40: 1, ft20: 1, shipping_line: "", eta_port: "2026-03-20", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 11000000, act_duty: 4479148.98, est_paar: 200000, act_paar: 0, est_clearing: 3000000, act_clearing: 0, est_transport: 1261414, act_transport: 0, est_shipping: 1034000, act_shipping: 0, est_terminal: 1416525.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 17911939.78, act_spent: 4479148.98, variance: 13432790.80, remarks: "" },
-            { sno: 6, bl_ref: "265818559", brand: "Dlink", product: "Networking", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-04-07", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 1523332.05, est_paar: 100000, act_paar: 100000, est_clearing: 1165000, act_clearing: 1048500, est_transport: 757507, act_transport: 556000, est_shipping: 602000, act_shipping: 502225.50, est_terminal: 1027785.78, act_terminal: 1447732, est_son: 0, act_son: 0, total_required: 9152292.78, act_spent: 5177789.55, variance: 3974503.23, remarks: "" },
-            { sno: 7, bl_ref: "MEDUKE886396", brand: "Samsung", product: "Sound Bar", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-04-07", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 1250377.74, est_paar: 100000, act_paar: 100000, est_clearing: 1500000, act_clearing: 1500000, est_transport: 757507, act_transport: 506000, est_shipping: 602000, act_shipping: 684495, est_terminal: 1027785.78, act_terminal: 791070, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 4831942.74, variance: 4655350.04, remarks: "" },
-            { sno: 8, bl_ref: "MEDUKE743761", brand: "Samsung", product: "Washing Machine", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-04-17", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 2516306.24, est_paar: 100000, act_paar: 100000, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 2616306.24, variance: 6870986.54, remarks: "" },
-            { sno: 9, bl_ref: "SGN3030651", brand: "Samsung", product: "TVs", ft40: 0, ft20: 1, shipping_line: "", eta_port: "2026-03-26", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 6927867.48, est_paar: 100000, act_paar: 100000, est_clearing: 1500000, act_clearing: 1350000, est_transport: 503907, act_transport: 553763, est_shipping: 432000, act_shipping: 828097.78, est_terminal: 690000, act_terminal: 2271006.25, est_son: 550000, act_son: 550000, total_required: 8725907, act_spent: 12580734.51, variance: -3854827.51, remarks: "" },
-            { sno: 10, bl_ref: "RTM9264346", brand: "IPG", product: "IPG", ft40: 2, ft20: 0, shipping_line: "", eta_port: "2026-04-27", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 11000000, act_duty: 0, est_paar: 200000, act_paar: 0, est_clearing: 2330000, act_clearing: 0, est_transport: 1515014, act_transport: 0, est_shipping: 1204000, act_shipping: 0, est_terminal: 2055571.56, act_terminal: 0, est_son: 0, act_son: 0, total_required: 18304585.56, act_spent: 0, variance: 18304585.56, remarks: "" },
-            { sno: 11, bl_ref: "RTM9263677", brand: "IPG", product: "IPG", ft40: 2, ft20: 0, shipping_line: "", eta_port: "2026-04-09", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 11000000, act_duty: 3013568.07, est_paar: 200000, act_paar: 200000, est_clearing: 2330000, act_clearing: 2097000, est_transport: 1515014, act_transport: 912000, est_shipping: 1204000, act_shipping: 1955249.27, est_terminal: 2055571.56, act_terminal: 4544600, est_son: 0, act_son: 0, total_required: 18304585.56, act_spent: 12722417.34, variance: 5582168.22, remarks: "" },
-            { sno: 12, bl_ref: "RTM9263205", brand: "APC", product: "UPS", ft40: 1, ft20: 1, shipping_line: "", eta_port: "2026-03-15", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 9700000, act_duty: 1762305.44, est_paar: 200000, act_paar: 200000, est_clearing: 2142500, act_clearing: 1928250, est_transport: 1261414, act_transport: 1009000, est_shipping: 1034000, act_shipping: 1575722.67, est_terminal: 1717785.78, act_terminal: 4794190, est_son: 0, act_son: 0, total_required: 16055699.78, act_spent: 11269468.11, variance: 4786231.67, remarks: "" },
-            { sno: 13, bl_ref: "RTM1580417", brand: "IPG", product: "IPG", ft40: 2, ft20: 0, shipping_line: "", eta_port: "2026-03-30", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 2916203.28, est_paar: 200000, act_paar: 200000, est_clearing: 2330000, act_clearing: 2097000, est_transport: 1515014, act_transport: 912000, est_shipping: 1204000, act_shipping: 829138.40, est_terminal: 2055571.56, act_terminal: 3125650, est_son: 0, act_son: 0, total_required: 12804585.56, act_spent: 10079991.68, variance: 2724593.88, remarks: "" },
-            { sno: 14, bl_ref: "MEDUR7032093", brand: "Samsung", product: "TVs", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-04-28", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 10000000, act_duty: 0, est_paar: 100000, act_paar: 0, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 13987292.78, act_spent: 0, variance: 13987292.78, remarks: "" },
-            { sno: 15, bl_ref: "RTM1578005", brand: "IPG", product: "IPG", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-04-28", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 0, est_paar: 100000, act_paar: 0, est_clearing: 1165000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9152292.78, act_spent: 0, variance: 9152292.78, remarks: "" },
-            { sno: 16, bl_ref: "MEDUJ5785665", brand: "Samsung", product: "C. A/C", ft40: 2, ft20: 0, shipping_line: "", eta_port: "2026-04-04", act_delivery: "", status: "Delivered", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 11000000, act_duty: 4644441.17, est_paar: 200000, act_paar: 200000, est_clearing: 3000000, act_clearing: 2700000, est_transport: 1515014, act_transport: 1062000, est_shipping: 1204000, act_shipping: 1392540, est_terminal: 2055571.56, act_terminal: 1906837.45, est_son: 0, act_son: 0, total_required: 18974585.56, act_spent: 11905818.62, variance: 7068766.94, remarks: "" },
-            { sno: 17, bl_ref: "OOLU2320855050", brand: "Samsung", product: "Ref", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-04-21", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 2362483.59, est_paar: 100000, act_paar: 100000, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 2462483.59, variance: 7024809.19, remarks: "" },
-            { sno: 18, bl_ref: "OOLU2322463500", brand: "Samsung", product: "A/C", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-05-01", act_delivery: "", status: "Booked", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 0, est_paar: 100000, act_paar: 0, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 0, variance: 9487292.78, remarks: "" },
-            { sno: 19, bl_ref: "SHZ7966834", brand: "Synix", product: "Swallow Maker", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-05-24", act_delivery: "", status: "Booked", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 0, est_paar: 100000, act_paar: 0, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 0, variance: 9487292.78, remarks: "" },
-            { sno: 20, bl_ref: "COSU6445890320", brand: "Samsung", product: "C. A/C", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-06-02", act_delivery: "", status: "Booked", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 0, est_paar: 100000, act_paar: 0, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 0, variance: 9487292.78, remarks: "" },
-            { sno: 21, bl_ref: "COSU6445079470", brand: "Samsung", product: "Ref/WM", ft40: 1, ft20: 0, shipping_line: "", eta_port: "2026-06-02", act_delivery: "", status: "Booked", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 5500000, act_duty: 0, est_paar: 100000, act_paar: 0, est_clearing: 1500000, act_clearing: 0, est_transport: 757507, act_transport: 0, est_shipping: 602000, act_shipping: 0, est_terminal: 1027785.78, act_terminal: 0, est_son: 0, act_son: 0, total_required: 9487292.78, act_spent: 0, variance: 9487292.78, remarks: "" },
-            { sno: 22, bl_ref: "TD/SFA221/001A", brand: "Samsung", product: "TVs", ft40: 2, ft20: 0, shipping_line: "", eta_port: "2026-03-29", act_delivery: "", status: "In transit", agent: "", act_fob: 0, disc_fob: 0, fob_value: 0, est_freight: 0, act_freight: 0, est_duty: 20000000, act_duty: 11620978.78, est_paar: 200000, act_paar: 200000, est_clearing: 3000000, act_clearing: 2700000, est_transport: 1515014, act_transport: 1100000, est_shipping: 1204000, act_shipping: 0, est_terminal: 2055571.56, act_terminal: 0, est_son: 511000, act_son: 0, total_required: 28485585.56, act_spent: 15620978.78, variance: 12864606.78, remarks: "" },
-        ];
+        // Seed data removed — Google Sheets is the sole source of truth.
+        // The app starts empty if the sheet is empty; records are only added via the UI.
 
-        const AIR_SEED = [
-            { sno: 1, awb_ref: "083-12345678", brand: "Samsung", product: "Spare parts", airline: "Emirates", flight_no: "EK783", origin: "Dubai", freight_payer: "OEM (no charge to TD)", eta_airport: "2026-04-10", act_arrival: "2026-04-10", act_cleared: "2026-04-12", status: "Delivered", agent: "Ace Clearing", weight_kg: 250, rate_per_kg: 2500, act_agent_fee: 625000, freight_cost: 0, est_duty: 1200000, act_duty: 1150000, est_paar: 50000, act_paar: 50000, est_transport: 200000, act_transport: 185000, other_charges: 30000, total_required: 1480000, act_spent: 1415000, variance: 65000, fob_value: 4500, remarks: "" },
-            { sno: 2, awb_ref: "157-98765432", brand: "Huawei", product: "Routers", airline: "DHL", flight_no: "DHL-EXP", origin: "Frankfurt", freight_payer: "TD Africa", eta_airport: "2026-04-18", act_arrival: "2026-04-19", act_cleared: "", status: "In clearing", agent: "Ace Clearing", weight_kg: 180, rate_per_kg: 3000, act_agent_fee: 0, freight_cost: 850000, est_duty: 900000, act_duty: 880000, est_paar: 50000, act_paar: 50000, est_transport: 150000, act_transport: 0, other_charges: 0, total_required: 1950000, act_spent: 1780000, variance: 170000, fob_value: 8200, remarks: "DHL 7-day SLA" },
-            { sno: 3, awb_ref: "176-55544433", brand: "APC", product: "UPS units", airline: "Qatar Airways", flight_no: "QR1407", origin: "Doha", freight_payer: "OEM (no charge to TD)", eta_airport: "2026-05-05", act_arrival: "", act_cleared: "", status: "In transit", agent: "", weight_kg: 420, rate_per_kg: 2200, act_agent_fee: 0, freight_cost: 0, est_duty: 2100000, act_duty: 0, est_paar: 100000, act_paar: 0, est_transport: 300000, act_transport: 0, other_charges: 0, total_required: 2500000, act_spent: 0, variance: 2500000, fob_value: 12000, remarks: "" },
-        ];
 
         // ── State ─────────────────────────────────────────────────────────────────────
         const state = {
             seaRows: [], airRows: [],
             mode: "sea", // sea | air | all
             loading: true, initialized: false,
+            loadError: false, loadErrorMsg: "",
             view: "dash",
             filterSt: "All", hideClosed: false, search: "",
             editId: null, editData: {}, editMode: "sea",
@@ -1329,27 +1303,12 @@
             catch (e) { return iso; }
         }
 
-        // ── localStorage helpers ──────────────────────────────────────────────────────
-        function lsLoad()
+        // localStorage is NO LONGER used to store records — only the user name.
+        // The old LS_KEY data store ("td_clearing_tracker_v2") is purged on app load (see purgeLegacyLocalStore_)
+        // to prevent stale data from a previous version persisting after this refactor.
+        function purgeLegacyLocalStore_()
         {
-            try
-            {
-                const raw = localStorage.getItem(LS_KEY);
-                if (!raw) return null;
-                return JSON.parse(raw);
-            } catch (e) { return null; }
-        }
-        function lsSave(seaRows, airRows)
-        {
-            try
-            {
-                localStorage.setItem(LS_KEY, JSON.stringify({ seaRows, airRows, savedAt: new Date().toISOString() }));
-                return true;
-            } catch (e)
-            {
-                console.warn("localStorage save failed:", e);
-                return false;
-            }
+            try { localStorage.removeItem(LS_KEY); } catch (e) { /* noop */ }
         }
 
         // ── Sync status pill ──────────────────────────────────────────────────────────
@@ -1389,131 +1348,98 @@
             return data;
         }
 
-        // ── Primary load: localStorage → seed fallback ────────────────────────────────
-        function loadData()
+        // ── Primary load: ALWAYS from Google Sheet (single source of truth) ───────────
+        // The Google Sheet is the only data store. localStorage is NOT used as a cache.
+        // On load failure: state is left empty, user sees a warning + Retry button.
+        async function loadData()
         {
             state.loading = true;
             render();
-            const saved = lsLoad();
-            if (saved && (saved.seaRows || saved.airRows))
+            try
             {
-                state.seaRows = saved.seaRows || [];
-                state.airRows = saved.airRows || [];
-                // Defensively re-stamp shipment_type on each row to harden against legacy data
-                state.seaRows.forEach(r => { r.shipment_type = "sea"; });
-                state.airRows.forEach(r => { r.shipment_type = "air"; });
+                setSync("syncing", "Loading from sheet…");
+                const data = await sheetGet();
+                const all = data.records || [];
+                const sea = all.filter(r => classifyShipment(r) === "sea");
+                const air = all.filter(r => classifyShipment(r) === "air");
+                // Defensively stamp shipment_type so it round-trips correctly next save
+                sea.forEach(r => { r.shipment_type = "sea"; });
+                air.forEach(r => { r.shipment_type = "air"; });
+                state.seaRows = sea;
+                state.airRows = air;
                 state.initialized = true;
-                const t = saved.savedAt ? new Date(saved.savedAt).toLocaleTimeString() : "unknown";
-                setSync("idle", "Local data · saved " + t);
-            } else
+                state.loadError = false;
+                state.lastRefresh = new Date();
+                setSync("idle", "Loaded from sheet · " + state.lastRefresh.toLocaleTimeString());
+                showToast("Loaded " + all.length + " record" + (all.length !== 1 ? "s" : "") + " from Google Sheet", "info");
+            } catch (err)
             {
-                // First ever load — use seed data
-                state.seaRows = SEA_SEED.map(r => ({ ...r, shipment_type: "sea" }));
-                state.airRows = AIR_SEED.map(r => ({ ...r, shipment_type: "air" }));
-                lsSave(state.seaRows, state.airRows);
-                state.initialized = true;
-                setSync("idle", "Ready · " + state.seaRows.length + " sea + " + state.airRows.length + " air records loaded");
+                console.error("Sheet load failed:", err);
+                state.seaRows = [];
+                state.airRows = [];
+                state.initialized = false;
+                state.loadError = true;
+                state.loadErrorMsg = String(err.message || err);
+                setSync("error", "Sheet unreachable");
+                showToast("Could not load from Google Sheet: " + state.loadErrorMsg, "error");
             }
             state.loading = false;
             render();
-            // Attempt background sheet sync (non-blocking, silent on failure)
-            trySheetSync();
         }
 
-        // ── Save: always localStorage first, then attempt sheet in background ─────────
-        function saveData()
+        // ── Save: PUSH to Google Sheet first. On failure: revert state, show error. ─────
+        // Caller must `await saveData()` and check the return value before reporting success.
+        let _saveInFlight = false;
+        async function saveData()
         {
-            const ok = lsSave(state.seaRows, state.airRows);
-            if (ok)
+            if (_saveInFlight)
             {
-                state.lastRefresh = new Date();
-                setSync("idle", "Saved locally · " + state.lastRefresh.toLocaleTimeString());
+                showToast("Another save is in progress — please wait", "info");
+                return false;
             }
-            // Background sheet push (fire-and-forget, never blocks UI)
-            trySheetPush();
-            return true;
-        }
-
-        // ── Background Google Sheet sync (totally optional) ───────────────────────────
-        let _sheetSyncPending = false;
-        async function trySheetSync()
-        {
-            if (!API_URL || API_URL.includes("YOUR_SCRIPT_ID") || _sheetSyncPending) return;
-            _sheetSyncPending = true;
+            _saveInFlight = true;
+            // Snapshot the state-to-push so race conditions can't corrupt it mid-flight
+            const snapshot = [...state.seaRows, ...state.airRows];
             try
             {
-                setSync("syncing", "Syncing sheet…");
-                const data = await sheetGet();
-                const all = data.records || [];
-                if (all.length > 0)
-                {
-                    // Sheet has data — use it if it's newer (more rows) than local
-                    // Use classifyShipment to resiliently sort records — handles missing shipment_type
-                    const sheetSea = all.filter(r => classifyShipment(r) === "sea");
-                    const sheetAir = all.filter(r => classifyShipment(r) === "air");
-                    // Defensively re-stamp shipment_type so subsequent saves preserve classification
-                    sheetSea.forEach(r => { r.shipment_type = "sea"; });
-                    sheetAir.forEach(r => { r.shipment_type = "air"; });
-                    if (sheetSea.length + sheetAir.length > state.seaRows.length + state.airRows.length)
-                    {
-                        state.seaRows = sheetSea;
-                        state.airRows = sheetAir;
-                        lsSave(state.seaRows, state.airRows);
-                        render();
-                        showToast("Updated from Google Sheet (" + all.length + " records)", "info");
-                    }
-                } else if (!state.initialized || all.length === 0)
-                {
-                    // Sheet is empty — push our local data to it
-                    const seed = [...state.seaRows, ...state.airRows];
-                    await sheetPost("seed", seed);
-                }
-                setSync("idle", "Sheet synced · " + new Date().toLocaleTimeString());
+                setSync("syncing", "Saving to sheet…");
+                await sheetPost("replaceAll", snapshot);
+                state.lastRefresh = new Date();
+                setSync("idle", "Saved · " + state.lastRefresh.toLocaleTimeString());
+                return true;
             } catch (err)
             {
-                // Sheet unreachable — silent, local data is fine
-                console.info("Sheet sync skipped (offline or CORS):", err.message);
-                setSync("idle", "Local · sheet unavailable");
+                console.error("Sheet save failed:", err);
+                setSync("error", "Save failed — sheet unreachable");
+                showToast("Could not save to Google Sheet: " + (err.message || err) + ". Your change was NOT persisted.", "error");
+                return false;
             } finally
             {
-                _sheetSyncPending = false;
+                _saveInFlight = false;
             }
         }
 
-        async function trySheetPush()
-        {
-            if (!API_URL || API_URL.includes("YOUR_SCRIPT_ID")) return;
-            try
-            {
-                const all = [...state.seaRows, ...state.airRows];
-                await sheetPost("replaceAll", all);
-                console.info("Sheet push OK");
-            } catch (err)
-            {
-                // Silent — local save already succeeded
-                console.info("Sheet push skipped (offline or CORS):", err.message);
-            }
-        }
-
-        // ── Manual refresh ────────────────────────────────────────────────────────────
+        // ── Manual refresh: re-fetch from sheet, replace state ────────────────────────
         async function manualRefresh()
         {
             const btn = document.getElementById("refresh-btn");
             if (btn) btn.disabled = true;
-            // Reload from localStorage first
-            const saved = lsLoad();
-            if (saved)
-            {
-                state.seaRows = saved.seaRows || state.seaRows;
-                state.airRows = saved.airRows || state.airRows;
-            }
-            render();
-            // Then attempt sheet sync
-            await trySheetSync();
-            render();
+            await loadData();
             if (btn) btn.disabled = false;
-            showToast("Refreshed", "success");
         }
+
+        // ── Auto-refresh when tab regains focus ───────────────────────────────────────
+        // Catches edits made directly in the Google Sheet by other users.
+        document.addEventListener("visibilitychange", function ()
+        {
+            if (!document.hidden && !state.loading && !_saveInFlight)
+            {
+                // Throttle: don't auto-refresh if we already refreshed in the last 5 seconds
+                const since = state.lastRefresh ? (Date.now() - state.lastRefresh.getTime()) : Infinity;
+                if (since > 5000) loadData();
+            }
+        });
+
 
         // ── No auto-interval fetch (avoids repeated Failed to fetch spam) ─────────────
         // Data is always current since every save goes to localStorage immediately.
@@ -1598,10 +1524,28 @@
             const user = getCurrentUser();
             const withAudit = { ...state.editData, updated_at: now, updated_by: user };
             const clean = state.editMode === "air" ? normalizeAirRow(withAudit) : normalizeSeaRow(withAudit);
+            // Snapshot the pre-edit row so we can roll back on save failure
+            const beforeSea = state.seaRows;
+            const beforeAir = state.airRows;
             if (state.editMode === "air") state.airRows = state.airRows.map(r => r.sno === state.editId ? clean : r);
             else state.seaRows = state.seaRows.map(r => r.sno === state.editId ? clean : r);
+            const editIdSnapshot = state.editId;
+            const editModeSnapshot = state.editMode;
+            const editDataSnapshot = { ...state.editData };
             state.editId = null; state.editData = {}; render();
-            saveData(); showToast("Row saved");
+            const ok = await saveData();
+            if (!ok)
+            {
+                // Roll back state — saveData already showed the error toast
+                state.seaRows = beforeSea;
+                state.airRows = beforeAir;
+                state.editId = editIdSnapshot;
+                state.editMode = editModeSnapshot;
+                state.editData = editDataSnapshot;
+                render();
+                return;
+            }
+            showToast("Row saved");
         }
 
         function openAdd()
@@ -1627,10 +1571,26 @@
             const row = mode === "air"
                 ? normalizeAirRow({ ...emptyAirRow(sno), ...state.newRow, sno, shipment_type: "air", ...auditFields })
                 : normalizeSeaRow({ ...emptySeaRow(sno), ...state.newRow, sno, shipment_type: "sea", ...auditFields });
+            // Snapshot for rollback
+            const beforeSea = state.seaRows;
+            const beforeAir = state.airRows;
+            const newRowSnapshot = { ...state.newRow };
             if (mode === "air") state.airRows = [...state.airRows, row];
             else state.seaRows = [...state.seaRows, row];
             state.showAdd = false; state.newRow = {}; render();
-            saveData(); showToast("Row added");
+            const ok = await saveData();
+            if (!ok)
+            {
+                // Roll back: remove the added row, restore the form so user can retry
+                state.seaRows = beforeSea;
+                state.airRows = beforeAir;
+                state.showAdd = true;
+                state.newRow = newRowSnapshot;
+                state.editMode = mode;
+                render();
+                return;
+            }
+            showToast("Row added");
         }
 
         function setBulkText(v) { state.bulkText = v; const el = document.getElementById("bulk-err"); if (el) el.textContent = ""; }
@@ -2166,6 +2126,8 @@
             const dataLines = isHdr ? lines.slice(1) : lines;
             const rows = mode === "air" ? state.airRows : state.seaRows;
             const newRows = [];
+            const now = new Date().toISOString();
+            const user = getCurrentUser();
             for (const line of dataLines)
             {
                 const vals = parseCsvLine(line); if (vals.length < 2) continue;
@@ -2174,14 +2136,31 @@
                 else { inputCols.forEach((c, idx) => { if (vals[idx] !== undefined) row[c.key] = vals[idx]; }); }
                 const statuses = mode === "air" ? AIR_STATUSES : SEA_STATUSES;
                 if (!row.status || !statuses.includes(row.status)) row.status = "Booked";
+                // Stamp audit fields for bulk-uploaded rows
+                row.added_at = now; row.added_by = user; row.updated_at = now; row.updated_by = user;
                 row = mode === "air" ? normalizeAirRow(row) : normalizeSeaRow(row);
                 newRows.push(row);
             }
             if (!newRows.length) { errEl.textContent = "Could not parse any rows."; return; }
+            // Snapshot for rollback
+            const beforeSea = state.seaRows;
+            const beforeAir = state.airRows;
+            const bulkTextSnapshot = state.bulkText;
+            const viewSnapshot = state.view;
             if (mode === "air") state.airRows = [...state.airRows, ...newRows];
             else state.seaRows = [...state.seaRows, ...newRows];
             state.bulkText = ""; state.view = "table"; render();
-            saveData(); showToast(newRows.length + " rows uploaded");
+            const ok = await saveData();
+            if (!ok)
+            {
+                state.seaRows = beforeSea;
+                state.airRows = beforeAir;
+                state.bulkText = bulkTextSnapshot;
+                state.view = viewSnapshot;
+                render();
+                return;
+            }
+            showToast(newRows.length + " rows uploaded");
         }
 
         // ── Combined "All" dashboard ──────────────────────────────────────────────────
@@ -2245,6 +2224,18 @@
             }
             const tabsEl = document.getElementById("tabs"); const contentEl = document.getElementById("view-content");
             if (state.loading) { if (tabsEl) tabsEl.innerHTML = ""; contentEl.innerHTML = `<div class="splash"><div class="spinner"></div><p class="text-secondary" style="font-size:13px;">Connecting to shared sheet…</p></div>`; return; }
+            // Sheet unreachable on load: show empty-state banner with Retry button
+            if (state.loadError)
+            {
+                if (tabsEl) tabsEl.innerHTML = "";
+                contentEl.innerHTML = `<div class="danger-card" style="text-align:center;padding:32px 24px;">
+                    <p class="fw-500 text-danger" style="margin-bottom:8px;font-size:15px;">${ic("cloud-off", "icon-lg")} Could not load from Google Sheet</p>
+                    <p class="text-secondary" style="margin-bottom:14px;font-size:13px;">${escHtml(state.loadErrorMsg || "The sheet is unreachable.")}</p>
+                    <p class="text-secondary" style="margin-bottom:18px;font-size:12px;">No records are shown because the Google Sheet is the only source of data.<br>Check your internet connection and the Apps Script deployment status, then retry.</p>
+                    <button class="primary" onclick="manualRefresh()">${ic("refresh")}Retry loading</button>
+                </div>`;
+                return;
+            }
             if (tabsEl) tabsEl.innerHTML = buildTabs();
             const m = state.mode; let content = "";
             if (m === "sea")
@@ -2271,6 +2262,9 @@
         }
 
         // ── Init ──────────────────────────────────────────────────────────────────────
+        // Purge the legacy localStorage data store (used by the old offline-first design).
+        // The Google Sheet is now the sole source of truth; we don't want stale local data.
+        purgeLegacyLocalStore_();
         loadData();
     </script>
 </body>
