@@ -991,6 +991,13 @@
                         </svg>
                         <span id="sync-text">Connected</span>
                     </span>
+                    <span id="user-pill" class="sync-pill idle" style="cursor:pointer;" onclick="changeUser()" title="Click to change user">
+                        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                            <circle cx="12" cy="7" r="4" />
+                        </svg>
+                        <span id="user-pill-text">—</span>
+                    </span>
                 </p>
             </div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
@@ -1165,7 +1172,7 @@
             editId: null, editData: {}, editMode: "sea",
             showAdd: false, newRow: {},
             bulkText: "",
-            sortCol: "sno", sortDir: "asc",
+            sortCol: "added_at", sortDir: "desc",
             rptSort: { col: "eta_port", dir: "asc" },
             lastRefresh: new Date(),
             syncStatus: "idle", syncMessage: "Connecting…",
@@ -1276,6 +1283,51 @@
 
         // ── localStorage keys ─────────────────────────────────────────────────────────
         const LS_KEY = "td_clearing_tracker_v2";
+        const LS_USER_KEY = "td_clearing_user";
+
+        // ── Current user (prompted once, cached in localStorage) ──────────────────────
+        function getCurrentUser()
+        {
+            try
+            {
+                let name = localStorage.getItem(LS_USER_KEY);
+                if (name && name.trim()) return name.trim();
+                // Prompt once — keep prompting until they enter something or cancel
+                name = prompt("Welcome! Enter your name to log changes to clearing records:");
+                if (name && name.trim())
+                {
+                    name = name.trim();
+                    localStorage.setItem(LS_USER_KEY, name);
+                    return name;
+                }
+                // User cancelled or left blank — return a placeholder so we don't keep nagging
+                return "Unknown user";
+            }
+            catch (e) { return "Unknown user"; }
+        }
+        function changeUser()
+        {
+            const current = localStorage.getItem(LS_USER_KEY) || "";
+            const name = prompt("Change user name (currently: " + (current || "not set") + ")", current);
+            if (name && name.trim())
+            {
+                localStorage.setItem(LS_USER_KEY, name.trim());
+                showToast("User name updated to " + name.trim());
+                render();
+            }
+        }
+        function formatTimestamp(iso)
+        {
+            if (!iso) return "";
+            try
+            {
+                const d = new Date(iso);
+                if (isNaN(d)) return iso;
+                const opts = { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
+                return d.toLocaleString(undefined, opts);
+            }
+            catch (e) { return iso; }
+        }
 
         // ── localStorage helpers ──────────────────────────────────────────────────────
         function lsLoad()
@@ -1484,7 +1536,26 @@
         // ── Sorting / Filtering ───────────────────────────────────────────────────────
         function handleSort(key) { if (state.sortCol === key) state.sortDir = state.sortDir === "asc" ? "desc" : "asc"; else { state.sortCol = key; state.sortDir = "asc"; } render(); }
         function setRptSort(col) { state.rptSort = { col, dir: state.rptSort.col === col && state.rptSort.dir === "asc" ? "desc" : "asc" }; render(); }
-        function rSort(arr, col, dir) { return [...arr].sort((a, b) => { let av = a[col] ?? 0, bv = b[col] ?? 0; if (typeof av === "string") av = av.toLowerCase(); if (typeof bv === "string") bv = bv.toLowerCase(); return av < bv ? (dir === "asc" ? -1 : 1) : av > bv ? (dir === "asc" ? 1 : -1) : 0; }); }
+        function rSort(arr, col, dir)
+        {
+            return [...arr].sort((a, b) =>
+            {
+                let av = a[col], bv = b[col];
+                // Empty/null/undefined always sinks to the bottom regardless of sort direction
+                const aEmpty = av === null || av === undefined || av === "" || av === 0 && col === "added_at";
+                const bEmpty = bv === null || bv === undefined || bv === "" || bv === 0 && col === "added_at";
+                if (aEmpty && bEmpty) return 0;
+                if (aEmpty) return 1;
+                if (bEmpty) return -1;
+                if (typeof av === "string") av = av.toLowerCase();
+                if (typeof bv === "string") bv = bv.toLowerCase();
+                return av < bv ? (dir === "asc" ? -1 : 1) : av > bv ? (dir === "asc" ? 1 : -1) : 0;
+            });
+        }
+
+        // Convenience: always-newest-first ordering. Used by dashboard lists where
+        // newly-added records must appear at the top regardless of the user's column sort.
+        function byNewest(arr) { return rSort(arr, "added_at", "desc"); }
         function getSortedRows(arr) { return rSort(arr, state.sortCol, state.sortDir); }
         function getFilteredSea()
         {
@@ -1523,7 +1594,10 @@
 
         async function saveEdit()
         {
-            const clean = state.editMode === "air" ? normalizeAirRow(state.editData) : normalizeSeaRow(state.editData);
+            const now = new Date().toISOString();
+            const user = getCurrentUser();
+            const withAudit = { ...state.editData, updated_at: now, updated_by: user };
+            const clean = state.editMode === "air" ? normalizeAirRow(withAudit) : normalizeSeaRow(withAudit);
             if (state.editMode === "air") state.airRows = state.airRows.map(r => r.sno === state.editId ? clean : r);
             else state.seaRows = state.seaRows.map(r => r.sno === state.editId ? clean : r);
             state.editId = null; state.editData = {}; render();
@@ -1547,7 +1621,12 @@
             const mode = state.editMode;
             const rows = mode === "air" ? state.airRows : state.seaRows;
             const sno = nextSno(rows);
-            const row = mode === "air" ? normalizeAirRow({ ...emptyAirRow(sno), ...state.newRow, sno, shipment_type: "air" }) : normalizeSeaRow({ ...emptySeaRow(sno), ...state.newRow, sno, shipment_type: "sea" });
+            const now = new Date().toISOString();
+            const user = getCurrentUser();
+            const auditFields = { added_at: now, added_by: user, updated_at: now, updated_by: user };
+            const row = mode === "air"
+                ? normalizeAirRow({ ...emptyAirRow(sno), ...state.newRow, sno, shipment_type: "air", ...auditFields })
+                : normalizeSeaRow({ ...emptySeaRow(sno), ...state.newRow, sno, shipment_type: "sea", ...auditFields });
             if (mode === "air") state.airRows = [...state.airRows, row];
             else state.seaRows = [...state.seaRows, row];
             state.showAdd = false; state.newRow = {}; render();
@@ -1628,8 +1707,8 @@
             const totalReq = state.seaRows.reduce((s, r) => s + pn(r.total_required), 0);
             const totalSpent = state.seaRows.reduce((s, r) => s + pn(r.act_spent), 0);
             const totalVar = state.seaRows.reduce((s, r) => s + pn(r.variance), 0);
-            const active = state.seaRows.filter(r => !["Delivered", "Cancelled"].includes(r.status));
-            const overdue = computed.filter(r => r.est_delivery && new Date(r.est_delivery) < today && !["Delivered", "Cancelled"].includes(r.status));
+            const active = byNewest(state.seaRows.filter(r => !["Delivered", "Cancelled"].includes(r.status)));
+            const overdue = byNewest(computed.filter(r => r.est_delivery && new Date(r.est_delivery) < today && !["Delivered", "Cancelled"].includes(r.status)));
             const statusCounts = SEA_STATUSES.map(s => ({ s, count: state.seaRows.filter(r => r.status === s).length }));
 
             const stats = [
@@ -1683,7 +1762,7 @@
             const computed = state.airRows.map(computeAirRow);
             const arrived = computed.filter(r => r.act_arrival);
             const cleared = computed.filter(r => r.act_cleared);
-            const slaBreached = computed.filter(r => r.sla_status === "Breached");
+            const slaBreached = byNewest(computed.filter(r => r.sla_status === "Breached"));
             const slaMet = computed.filter(r => r.sla_status === "Met");
             const slaPct = arrived.length ? Math.round(slaMet.length / arrived.length * 100) : null;
             const avgClearDays = cleared.length ? Math.round(cleared.reduce((s, r) => { const d = daysBetween(r.act_arrival, r.act_cleared); return s + (d || 0); }, 0) / cleared.length) : null;
@@ -1722,7 +1801,7 @@
 
             // In-clearing now
             html += `<div class="card-air"><p class="fw-500" style="margin-bottom:12px;color:#1d4ed8;">${ic("plane")} Active air shipments — in clearing or arrived</p><div style="overflow-x:auto;"><table style="width:100%;font-size:12px;"><thead><tr><th>AWB/Ref</th><th>Brand</th><th>Product</th><th>Airline</th><th>Freight payer</th><th>Arrived</th><th>SLA</th><th>SLA due</th><th>Act cleared</th><th>Days taken</th><th>SLA status</th><th>Wt (kg)</th><th>Agent fee (calc)</th><th>Status</th><th></th></tr></thead><tbody>`;
-            const airActive = computed.filter(r => !["Delivered", "Cancelled"].includes(r.status));
+            const airActive = byNewest(computed.filter(r => !["Delivered", "Cancelled"].includes(r.status)));
             if (airActive.length === 0) { html += `<tr><td colspan="15" class="empty-msg">No active air shipments.</td></tr>`; }
             else
             {
@@ -1881,7 +1960,8 @@
             {
                 const isEdit = state.editId === r.sno && state.editMode === "air";
                 const isDone = ["Delivered", "Cancelled"].includes(r.status);
-                return `<tr class="${isDone ? "row-done" : ""}" style="background:${i % 2 !== 0 ? "var(--bg-secondary)" : ""};">${AIR_COLS.map(c =>
+                const auditTitle = (r.added_at || r.updated_at) ? `Added: ${formatTimestamp(r.added_at) || "—"}${r.added_by ? " by " + r.added_by : ""}${r.updated_at && r.updated_at !== r.added_at ? "\nUpdated: " + formatTimestamp(r.updated_at) + (r.updated_by ? " by " + r.updated_by : "") : ""}` : "";
+                return `<tr class="${isDone ? "row-done" : ""}" style="background:${i % 2 !== 0 ? "var(--bg-secondary)" : ""};" ${auditTitle ? `title="${escHtml(auditTitle)}"` : ""}>${AIR_COLS.map(c =>
                 {
                     if (c.type === "computed")
                     {
@@ -1979,7 +2059,8 @@
   <tbody>${filtered.length === 0 ? `<tr><td colspan="${seaCols.length + 1}" class="empty-msg">No rows match filter.</td></tr>` : filtered.map((r, i) =>
             {
                 const isEdit = state.editId === r.sno && state.editMode === "sea"; const isDone = ["Delivered", "Cancelled"].includes(r.status);
-                return `<tr class="${isDone ? "row-done" : ""}" style="background:${i % 2 !== 0 ? "var(--bg-secondary)" : ""};">${seaCols.map(c =>
+                const auditTitle = (r.added_at || r.updated_at) ? `Added: ${formatTimestamp(r.added_at) || "—"}${r.added_by ? " by " + r.added_by : ""}${r.updated_at && r.updated_at !== r.added_at ? "\nUpdated: " + formatTimestamp(r.updated_at) + (r.updated_by ? " by " + r.updated_by : "") : ""}` : "";
+                return `<tr class="${isDone ? "row-done" : ""}" style="background:${i % 2 !== 0 ? "var(--bg-secondary)" : ""};" ${auditTitle ? `title="${escHtml(auditTitle)}"` : ""}>${seaCols.map(c =>
                 {
                     if (c.type === "computed") { const v = r[c.key]; const isVar = c.key === "lead_time_var"; const isDate = c.key === "est_delivery"; const col = isVar && v !== null ? (v > 0 ? "var(--text-danger)" : v < 0 ? "var(--text-success)" : "inherit") : "inherit"; if (isDate) return `<td style="color:inherit;">${v || "—"}</td>`; return `<td class="text-right" style="color:${col};font-weight:${isVar && v !== null ? 500 : 400}">${v !== null ? (isVar ? (v > 0 ? "+" + v : v) + "d" : v + "d") : "—"}</td>`; }
                     if (isEdit && c.key !== "sno") { if (c.type === "status") return `<td><select class="field-edit" onchange="updateEditField('${c.key}',this.value)">${SEA_STATUSES.map(s => `<option ${s === state.editData[c.key] ? "selected" : ""}>${s}</option>`).join("")}</select></td>`; if (c.type === "currency" || c.type === "number") return `<td><input class="field-edit" type="number" value="${escHtml(state.editData[c.key] || "")}" oninput="updateEditField('${c.key}',parseFloat(this.value)||0)" style="width:${Math.min(c.w - 10, 130)}px;"></td>`; if (c.type === "date") return `<td><input class="field-edit" type="date" value="${escHtml(state.editData[c.key] || "")}" onchange="updateEditField('${c.key}',this.value)" style="width:${Math.min(c.w - 10, 160)}px;"></td>`; return `<td><input class="field-edit" value="${escHtml(state.editData[c.key] || "")}" oninput="updateEditField('${c.key}',this.value)" style="width:${Math.min(c.w - 10, 160)}px;"></td>`; }
@@ -2126,8 +2207,8 @@
 
         function buildAllRegister()
         {
-            const seaC = state.seaRows.map(computeSeaRow);
-            const airC = state.airRows.map(computeAirRow);
+            const seaC = byNewest(state.seaRows.map(computeSeaRow));
+            const airC = byNewest(state.airRows.map(computeAirRow));
             return `<div class="card" style="margin-bottom:14px;"><p class="fw-500" style="margin-bottom:8px;">${ic("ship")} Sea containers (${seaC.length})</p>
   <div style="overflow-x:auto;"><table style="font-size:12px;min-width:600px;"><thead><tr><th>S/No.</th><th>BL/TD Reference</th><th>Brand</th><th>Product</th><th>ETA</th><th>Status</th><th>Cost balance</th></tr></thead>
   <tbody>${seaC.map((r, i) => `<tr style="background:${i % 2 !== 0 ? "var(--bg-secondary)" : ""}"><td>${r.sno}</td><td class="fw-500">${escHtml(r.bl_ref)}</td><td>${escHtml(r.brand || "")}</td><td>${escHtml(r.product || "")}</td><td>${escHtml(r.eta_port || "—")}</td><td>${seaBadge(r.status)}</td><td class="text-right" style="color:${pn(r.variance) < 0 ? "var(--text-danger)" : "var(--text-success)"}">${naira(r.variance)}</td></tr>`).join("")}</tbody></table></div></div>
@@ -2155,6 +2236,13 @@
         // ── Main render ────────────────────────────────────────────────────────────────
         function render()
         {
+            // Refresh user pill (reflects current logged-in user, or hides if not set)
+            const userPillText = document.getElementById("user-pill-text");
+            if (userPillText)
+            {
+                const stored = localStorage.getItem(LS_USER_KEY);
+                userPillText.textContent = stored && stored.trim() ? stored.trim() : "Set name";
+            }
             const tabsEl = document.getElementById("tabs"); const contentEl = document.getElementById("view-content");
             if (state.loading) { if (tabsEl) tabsEl.innerHTML = ""; contentEl.innerHTML = `<div class="splash"><div class="spinner"></div><p class="text-secondary" style="font-size:13px;">Connecting to shared sheet…</p></div>`; return; }
             if (tabsEl) tabsEl.innerHTML = buildTabs();
