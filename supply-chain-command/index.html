@@ -1580,10 +1580,41 @@
 
         .li-cols {
             display: grid;
-            grid-template-columns: 120px 1fr 100px 70px 50px 75px 80px 80px 72px 68px 24px;
+            grid-template-columns: 115px 220px 100px 75px 55px 75px 85px 90px 85px 80px 110px 130px 130px 28px;
             gap: 4px;
             padding: 0 0 4px;
-            border-bottom: 1px solid var(--b1)
+            border-bottom: 1px solid var(--b1);
+            min-width: 1430px
+        }
+
+        /* Horizontal scroll wrapper around line items grid — keeps the rest of the modal happy
+           while letting the wide line items table scroll independently on smaller screens. */
+        .li-scroll {
+            overflow-x: auto;
+            overflow-y: visible;
+            margin-bottom: 4px
+        }
+
+        .li-scroll::-webkit-scrollbar {
+            height: 8px
+        }
+
+        .li-scroll::-webkit-scrollbar-thumb {
+            background: var(--b2);
+            border-radius: 4px
+        }
+
+        /* Inputs and selects inside line rows need box-sizing so they don't overflow narrow cells */
+        .li-row .fi,
+        .li-row select.fi {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0
+        }
+
+        /* Date input needs enough internal room for its picker indicator */
+        .li-row input[type="date"].fi {
+            min-width: 100px
         }
 
         .li-cols span {
@@ -1596,10 +1627,11 @@
 
         .li-row {
             display: grid;
-            grid-template-columns: 120px 1fr 100px 70px 50px 75px 80px 80px 72px 68px 24px;
+            grid-template-columns: 115px 220px 100px 75px 55px 75px 85px 90px 85px 80px 110px 130px 130px 28px;
             gap: 4px;
             margin-bottom: 4px;
-            align-items: center
+            align-items: center;
+            min-width: 1430px
         }
 
         .li-del {
@@ -2320,6 +2352,7 @@
                         <option value="AT-EVERBRIGHT">→ Everbright</option>
                         <option value="LICENSE">License / Provision</option>
                         <option value="MISSING">Missing</option>
+                        <option value="DELIVERED">Delivered ✓</option>
                     </select>
                     <span class="fl">Dest:</span>
                     <select class="fi" id="f-dest" onchange="applyF()">
@@ -2337,6 +2370,11 @@
                         <option value="B2B">B2B</option>
                         <option value="STOCK">Stock</option>
                     </select>
+                    <span class="fl">ETA:</span>
+                    <input class="fi" id="f-eta-from" type="date" title="ETA range — from" oninput="applyF()" onchange="applyF()" style="min-width:120px">
+                    <span class="fl">→</span>
+                    <input class="fi" id="f-eta-to" type="date" title="ETA range — to" oninput="applyF()" onchange="applyF()" style="min-width:120px">
+                    <button class="btn sm" type="button" onclick="$('f-eta-from').value='';$('f-eta-to').value='';applyF()" title="Clear ETA range">✕</button>
                     <div class="rc" id="rc">— orders</div>
                     <div style="display:flex;gap:5px;margin-left:auto">
                         <button class="btn sm wrn" onclick="expOutstanding()">⬇ OUTSTANDING CSV</button>
@@ -2568,17 +2606,7 @@
                         <div class="ff"><label>End User / Customer</label><input id="f-eu"></div>
                         <div class="ff sp3"><label>Remark / Notes</label><input id="f-remark"></div>
                     </div>
-                    <div class="fsec" style="margin-top:4px">Primary Item <small
-                            style="font-weight:400;letter-spacing:0;text-transform:none;font-size:8px;color:var(--mt)">(for
-                            multi-product POs use the Line Items tab)</small></div>
-                    <div class="fg3">
-                        <div class="ff"><label>Part Number</label><input id="f-part"></div>
-                        <div class="ff sp2"><label>Description</label><input id="f-desc"></div>
-                        <div class="ff"><label>Config / Spec</label><input id="f-config"></div>
-                        <div class="ff"><label>Colour</label><input id="f-colour"></div>
-                        <div class="ff"><label>OEM Invoice No.</label><input id="f-oemno"></div>
-                        <div class="ff"><label>OEM Invoice Date</label><input type="date" id="f-oemdate"></div>
-                    </div>
+                    
                     <!-- FX CALCULATOR -->
                     <div class="fsec" style="margin-top:4px">Pricing &amp; Currency</div>
                     <div class="fx-panel">
@@ -2677,13 +2705,16 @@
                             <button class="btn sm grn" onclick="openBulkLI()" type="button">⬆ BULK UPLOAD</button>
                         </div>
                     </div>
-                    <div class="li-cols">
-                        <span>Part
-                            No.</span><span>Description</span><span>Config/Spec</span><span>Colour</span><span>Qty</span>
-                        <span>Unit $</span><span>Total $</span><span>Status</span>
-                        <span>AWB</span><span>Container</span><span></span>
+                    <div class="li-scroll">
+                        <div class="li-cols">
+                            <span>Part
+                                No.</span><span>Description</span><span>Config/Spec</span><span>Colour</span><span>Qty</span>
+                            <span>Unit $</span><span>Total $</span><span>Status</span>
+                            <span>AWB</span><span>Container</span><span>OEM Inv No</span><span>OEM Inv
+                                Date</span><span>Target ETA</span><span></span>
+                        </div>
+                        <div id="li-rows"></div>
                     </div>
-                    <div id="li-rows"></div>
                     <div id="li-empty" class="li-empty">No line items — click <b style="color:var(--acc)">+ ADD LINE</b>
                         or <b style="color:var(--grn)">⬆ BULK UPLOAD</b></div>
                 </div>
@@ -2990,7 +3021,7 @@
         //============================================================
         // DATA — OUTSTANDING ORDERS ONLY (no DELIVERED/CANCELLED)
         //============================================================
-        const _B = ["APC", "Apple", "BCS Ghana", "Bosch", "Check Point", "Cisco", "Dell Client", "Dell EMC", "EcoFlow", "HP DMFI", "HP DMFI Ghana", "HP IPG", "HP IPG Ghana", "HP PSG", "HP PSG FY26", "HP PSG Ghana", "HP Supplies", "Huawei Enterprise", "Huawei Power", "Huawei SMB", "IBM", "Infinix", "Lenovo", "Lenovo Ghana", "MIGO Nokia", "Microsoft", "Nokia HMD", "Nutanix", "OPPO", "Samsung CE", "Samsung Mobile", "Starlink NG", "Syinix", "TECNO", "Zebra"];
+        const _B = ["APC", "Apple", "Bosch", "Check Point", "HPE", "Huawei Run-rate","Cisco", "Dell Client", "Dell EMC", "Dlink", "EcoFlow", "HP DMFI", "HP DMFI Ghana", "HP IPG", "HP IPG Ghana", "HP PSG", "HP PSG FY26", "HP PSG Ghana", "HP Supplies", "Huawei Enterprise", "Huawei Power", "Huawei SMB", "IBM", "Infinix", "Lenovo", "Lenovo Ghana", "MIGO Nokia", "Microsoft", "Nokia HMD", "Nutanix", "OPPO", "Samsung CE", "Samsung Mobile", "Starlink NG", "Syinix", "TECNO", "Zebra", "Zinox iPower"];
         const _S = ["AT-EVERBRIGHT", "AT-KDS", "BOOKED", "CLEARING", "IN-PRODUCTION", "LICENSE", "MATERIAL-CONSTRAINT", "PRODUCTION-HOLD", "SHIPPED", "TRANSIT-NG"];
         const _M = ["AIR", "FOB", "LICENSE", "LOCAL", "SEA", "TRUCK"];
         const _D = ["FOB", "Ghana", "Nigeria"];
@@ -6372,6 +6403,47 @@
             { s: 'AT-EVERBRIGHT', l: '→ Everbright', c: '#8858ff' }, { s: 'LICENSE', l: 'License', c: '#00c8a8' },
             { s: 'MISSING', l: 'Missing ⚠', c: '#f02848' }, { s: 'DELIVERED', l: 'Delivered ✓', c: '#00e080' },
         ];
+        // [SCC] Shared status normalizer — every bulk-upload path must run raw statuses
+        // through this so they land on a canonical ST_OPTS code. A value like "In Production"
+        // left as "IN PRODUCTION" has no SL[] label and no s-<code> CSS class, so it renders
+        // blank/uncoloured on the dashboard — that was the "bulk status not retained" bug.
+        const SCC_VALID_STATUSES = new Set([...ST_OPTS.map(s => s.s), ...CLOSED]);
+        const SCC_STATUS_MAP = {
+            'booked': 'BOOKED', 'accepted': 'BOOKED', 'booked accepted': 'BOOKED',
+            'in production': 'IN-PRODUCTION', 'production': 'IN-PRODUCTION', 'in prod': 'IN-PRODUCTION',
+            'production hold': 'PRODUCTION-HOLD', 'prod hold': 'PRODUCTION-HOLD', 'hold': 'PRODUCTION-HOLD',
+            'material constraint': 'MATERIAL-CONSTRAINT', 'constraint': 'MATERIAL-CONSTRAINT',
+            'shipped': 'SHIPPED',
+            'forwarder': 'TO-FORWARDER', 'to forwarder': 'TO-FORWARDER',
+            'transit nigeria': 'TRANSIT-NG', 'transit ng': 'TRANSIT-NG',
+            'transit ghana': 'TRANSIT-GH', 'transit gh': 'TRANSIT-GH',
+            'transit other': 'TRANSIT-OT', 'transit ot': 'TRANSIT-OT',
+            'transit': 'TRANSIT-NG',
+            'clearing': 'CLEARING', 'in clearing': 'CLEARING', 'in clearing port': 'CLEARING', 'port': 'CLEARING',
+            'at kds': 'AT-KDS', 'goods at kds': 'AT-KDS', 'kds': 'AT-KDS',
+            'at ashour': 'AT-ASHOUR', 'goods at ashour': 'AT-ASHOUR', 'ashour': 'AT-ASHOUR',
+            'everbright': 'AT-EVERBRIGHT', 'at everbright': 'AT-EVERBRIGHT',
+            'license': 'LICENSE', 'license provision': 'LICENSE', 'provision': 'LICENSE',
+            'missing': 'MISSING',
+            'delivered': 'DELIVERED',
+            'e delivered': 'E-DELIVERED',
+            'cancelled': 'CANCELLED', 'canceled': 'CANCELLED',
+            'rejected': 'REJECTED'
+        };
+        function sccNormStatus(raw)
+        {
+            if (!raw) return 'BOOKED';
+            const s = String(raw).trim();
+            if (!s) return 'BOOKED';
+            const up = s.toUpperCase().replace(/\s+/g, ' ').trim();
+            if (SCC_VALID_STATUSES.has(up)) return up;                              // exact code: "BOOKED"
+            const hy = up.replace(/\s+/g, '-');
+            if (SCC_VALID_STATUSES.has(hy)) return hy;                              // "IN PRODUCTION" -> "IN-PRODUCTION"
+            const low = s.toLowerCase().replace(/[→✓⚠]/g, '').replace(/[/\\\-]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (SCC_STATUS_MAP[low]) return SCC_STATUS_MAP[low];                    // label/alias: "Booked/Accepted"
+            for (const [k, v] of Object.entries(SCC_STATUS_MAP)) { if (low.includes(k)) return v; }  // partial
+            return 'BOOKED';
+        }
         const DC = { 'Nigeria': '#00c8a8', 'Ghana': '#f06028', 'Liberia': '#e83888', 'Sierra Leone': '#38b0e0', 'FOB': '#00e080', 'FOB (Offshore)': '#00e080', 'Other': '#8858ff' };
         const PALETTE = ['#00c8e8', '#00e080', '#f0a800', '#8858ff', '#f06028', '#f02848', '#00c8a8', '#38b0e0', '#f7c948', '#c27dff', '#50fa7b', '#ff79c6', '#8be9fd', '#ffb86c'];
         const UCOLS = ['#00c8e8', '#00e080', '#f0a800', '#8858ff', '#f06028', '#e83888', '#00c8a8', '#38b0e0'];
@@ -6506,17 +6578,36 @@
             const status = $('f-status')?.value || '';
             const dest = $('f-dest')?.value || '';
             const type = $('f-type')?.value || '';
+            const etaFrom = $('f-eta-from')?.value || '';
+            const etaTo = $('f-eta-to')?.value || '';
+            // [SCC] ETA range — ISO 'YYYY-MM-DD' strings compare correctly lexicographically.
+            // An ETA passes if it sits within the (optionally open-ended) [from, to] window.
+            const inEtaRange = d => { if (!d) return false; if (etaFrom && d < etaFrom) return false; if (etaTo && d > etaTo) return false; return true; };
+            const etaActive = !!(etaFrom || etaTo);
             _filt = orders.filter(o =>
             {
-                if (!isOpen(o.status)) return false;
-                const hay = [o.brand, o.po, o.enet, o.sop, o.pid, o.partner, o.endUser, o.part, o.desc, o.awb, o.container, o.oemInvNo].join(' ').toLowerCase();
+                // [SCC] If user explicitly filters for a status (open OR closed), show it.
+                // Otherwise default to outstanding only.
+                if (!status && !isOpen(o.status)) return false;
+                // [SCC] Include every line item's part no. + description so a part-number search
+                // returns any order that has one or more matching line items, not just the header.
+                const lineHay = Array.isArray(o.lines) ? o.lines.map(l => `${l.part || ''} ${l.desc || ''}`).join(' ') : '';
+                const hay = [o.brand, o.po, o.enet, o.sop, o.pid, o.partner, o.endUser, o.part, o.desc, o.awb, o.container, o.oemInvNo, lineHay].join(' ').toLowerCase();
                 return (!txt || hay.includes(txt)) && (!brand || o.brand === brand)
-                    && (!status || o.status === status)
+                    // [SCC] Match on the order's own status OR any of its line items' statuses
+                    && (!status || o.status === status || (Array.isArray(o.lines) && o.lines.some(l => l.status === status)))
                     && (!dest || o.dest === dest || o.dest === dest.replace(' (Offshore)', ''))
-                    && (!type || o.type === type);
+                    && (!type || o.type === type)
+                    // [SCC] ETA range — match the order's own targetETA OR any line item's eta
+                    && (!etaActive || inEtaRange(o.targetETA) || (Array.isArray(o.lines) && o.lines.some(l => inEtaRange(l.eta))));
             });
             renderTable(_filt);
-            if ($('rc')) $('rc').textContent = _filt.length + ' of ' + orders.filter(isOpen).length;
+            if ($('rc'))
+            {
+                // [SCC] Denominator matches what we're filtering over: all orders if a closed status is selected, otherwise just open
+                const denom = status ? orders.length : orders.filter(isOpen).length;
+                $('rc').textContent = _filt.length + ' of ' + denom;
+            }
         }
 
         function renderTable(data)
@@ -6547,9 +6638,9 @@
       <td style="color:var(--mt)">${o.endUser || '—'}</td>
       <td style="color:${dc};font-size:9px">${o.dest || '—'}</td>
       <td style="color:var(--acc);font-size:9.5px">${hasL ? `<span style="color:var(--pu)">${o.lines.length}× items</span>` : o.part || '—'}</td>
-      <td style="max-width:180px">${o.desc || '—'}</td>
-      <td class="r">${(o.qty || 0).toLocaleString()}</td>
-      <td class="r" style="color:var(--hd);font-weight:600">${fU(o.totalUSD)}</td>
+      <td style="max-width:180px">${(o.lines && o.lines.length) ? `<button onclick="openDetail('${o.id}');event.stopPropagation()" style="background:transparent;border:1px solid rgba(0,200,232,.3);color:var(--acc);padding:1px 8px;font-size:8.5px;font-family:var(--fm);cursor:pointer;border-radius:var(--r);letter-spacing:.4px" title="View line items">${o.lines.length} line${o.lines.length === 1 ? '' : 's'} →</button>` : '<span style="color:var(--mt)">—</span>'}</td>
+      <td class="r">${(o.lines && o.lines.length ? o.lines.reduce((s, l) => s + (Number(l.qty) || 0), 0) : (o.qty || 0)).toLocaleString()}</td>
+      <td class="r" style="color:var(--hd);font-weight:600">${o.totalUSD ? '$' + Number(o.totalUSD).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
       <td><span class="cur-pill c${o.currency || 'USD'}">${o.currency || 'USD'}</span></td>
       <td><span class="badge" style="background:rgba(0,200,232,.06);color:var(--acc);border:1px solid rgba(0,200,232,.18);font-size:7.5px">${o.mot || 'AIR'}</span></td>
       <td style="${eta ? 'color:var(--wrn)' : 'color:var(--mt)'}">${eta || '—'} ${odTxt}</td>
@@ -6860,6 +6951,9 @@
       </select>
       <input class="fi" value="${esc(l.awb || '')}" placeholder="AWB" oninput="liSet('${l.id}','awb',this.value)" style="font-size:9px;padding:4px 7px">
       <input class="fi" value="${esc(l.container || '')}" placeholder="Container" oninput="liSet('${l.id}','container',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" value="${esc(l.oem_inv_no || '')}" placeholder="OEM Inv No" oninput="liSet('${l.id}','oem_inv_no',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" type="date" value="${esc(l.oem_inv_date || '')}" oninput="liSet('${l.id}','oem_inv_date',this.value)" onchange="liSet('${l.id}','oem_inv_date',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" type="date" value="${esc(l.eta || '')}" oninput="liSet('${l.id}','eta',this.value)" onchange="liSet('${l.id}','eta',this.value)" style="font-size:9px;padding:4px 7px" title="Line item target ETA">
       <button class="li-del" onclick="liDel('${l.id}')" type="button">×</button>
     </div>`).join('');
         }
@@ -6878,7 +6972,7 @@
             const l = {
                 id: 'L' + (_liCtr++), part: part || '', desc: desc || '', config: config || '', colour: colour || '',
                 qty: +qty || 0, unit: +unit || 0, total: +total || (+qty * (+unit || 0)) || 0,
-                status: status || 'BOOKED', awb: awb || '', container: container || ''
+                status: status || 'BOOKED', awb: awb || '', container: container || '', eta: ''
             };
             _lines.push(l); renderLI();
             setTimeout(() => { const el = document.getElementById('lip-' + l.id); if (el) el.focus(); }, 50);
@@ -6886,7 +6980,7 @@
         function initLI(o)
         {
             if (o.lines && o.lines.length) _lines = o.lines.map(l => ({ ...l, id: 'L' + (_liCtr++) }));
-            else if (o.part || o.desc) _lines = [{ id: 'L' + (_liCtr++), part: o.part || '', desc: o.desc || '', config: o.config || '', colour: o.colour || '', qty: o.qty || 0, unit: o.unit || 0, total: o.total || 0, status: o.status || 'BOOKED', awb: o.awb || '', container: o.container || '' }];
+            else if (o.part || o.desc) _lines = [{ id: 'L' + (_liCtr++), part: o.part || '', desc: o.desc || '', config: o.config || '', colour: o.colour || '', qty: o.qty || 0, unit: o.unit || 0, total: o.total || 0, status: o.status || 'BOOKED', awb: o.awb || '', container: o.container || '', eta: o.targetETA || '' }];
             else _lines = [];
         }
 
@@ -6909,7 +7003,7 @@
                     const hdrs = rows[hi].map(h => String(h || '').toLowerCase().replace(/[^a-z0-9 /]/g, '').trim());
                     const data = rows.slice(hi + 1).filter(r => r.some(v => String(v || '').trim()));
                     const fm = als => { let idx = -1; als.forEach(a => { if (idx < 0) { const i = hdrs.findIndex(h => h === a || h.includes(a)); if (i >= 0) idx = i; } }); return idx; };
-                    const ci = { part: fm(['part no', 'part number', 'part', 'sku', 'p/n']), desc: fm(['description', 'desc', 'product']), config: fm(['config']), colour: fm(['colour', 'color']), qty: fm(['qty', 'quantity', 'units']), unit: fm(['unit price', 'unit', 'price']), total: fm(['total', 'line total']), awb: fm(['awb', 'airway']), container: fm(['container', 'cntr']), status: fm(['status']) };
+                    const ci = { part: fm(['part no', 'part number', 'part', 'sku', 'p/n']), desc: fm(['description', 'desc', 'product']), config: fm(['config']), colour: fm(['colour', 'color']), qty: fm(['qty', 'quantity', 'units']), unit: fm(['unit price', 'unit', 'price']), total: fm(['total', 'line total']), awb: fm(['awb', 'airway']), container: fm(['container', 'cntr']), status: fm(['status']), oem_inv_no: fm(['oem inv no', 'oem invoice no', 'oem invoice number', 'oem inv', 'oem invoice']), oem_inv_date: fm(['oem inv date', 'oem invoice date']), eta: fm(['target eta', 'line eta', 'eta']) };
                     const gl = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx] || '').trim() : '';
                     const sn = v => parseFloat(String(v || '').replace(/[^0-9.\-]/g, '')) || 0;
                     const SM = { 'booked': 'BOOKED', 'shipped': 'SHIPPED', 'transit': 'TRANSIT-NG', 'at kds': 'AT-KDS', 'clearing': 'CLEARING', 'delivered': 'DELIVERED' };
@@ -6920,11 +7014,11 @@
                         const qty = sn(gl(row, ci.qty)), unit = sn(gl(row, ci.unit));
                         let total = sn(gl(row, ci.total)); if (!total && qty && unit) total = qty * unit;
                         const rs = gl(row, ci.status).toLowerCase(); let status = 'BOOKED'; for (const [k, v] of Object.entries(SM)) { if (rs.includes(k)) { status = v; break; } }
-                        _bluPend.push({ id: 'L' + (_liCtr++), part, desc, config: gl(row, ci.config), colour: gl(row, ci.colour), qty, unit, total, status, awb: gl(row, ci.awb), container: gl(row, ci.container) });
+                        _bluPend.push({ id: 'L' + (_liCtr++), part, desc, config: gl(row, ci.config), colour: gl(row, ci.colour), qty, unit, total, status, awb: gl(row, ci.awb), container: gl(row, ci.container), oem_inv_no: gl(row, ci.oem_inv_no), oem_inv_date: gl(row, ci.oem_inv_date), eta: gl(row, ci.eta) });
                     });
                     if (!_bluPend.length) { toast('No valid rows found', 'var(--red)'); return; }
-                    $('blu-th').innerHTML = ['Part No.', 'Description', 'Qty', 'Unit $', 'Total $', 'AWB', 'Container'].map(h => `<th>${h}</th>`).join('');
-                    $('blu-bd').innerHTML = _bluPend.map(l => `<tr><td style="color:var(--acc)">${l.part || '—'}</td><td>${l.desc || '—'}</td><td class="r">${l.qty}</td><td class="r">${l.unit ? '$' + l.unit : '—'}</td><td class="r" style="color:var(--hd);font-weight:600">${l.total ? '$' + l.total.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td><td style="color:var(--pu)">${l.awb || '—'}</td><td>${l.container || '—'}</td></tr>`).join('');
+                    $('blu-th').innerHTML = ['Part No.', 'Description', 'Qty', 'Unit $', 'Total $', 'AWB', 'Container', 'OEM Inv No', 'OEM Inv Date'].map(h => `<th>${h}</th>`).join('');
+                    $('blu-bd').innerHTML = _bluPend.map(l => `<tr><td style="color:var(--acc)">${l.part || '—'}</td><td>${l.desc || '—'}</td><td class="r">${l.qty}</td><td class="r">${l.unit ? '$' + l.unit : '—'}</td><td class="r" style="color:var(--hd);font-weight:600">${l.total ? '$' + l.total.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td><td style="color:var(--pu)">${l.awb || '—'}</td><td>${l.container || '—'}</td><td style="color:var(--tl)">${l.oem_inv_no || '—'}</td><td>${l.oem_inv_date || '—'}</td></tr>`).join('');
                     $('blu-info').textContent = `✓ ${_bluPend.length} lines · Total: $${_bluPend.reduce((s, l) => s + l.total, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
                     $('blu-imp-btn').textContent = `IMPORT ${_bluPend.length} LINES`;
                     $('blu-preview').style.display = 'block';
@@ -6935,12 +7029,25 @@
         function confirmBLU() { _lines = [..._lines, ..._bluPend]; renderLI(); clMod('blu-ov'); toast(`✓ ${_bluPend.length} lines added`, 'var(--grn)'); _bluPend = []; }
         function dlLiTemplate()
         {
-            if (typeof XLSX === 'undefined') { toast('Loading XLSX…', 'var(--wrn)'); return; }
-            const h = ['Part Number', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price $', 'Total $', 'AWB Number', 'Container Number', 'Status'];
-            const ex = [['C9300-48U-E', 'Cisco Catalyst 9300 48-Port PoE Switch', '2×10G', '—', '10', '8500', '85000', '574-001', '', 'BOOKED'], ['C9300-NW-A', 'Network Advantage License', '', '', '10', '1200', '12000', '', '', 'BOOKED']];
-            const ws = XLSX.utils.aoa_to_sheet([h, ...ex]); ws['!cols'] = h.map(() => ({ wch: 22 }));
-            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Lines');
-            XLSX.writeFile(wb, 'ChainView_LineItems_Template.xlsx');
+            const h = ['Part Number', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price $', 'Total $', 'AWB Number', 'Container Number', 'Status', 'OEM Inv No', 'OEM Inv Date', 'Target ETA'];
+            const ex = [
+                ['C9300-48U-E', 'Cisco Catalyst 9300 48-Port PoE Switch', '2×10G', '—', '10', '8500', '85000', '574-001', '', 'BOOKED', 'INV-CSC-2025-042', '2025-08-22', '2025-09-20'],
+                ['C9300-NW-A', 'Network Advantage License', '', '', '10', '1200', '12000', '', '', 'BOOKED', 'INV-CSC-2025-042', '2025-08-22', '2025-09-20']
+            ];
+            if (typeof sccDownloadCSV === 'function')
+            {
+                // Use the reliable CSV download helper from the persistence layer
+                sccDownloadCSV('ChainView_LineItems_Template.csv', h, ex);
+            } else if (typeof XLSX !== 'undefined')
+            {
+                // XLSX fallback (kept for compatibility)
+                const ws = XLSX.utils.aoa_to_sheet([h, ...ex]); ws['!cols'] = h.map(() => ({ wch: 22 }));
+                const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Lines');
+                XLSX.writeFile(wb, 'ChainView_LineItems_Template.xlsx');
+            } else
+            {
+                toast('Cannot download template — XLSX library not loaded', 'var(--red)');
+            }
         }
 
         //============================================================
@@ -7167,20 +7274,20 @@
         function rtDl() { const ta = $('exp-ta'), fn = $('exp-fn').textContent || 'export.csv'; try { const b = new Blob([ta.value], { type: 'text/csv;charset=utf-8;' }); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = fn; a.click(); URL.revokeObjectURL(u); toast('Download started', 'var(--grn)'); } catch (e) { toast('Use Copy All Data instead', 'var(--wrn)'); } }
         function showExpMenu() { $('exp-menu-ov').classList.add('open'); }
 
-        const HDR = ['Brand', 'PO Reference', 'ENET/SO', 'SOP', 'Order Date', 'Type', 'Status', 'Partner', 'End User', 'Destination', 'Part No', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price', 'Total (Local)', 'Currency', 'FX Rate', 'Total USD', 'OEM Inv No', 'OEM Inv Date', 'Target ETA', 'Planned Ship', 'Actual Ship', 'Shipper ETA', 'Actual Arrival', 'AWB Number', 'Container', 'MOT', 'Ship Line', 'Actual Delivery', 'Delivered By', 'WH Receipt Date', 'Remark'];
-        function rowOf(o) { return [o.brand, o.po, o.enet || '', o.sop || '', o.orderDate, o.type, o.status, o.partner, o.endUser, o.dest, o.part, o.desc, o.config || '', o.colour || '', o.qty, o.unit || '', o.total, o.currency || 'USD', o.fxRate || 1, o.totalUSD || o.total, o.oemInvNo || '', o.oemInvDate || '', o.targetETA || '', o.plannedShip || '', o.actualShip || '', o.shipperETA || '', o.actualArr || '', o.awb || '', o.container || '', o.mot || 'AIR', o.shipLine || '', o.actualDelivery || '', o.deliveredBy || '', o.whDate || '', o.remark || '']; }
+        const HDR = ['Brand', 'PO Reference', 'ENET/SO', 'SOP', 'Order Date', 'Type', 'Status', 'Line Status', 'Partner', 'End User', 'Destination', 'Part No', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price', 'Total (Local)', 'Currency', 'FX Rate', 'Total USD', 'OEM Inv No', 'OEM Inv Date', 'Target ETA', 'Planned Ship', 'Actual Ship', 'Shipper ETA', 'Actual Arrival', 'AWB Number', 'Container', 'MOT', 'Ship Line', 'Actual Delivery', 'Delivered By', 'WH Receipt Date', 'Remark'];
+        function rowOf(o) { const lineStatus = (o.lines && o.lines.length === 1) ? (o.lines[0].status || o.status) : o.status; return [o.brand, o.po, o.enet || '', o.sop || '', o.orderDate, o.type, o.status, lineStatus, o.partner, o.endUser, o.dest, o.part, o.desc, o.config || '', o.colour || '', o.qty, o.unit || '', o.total, o.currency || 'USD', o.fxRate || 1, o.totalUSD || o.total, o.oemInvNo || '', o.oemInvDate || '', o.targetETA || '', o.plannedShip || '', o.actualShip || '', o.shipperETA || '', o.actualArr || '', o.awb || '', o.container || '', o.mot || 'AIR', o.shipLine || '', o.actualDelivery || '', o.deliveredBy || '', o.whDate || '', o.remark || '']; }
         function expandO(oList)
         {
             return oList.flatMap(o =>
             {
                 if (!o.lines || o.lines.length <= 1) return [rowOf(o)];
-                return o.lines.map((l, i) => { const r = [...rowOf(o)]; r[10] = l.part || o.part; r[11] = l.desc || o.desc; r[12] = l.config || ''; r[13] = l.colour || ''; r[14] = l.qty; r[15] = l.unit || ''; r[16] = l.total; r[17] = 'USD'; r[18] = 1; r[19] = l.total; r[26] = l.awb || o.awb || ''; r[27] = l.container || o.container || ''; if (i > 0) { r[1] += '(line ' + (i + 1) + ')'; r[4] = ''; } return r; });
+                return o.lines.map((l, i) => { const r = [...rowOf(o)]; r[7] = l.status || o.status; r[11] = l.part || o.part; r[12] = l.desc || o.desc; r[13] = l.config || ''; r[14] = l.colour || ''; r[15] = l.qty; r[16] = l.unit || ''; r[17] = l.total; r[18] = 'USD'; r[19] = 1; r[20] = l.total; r[28] = l.awb || o.awb || ''; r[29] = l.container || o.container || ''; if (i > 0) { r[1] += '(line ' + (i + 1) + ')'; r[4] = ''; } return r; });
             });
         }
         function expOutstanding()
         {
             const today = new Date(); const data = orders.filter(isOpen);
-            const rows = expandO(data).map(r => { const eta = r[22] || ''; const days = eta ? Math.floor((today - new Date(eta)) / 86400000) : ''; return [...r, days]; });
+            const rows = expandO(data).map(r => { const eta = r[23] || ''; const days = eta ? Math.floor((today - new Date(eta)) / 86400000) : ''; return [...r, days]; });
             doExp(`ChainView_Outstanding_${new Date().toISOString().slice(0, 10)}.csv`, bCSV([...HDR, 'Days Overdue'], rows));
         }
         function expFiltered() { doExp(`ChainView_Filtered_${new Date().toISOString().slice(0, 10)}.csv`, bCSV(HDR, expandO(_filt.length ? _filt : orders.filter(isOpen)))); }
@@ -7262,6 +7369,13 @@
                 updated_by: o._updatedBy || '',
                 updated_at: o._updatedAt || ''
             };
+            // [SCC] shipLine ("Shipping Line / Carrier") and shippingLine ("Shipping Line")
+            // both map to ship_line. Resolve here (prefer non-empty) so a carrier typed in
+            // EITHER field is persisted; pre-seeding out.ship_line makes the loop below skip both.
+            if (o.shipLine !== undefined || o.shippingLine !== undefined)
+            {
+                out.ship_line = o.shipLine || o.shippingLine || '';
+            }
             for (const [appKey, sheetKey] of Object.entries(SCC_F_MAP))
             {
                 if (o[appKey] !== undefined && out[sheetKey] === undefined)
@@ -7289,6 +7403,10 @@
             o._updatedAt = s.updated_at || '';
             // Ensure totalUSD getter works — use stored value
             if (!o.totalUSD && s.total_usd) o.totalUSD = +s.total_usd || 0;
+            // [SCC] ship_line reverse-maps to only one of shipLine/shippingLine (last one wins in
+            // SCC_F_RMAP), so the carrier value used to land on shippingLine and vanish from the
+            // "Shipping Line / Carrier" field on refresh. Mirror it onto both keys.
+            if (s.ship_line !== undefined) { o.shipLine = s.ship_line; o.shippingLine = s.ship_line; }
             return o;
         }
 
@@ -7307,7 +7425,10 @@
                 total: +l.total || 0,
                 status: l.status || 'BOOKED',
                 awb: l.awb || '',
-                container: l.container || ''
+                container: l.container || '',
+                oem_inv_no: l.oem_inv_no || '',
+                oem_inv_date: l.oem_inv_date || '',
+                eta: l.eta || ''
             };
         }
 
@@ -7324,7 +7445,10 @@
                 total: +s.total || 0,
                 status: s.status || 'BOOKED',
                 awb: s.awb || '',
-                container: s.container || ''
+                container: s.container || '',
+                oem_inv_no: s.oem_inv_no || '',
+                oem_inv_date: s.oem_inv_date || '',
+                eta: s.eta || ''
             };
         }
 
@@ -7427,11 +7551,22 @@
                 });
 
                 // [SCC] Sort by date added DESC (newest first), fallback to orderDate DESC
+                // Converts strings to millisecond timestamps for precise comparison.
+                // Newer (higher ms) values come first. Records with no date sink to the bottom.
+                const _toMs = v =>
+                {
+                    if (!v) return 0;
+                    const s = String(v).trim();
+                    if (!s) return 0;
+                    // Try parsing as a date/timestamp
+                    const t = Date.parse(s);
+                    return isNaN(t) ? 0 : t;
+                };
                 newOrders.sort((a, b) =>
                 {
-                    const aKey = a.addedAt || a.orderDate || '';
-                    const bKey = b.addedAt || b.orderDate || '';
-                    return String(bKey).localeCompare(String(aKey));
+                    const aMs = _toMs(a.addedAt) || _toMs(a.orderDate);
+                    const bMs = _toMs(b.addedAt) || _toMs(b.orderDate);
+                    return bMs - aMs;  // DESC: newest first
                 });
 
                 // Replace global orders array
@@ -7823,10 +7958,40 @@
             }
         }
 
+        // ─── CSV download helper (more reliable than XLSX, no library dependency) ───
+        function sccDownloadCSV(filename, headers, rows)
+        {
+            const esc = v =>
+            {
+                if (v === null || v === undefined) return '';
+                const s = String(v);
+                if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
+                {
+                    return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            };
+            const lines = [headers.join(',')].concat(rows.map(r => r.map(esc).join(',')));
+            // Prepend UTF-8 BOM so Excel opens with correct encoding for non-ASCII chars
+            const csv = '\uFEFF' + lines.join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() =>
+            {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+        }
+
         // Updated Orders template — matches the new schema
         function sccDlOrdersTemplate()
         {
-            if (typeof XLSX === 'undefined') { toast('Loading XLSX…', 'var(--wrn)'); return; }
             const headers = [
                 'po', 'brand', 'enet', 'sop', 'order_date', 'type', 'status', 'partner', 'end_user', 'dest',
                 'mot', 'currency', 'fx_rate', 'total', 'oem_inv_no', 'oem_inv_date',
@@ -7847,26 +8012,17 @@
                 '2025-10-15', '', '', '', '',
                 '', '', '', 'KDS Nigeria', ''
             ];
-            const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2]);
-            ws['!cols'] = headers.map(() => ({ wch: 18 }));
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'Orders');
-            XLSX.writeFile(wb, 'ChainView_Orders_Template.xlsx');
+            sccDownloadCSV('ChainView_Orders_Template.csv', headers, [example1, example2]);
         }
 
         // Lines template
         function sccDlLinesTemplate()
         {
-            if (typeof XLSX === 'undefined') { toast('Loading XLSX…', 'var(--wrn)'); return; }
-            const headers = ['po', 'part', 'desc', 'config', 'colour', 'qty', 'unit', 'total', 'status', 'awb', 'container'];
-            const example1 = ['TD/HP-PSG/MTN-25AUG-001', '15-FQ123AA', 'HP ProBook 450 G10 i7', '16GB/512GB SSD', 'Silver', '50', '850', '42500', 'BOOKED', '', ''];
-            const example2 = ['TD/HP-PSG/MTN-25AUG-001', '15-FQ124AA', 'HP ProBook 450 G10 i5', '8GB/256GB SSD', 'Silver', '100', '650', '65000', 'BOOKED', '', ''];
-            const example3 = ['TD/CS/BANK-25AUG-002', 'C9300-48U-E', 'Cisco Catalyst 9300 48-Port', '', '', '10', '8500', '85000', 'BOOKED', '', ''];
-            const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2, example3]);
-            ws['!cols'] = headers.map(() => ({ wch: 18 }));
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'Lines');
-            XLSX.writeFile(wb, 'ChainView_Lines_Template.xlsx');
+            const headers = ['po', 'part', 'desc', 'config', 'colour', 'qty', 'unit', 'total', 'status', 'awb', 'container', 'oem_inv_no', 'oem_inv_date', 'eta'];
+            const example1 = ['TD/HP-PSG/MTN-25AUG-001', '15-FQ123AA', 'HP ProBook 450 G10 i7', '16GB/512GB SSD', 'Silver', '50', '850', '42500', 'BOOKED', '', '', 'INV-HP-2025-001', '2025-08-20', '2025-09-20'];
+            const example2 = ['TD/HP-PSG/MTN-25AUG-001', '15-FQ124AA', 'HP ProBook 450 G10 i5', '8GB/256GB SSD', 'Silver', '100', '650', '65000', 'BOOKED', '', '', 'INV-HP-2025-001', '2025-08-20', '2025-10-05'];
+            const example3 = ['TD/CS/BANK-25AUG-002', 'C9300-48U-E', 'Cisco Catalyst 9300 48-Port', '', '', '10', '8500', '85000', 'BOOKED', '', '', 'INV-CSC-2025-042', '2025-08-22', '2025-10-15'];
+            sccDownloadCSV('ChainView_Lines_Template.csv', headers, [example1, example2, example3]);
         }
 
         function sccHandleLinesDrop(e)
@@ -7931,7 +8087,10 @@
                         total: findCol('total'),
                         status: findCol('status'),
                         awb: findCol('awb'),
-                        container: findCol('container')
+                        container: findCol('container'),
+                        oem_inv_no: findCol('oem_inv_no', 'oem inv no', 'oem invoice no', 'oem invoice number', 'oem inv', 'oem invoice'),
+                        oem_inv_date: findCol('oem_inv_date', 'oem inv date', 'oem invoice date'),
+                        eta: findCol('target eta', 'line eta', 'eta')
                     };
                     if (ci.po < 0) { toast('No "po" column found in Lines file', 'var(--red)'); return; }
 
@@ -7941,6 +8100,49 @@
                     // Group rows by PO
                     const linesByPo = {};
                     let badRows = 0;
+
+                    // [SCC] Robust status normalizer — accepts codes (BOOKED), labels (Booked/Accepted),
+                    // partial matches ("transit"), case-insensitive variants, and friendly arrows/checkmarks
+                    const VALID_STATUSES = new Set(['BOOKED', 'IN-PRODUCTION', 'PRODUCTION-HOLD', 'MATERIAL-CONSTRAINT', 'SHIPPED', 'TO-FORWARDER', 'TRANSIT-NG', 'TRANSIT-GH', 'TRANSIT-OT', 'CLEARING', 'AT-KDS', 'AT-ASHOUR', 'AT-EVERBRIGHT', 'LICENSE', 'MISSING', 'DELIVERED', 'E-DELIVERED', 'CANCELLED', 'REJECTED']);
+                    const SCC_STATUS_MAP = {
+                        'booked': 'BOOKED', 'accepted': 'BOOKED', 'booked/accepted': 'BOOKED',
+                        'in production': 'IN-PRODUCTION', 'production': 'IN-PRODUCTION',
+                        'production hold': 'PRODUCTION-HOLD', 'hold': 'PRODUCTION-HOLD',
+                        'material constraint': 'MATERIAL-CONSTRAINT', 'constraint': 'MATERIAL-CONSTRAINT',
+                        'shipped': 'SHIPPED',
+                        'forwarder': 'TO-FORWARDER', 'to forwarder': 'TO-FORWARDER',
+                        'transit nigeria': 'TRANSIT-NG', 'transit ng': 'TRANSIT-NG', 'transit-ng': 'TRANSIT-NG',
+                        'transit ghana': 'TRANSIT-GH', 'transit gh': 'TRANSIT-GH', 'transit-gh': 'TRANSIT-GH',
+                        'transit other': 'TRANSIT-OT', 'transit ot': 'TRANSIT-OT', 'transit-ot': 'TRANSIT-OT',
+                        'transit': 'TRANSIT-NG',
+                        'clearing': 'CLEARING', 'in clearing': 'CLEARING', 'port': 'CLEARING',
+                        'at kds': 'AT-KDS', 'kds': 'AT-KDS', 'goods at kds': 'AT-KDS',
+                        'at ashour': 'AT-ASHOUR', 'ashour': 'AT-ASHOUR',
+                        'everbright': 'AT-EVERBRIGHT', 'at everbright': 'AT-EVERBRIGHT',
+                        'license': 'LICENSE',
+                        'missing': 'MISSING',
+                        'delivered': 'DELIVERED', 'delivered ✓': 'DELIVERED',
+                        'e-delivered': 'E-DELIVERED', 'e delivered': 'E-DELIVERED',
+                        'cancelled': 'CANCELLED', 'canceled': 'CANCELLED',
+                        'rejected': 'REJECTED'
+                    };
+                    function sccNormStatus(raw)
+                    {
+                        if (!raw) return 'BOOKED';
+                        const s = String(raw).trim();
+                        if (!s) return 'BOOKED';
+                        const up = s.toUpperCase();
+                        if (VALID_STATUSES.has(up)) return up;  // exact code
+                        const low = s.toLowerCase().replace(/[→✓]/g, '').replace(/[/\\-]/g, ' ').replace(/\s+/g, ' ').trim();
+                        if (SCC_STATUS_MAP[low]) return SCC_STATUS_MAP[low];
+                        // partial: try each key as substring
+                        for (const [k, v] of Object.entries(SCC_STATUS_MAP))
+                        {
+                            if (low.includes(k)) return v;
+                        }
+                        return 'BOOKED';
+                    }
+
                     data.forEach((row) =>
                     {
                         const po = get(row, ci.po);
@@ -7959,9 +8161,12 @@
                             qty: qty,
                             unit: unit,
                             total: num(get(row, ci.total)) || (qty * unit),
-                            status: get(row, ci.status).toUpperCase() || 'BOOKED',
+                            status: sccNormStatus(get(row, ci.status)),
                             awb: get(row, ci.awb),
-                            container: get(row, ci.container)
+                            container: get(row, ci.container),
+                            oem_inv_no: get(row, ci.oem_inv_no),
+                            oem_inv_date: get(row, ci.oem_inv_date),
+                            eta: get(row, ci.eta)
                         });
                     });
 
@@ -8156,7 +8361,7 @@
                                 const fx = num(get(row, ci.fx_rate)) || 1;
                                 const total = num(get(row, ci.total));
                                 const totalUSD = cur === 'USD' ? total : (fx > 0 ? total / fx : total);
-                                const status = (get(row, ci.status) || 'BOOKED').toUpperCase();
+                                const status = sccNormStatus(get(row, ci.status));  // [SCC] canonicalise to ST_OPTS code so dashboard retains it
                                 const newOrder = {
                                     id: 'UP' + Date.now() + '_' + i,
                                     po: po,
