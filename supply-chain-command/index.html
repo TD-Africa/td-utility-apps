@@ -1,6 +1,3 @@
-dfj
-
-
 <!DOCTYPE html>
 <html lang="en">
 
@@ -1040,6 +1037,18 @@ dfj
             border: 1px solid rgba(0, 224, 128, .25)
         }
 
+        .s-PARTLY-SHIPPED {
+            background: rgba(56, 176, 224, .08);
+            color: #38b0e0;
+            border: 1px solid rgba(56, 176, 224, .25)
+        }
+
+        .s-CANCELLED {
+            background: rgba(136, 146, 160, .1);
+            color: #8892a0;
+            border: 1px solid rgba(136, 146, 160, .3)
+        }
+
         .brand-pill {
             display: inline-block;
             padding: 1px 6px;
@@ -1583,10 +1592,41 @@ dfj
 
         .li-cols {
             display: grid;
-            grid-template-columns: 130px 1fr 55px 85px 90px 85px 78px 72px 24px;
+            grid-template-columns: 115px 220px 100px 75px 55px 75px 85px 90px 85px 80px 110px 130px 130px 28px;
             gap: 4px;
             padding: 0 0 4px;
-            border-bottom: 1px solid var(--b1)
+            border-bottom: 1px solid var(--b1);
+            min-width: 1430px
+        }
+
+        /* Horizontal scroll wrapper around line items grid — keeps the rest of the modal happy
+           while letting the wide line items table scroll independently on smaller screens. */
+        .li-scroll {
+            overflow-x: auto;
+            overflow-y: visible;
+            margin-bottom: 4px
+        }
+
+        .li-scroll::-webkit-scrollbar {
+            height: 8px
+        }
+
+        .li-scroll::-webkit-scrollbar-thumb {
+            background: var(--b2);
+            border-radius: 4px
+        }
+
+        /* Inputs and selects inside line rows need box-sizing so they don't overflow narrow cells */
+        .li-row .fi,
+        .li-row select.fi {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0
+        }
+
+        /* Date input needs enough internal room for its picker indicator */
+        .li-row input[type="date"].fi {
+            min-width: 100px
         }
 
         .li-cols span {
@@ -1599,10 +1639,11 @@ dfj
 
         .li-row {
             display: grid;
-            grid-template-columns: 130px 1fr 55px 85px 90px 85px 78px 72px 24px;
+            grid-template-columns: 115px 220px 100px 75px 55px 75px 85px 90px 85px 80px 110px 130px 130px 28px;
             gap: 4px;
             margin-bottom: 4px;
-            align-items: center
+            align-items: center;
+            min-width: 1430px
         }
 
         .li-del {
@@ -2237,6 +2278,7 @@ dfj
         </div>
         <div class="tb-nav">
             <button class="tn a" onclick="navTo('t-orders',this)"><span class="tnd"></span>Orders</button>
+            <button class="tn" onclick="navTo('t-li',this)"><span class="tnd"></span>Line Items</button>
             <button class="tn" onclick="navTo('t-ship',this)"><span class="tnd"></span>Shipments</button>
             <button class="tn" onclick="navTo('t-legs',this)"><span class="tnd"></span>Delivery Legs</button>
             <button class="tn" onclick="navTo('t-an',this)"><span class="tnd"></span>Analytics</button>
@@ -2288,6 +2330,7 @@ dfj
         <!-- SECTION TABS -->
         <div class="tabs">
             <button class="tab a" onclick="tabTo('t-orders',this)">All Outstanding</button>
+            <button class="tab" onclick="tabTo('t-li',this)">Line Item Records</button>
             <button class="tab" onclick="tabTo('t-ship',this)">AWB / Container Groups</button>
             <button class="tab" onclick="tabTo('t-legs',this)">Delivery Legs &amp; KPIs</button>
             <button class="tab" onclick="tabTo('t-an',this)">Analytics &amp; Reports</button>
@@ -2313,6 +2356,7 @@ dfj
                         <option value="PRODUCTION-HOLD">Production Hold</option>
                         <option value="MATERIAL-CONSTRAINT">Material Constraint</option>
                         <option value="SHIPPED">Shipped</option>
+                        <option value="PARTLY-SHIPPED">Partly Shipped</option>
                         <option value="TO-FORWARDER">→ Forwarder</option>
                         <option value="TRANSIT-NG">Transit → Nigeria</option>
                         <option value="TRANSIT-GH">Transit → Ghana</option>
@@ -2323,6 +2367,8 @@ dfj
                         <option value="AT-EVERBRIGHT">→ Everbright</option>
                         <option value="LICENSE">License / Provision</option>
                         <option value="MISSING">Missing</option>
+                        <option value="DELIVERED">Delivered ✓</option>
+                        <option value="CANCELLED">Cancelled</option>
                     </select>
                     <span class="fl">Dest:</span>
                     <select class="fi" id="f-dest" onchange="applyF()">
@@ -2340,6 +2386,11 @@ dfj
                         <option value="B2B">B2B</option>
                         <option value="STOCK">Stock</option>
                     </select>
+                    <span class="fl">ETA:</span>
+                    <input class="fi" id="f-eta-from" type="date" title="ETA range — from" oninput="applyF()" onchange="applyF()" style="min-width:120px">
+                    <span class="fl">→</span>
+                    <input class="fi" id="f-eta-to" type="date" title="ETA range — to" oninput="applyF()" onchange="applyF()" style="min-width:120px">
+                    <button class="btn sm" type="button" onclick="$('f-eta-from').value='';$('f-eta-to').value='';applyF()" title="Clear ETA range">✕</button>
                     <div class="rc" id="rc">— orders</div>
                     <div style="display:flex;gap:5px;margin-left:auto">
                         <button class="btn sm wrn" onclick="expOutstanding()">⬇ OUTSTANDING CSV</button>
@@ -2352,6 +2403,56 @@ dfj
                             <tr id="t-thead"></tr>
                         </thead>
                         <tbody id="t-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- LINE ITEMS TAB -->
+        <div class="pane" id="t-li">
+            <div class="panel" style="margin-top:0;border-top:none">
+                <div class="fbar">
+                    <input class="fi fw" id="li-srch" type="text"
+                        placeholder="Search Part · Description · PO · Brand · Partner · End User · Destination…"
+                        oninput="applyLF()">
+                    <span class="fl">Status:</span>
+                    <select class="fi" id="li-f-status" onchange="applyLF()">
+                        <option value="">All Outstanding</option>
+                        <option value="BOOKED">Booked / Accepted</option>
+                        <option value="IN-PRODUCTION">In Production</option>
+                        <option value="PRODUCTION-HOLD">Production Hold</option>
+                        <option value="MATERIAL-CONSTRAINT">Material Constraint</option>
+                        <option value="SHIPPED">Shipped</option>
+                        <option value="PARTLY-SHIPPED">Partly Shipped</option>
+                        <option value="TO-FORWARDER">→ Forwarder</option>
+                        <option value="TRANSIT-NG">Transit → Nigeria</option>
+                        <option value="TRANSIT-GH">Transit → Ghana</option>
+                        <option value="TRANSIT-OT">Transit → Other</option>
+                        <option value="CLEARING">In Clearing / Port</option>
+                        <option value="AT-KDS">Goods at KDS</option>
+                        <option value="AT-ASHOUR">Goods at Ashour</option>
+                        <option value="AT-EVERBRIGHT">→ Everbright</option>
+                        <option value="LICENSE">License / Provision</option>
+                        <option value="MISSING">Missing</option>
+                        <option value="DELIVERED">Delivered ✓</option>
+                        <option value="CANCELLED">Cancelled</option>
+                    </select>
+                    <span class="fl">ETA:</span>
+                    <input class="fi" id="li-f-eta-from" type="date" title="ETA range — from" oninput="applyLF()" onchange="applyLF()" style="min-width:120px">
+                    <span class="fl">→</span>
+                    <input class="fi" id="li-f-eta-to" type="date" title="ETA range — to" oninput="applyLF()" onchange="applyLF()" style="min-width:120px">
+                    <button class="btn sm" type="button" onclick="$('li-f-eta-from').value='';$('li-f-eta-to').value='';applyLF()" title="Clear ETA range">✕</button>
+                    <div class="rc" id="li-rc">— line items</div>
+                    <div style="display:flex;gap:5px;margin-left:auto">
+                        <button class="btn sm" onclick="expLineItems()">⬇ EXPORT LINE ITEMS</button>
+                    </div>
+                </div>
+                <div class="tw">
+                    <table>
+                        <thead>
+                            <tr id="lt-thead"></tr>
+                        </thead>
+                        <tbody id="lt-tbody"></tbody>
                     </table>
                 </div>
             </div>
@@ -2544,6 +2645,7 @@ dfj
                                 <option value="PRODUCTION-HOLD">Production Hold</option>
                                 <option value="MATERIAL-CONSTRAINT">Material Constraint</option>
                                 <option value="SHIPPED">Shipped</option>
+                                <option value="PARTLY-SHIPPED">Partly Shipped</option>
                                 <option value="TO-FORWARDER">Transit → Forwarder</option>
                                 <option value="TRANSIT-NG">Transit → Nigeria</option>
                                 <option value="TRANSIT-GH">Transit → Ghana</option>
@@ -2555,6 +2657,7 @@ dfj
                                 <option value="LICENSE">License / Provision</option>
                                 <option value="MISSING">Missing</option>
                                 <option value="DELIVERED">Delivered ✓</option>
+                                <option value="CANCELLED">Cancelled</option>
                             </select>
                         </div>
                         <div class="ff"><label>Destination</label>
@@ -2571,17 +2674,7 @@ dfj
                         <div class="ff"><label>End User / Customer</label><input id="f-eu"></div>
                         <div class="ff sp3"><label>Remark / Notes</label><input id="f-remark"></div>
                     </div>
-                    <div class="fsec" style="margin-top:4px">Primary Item <small
-                            style="font-weight:400;letter-spacing:0;text-transform:none;font-size:8px;color:var(--mt)">(for
-                            multi-product POs use the Line Items tab)</small></div>
-                    <div class="fg3">
-                        <div class="ff"><label>Part Number</label><input id="f-part"></div>
-                        <div class="ff sp2"><label>Description</label><input id="f-desc"></div>
-                        <div class="ff"><label>Config / Spec</label><input id="f-config"></div>
-                        <div class="ff"><label>Colour</label><input id="f-colour"></div>
-                        <div class="ff"><label>OEM Invoice No.</label><input id="f-oemno"></div>
-                        <div class="ff"><label>OEM Invoice Date</label><input type="date" id="f-oemdate"></div>
-                    </div>
+                    
                     <!-- FX CALCULATOR -->
                     <div class="fsec" style="margin-top:4px">Pricing &amp; Currency</div>
                     <div class="fx-panel">
@@ -2680,12 +2773,16 @@ dfj
                             <button class="btn sm grn" onclick="openBulkLI()" type="button">⬆ BULK UPLOAD</button>
                         </div>
                     </div>
-                    <div class="li-cols">
-                        <span>Part No.</span><span>Description</span><span>Qty</span>
-                        <span>Unit $</span><span>Total $</span><span>Status</span>
-                        <span>AWB</span><span>Container</span><span></span>
+                    <div class="li-scroll">
+                        <div class="li-cols">
+                            <span>Part
+                                No.</span><span>Description</span><span>Config/Spec</span><span>Colour</span><span>Qty</span>
+                            <span>Unit $</span><span>Total $</span><span>Status</span>
+                            <span>AWB</span><span>Container</span><span>OEM Inv No</span><span>OEM Inv
+                                Date</span><span>Target ETA</span><span></span>
+                        </div>
+                        <div id="li-rows"></div>
                     </div>
-                    <div id="li-rows"></div>
                     <div id="li-empty" class="li-empty">No line items — click <b style="color:var(--acc)">+ ADD LINE</b>
                         or <b style="color:var(--grn)">⬆ BULK UPLOAD</b></div>
                 </div>
@@ -2834,30 +2931,68 @@ dfj
 
     <!-- BULK ORDER UPLOAD MODAL -->
     <div class="ov" id="up-ov" onclick="clOL(event,'up-ov')">
-        <div class="modal" style="max-width:640px">
+        <div class="modal" style="max-width:680px">
             <div class="mh">
-                <div class="mt_">⬆ UPLOAD ORDERS</div><button class="mx" onclick="clMod('up-ov')">✕</button>
+                <div class="mt_">⬆ BULK UPLOAD</div><button class="mx" onclick="clMod('up-ov')">✕</button>
             </div>
             <div class="mb">
-                <div id="up-zone" ondragover="event.preventDefault();this.style.borderColor='var(--acc)'"
-                    ondragleave="this.style.borderColor='var(--b2)'" ondrop="hUpDrop(event)"
-                    onclick="$('up-file').click()"
-                    style="border:2px dashed var(--b2);padding:28px;text-align:center;cursor:pointer;border-radius:var(--r);transition:border .2s;margin-bottom:12px">
-                    <div style="font-size:22px;margin-bottom:7px">📂</div>
-                    <div
-                        style="font-family:var(--fd);font-size:16px;letter-spacing:2px;color:var(--hd);margin-bottom:4px">
-                        DROP XLSX / CSV HERE</div>
-                    <div style="font-family:var(--fm);font-size:8px;color:var(--tx2)">Auto-maps: Brand · PO · Part ·
-                        Status · Dates · AWB · Container · Currency · FX Rate</div>
-                    <input type="file" id="up-file" accept=".xlsx,.xls,.csv" style="display:none"
-                        onchange="hUpFile(this)">
+                <!-- Tabs: Orders / Lines -->
+                <div style="display:flex;gap:0;border-bottom:1px solid var(--b1);margin-bottom:12px">
+                    <button id="up-tab-orders" class="mtab" onclick="sccUpTab('orders')"
+                        style="padding:8px 14px;cursor:pointer">📋 ORDERS</button>
+                    <button id="up-tab-lines" class="mtab" onclick="sccUpTab('lines')"
+                        style="padding:8px 14px;cursor:pointer">📦 LINE ITEMS</button>
                 </div>
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <span style="font-family:var(--fm);font-size:8px;color:var(--mt)">Valid statuses: BOOKED · SHIPPED ·
-                        TRANSIT-NG · AT-KDS · AT-ASHOUR · CLEARING etc.</span>
-                    <button class="btn sm grn" onclick="dlUpTemplate()">⬇ TEMPLATE</button>
+
+                <!-- ORDERS PANEL -->
+                <div id="up-panel-orders">
+                    <div id="up-zone" ondragover="event.preventDefault();this.style.borderColor='var(--acc)'"
+                        ondragleave="this.style.borderColor='var(--b2)'" ondrop="hUpDrop(event)"
+                        onclick="$('up-file').click()"
+                        style="border:2px dashed var(--b2);padding:28px;text-align:center;cursor:pointer;border-radius:var(--r);transition:border .2s;margin-bottom:12px">
+                        <div style="font-size:22px;margin-bottom:7px">📂</div>
+                        <div
+                            style="font-family:var(--fd);font-size:16px;letter-spacing:2px;color:var(--hd);margin-bottom:4px">
+                            DROP ORDERS XLSX / CSV HERE</div>
+                        <div style="font-family:var(--fm);font-size:8px;color:var(--tx2)">Order headers only · upload
+                            Line Items separately</div>
+                        <input type="file" id="up-file" accept=".xlsx,.xls,.csv" style="display:none"
+                            onchange="hUpFile(this)">
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span style="font-family:var(--fm);font-size:8px;color:var(--mt)">Required: <b
+                                style="color:var(--tx2)">po</b>, <b style="color:var(--tx2)">brand</b>. Recommended:
+                            status, partner, end_user, dates, currency.</span>
+                        <button class="btn sm grn" onclick="dlUpTemplate()">⬇ ORDERS TEMPLATE</button>
+                    </div>
+                    <div id="up-res" style="margin-top:10px;font-family:var(--fm);font-size:9.5px;color:var(--grn)">
+                    </div>
                 </div>
-                <div id="up-res" style="margin-top:10px;font-family:var(--fm);font-size:9.5px;color:var(--grn)"></div>
+
+                <!-- LINES PANEL -->
+                <div id="up-panel-lines" style="display:none">
+                    <div id="up-zone-lines" ondragover="event.preventDefault();this.style.borderColor='var(--acc)'"
+                        ondragleave="this.style.borderColor='var(--b2)'" ondrop="sccHandleLinesDrop(event)"
+                        onclick="$('up-file-lines').click()"
+                        style="border:2px dashed var(--b2);padding:28px;text-align:center;cursor:pointer;border-radius:var(--r);transition:border .2s;margin-bottom:12px">
+                        <div style="font-size:22px;margin-bottom:7px">📦</div>
+                        <div
+                            style="font-family:var(--fd);font-size:16px;letter-spacing:2px;color:var(--hd);margin-bottom:4px">
+                            DROP LINES XLSX / CSV HERE</div>
+                        <div style="font-family:var(--fm);font-size:8px;color:var(--tx2)">Each line links to its order
+                            via <b style="color:var(--acc)">po</b> column · upload Orders first</div>
+                        <input type="file" id="up-file-lines" accept=".xlsx,.xls,.csv" style="display:none"
+                            onchange="sccHandleLinesFile(this)">
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span style="font-family:var(--fm);font-size:8px;color:var(--mt)">Required: <b
+                                style="color:var(--tx2)">po</b>, <b style="color:var(--tx2)">part</b> or <b
+                                style="color:var(--tx2)">desc</b>. Others: qty, unit, total, status.</span>
+                        <button class="btn sm grn" onclick="sccDlLinesTemplate()">⬇ LINES TEMPLATE</button>
+                    </div>
+                    <div id="up-res-lines"
+                        style="margin-top:10px;font-family:var(--fm);font-size:9.5px;color:var(--grn)"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -2954,7 +3089,7 @@ dfj
         //============================================================
         // DATA — OUTSTANDING ORDERS ONLY (no DELIVERED/CANCELLED)
         //============================================================
-        const _B = ["APC", "Apple", "BCS Ghana", "Bosch", "Check Point", "Cisco", "Dell Client", "Dell EMC", "EcoFlow", "HP DMFI", "HP DMFI Ghana", "HP IPG", "HP IPG Ghana", "HP PSG", "HP PSG FY26", "HP PSG Ghana", "HP Supplies", "Huawei Enterprise", "Huawei Power", "Huawei SMB", "IBM", "Infinix", "Lenovo", "Lenovo Ghana", "MIGO Nokia", "Microsoft", "Nokia HMD", "Nutanix", "OPPO", "Samsung CE", "Samsung Mobile", "Starlink NG", "Syinix", "TECNO", "Zebra"];
+        const _B = ["APC", "Apple", "Bosch", "Check Point", "HPE", "Huawei Run-rate","Cisco", "Dell Client", "Dell EMC", "Dlink", "EcoFlow", "HP DMFI", "HP DMFI Ghana", "HP IPG", "HP IPG Ghana", "HP PSG", "HP PSG FY26", "HP PSG Ghana", "HP Supplies", "Huawei Enterprise", "Huawei Power", "Huawei SMB", "IBM", "Infinix", "Lenovo", "Lenovo Ghana", "MIGO Nokia", "Microsoft", "Nokia HMD", "Nutanix", "OPPO", "Samsung CE", "Samsung Mobile", "Starlink NG", "Syinix", "TECNO", "Zebra", "Zinox iPower"];
         const _S = ["AT-EVERBRIGHT", "AT-KDS", "BOOKED", "CLEARING", "IN-PRODUCTION", "LICENSE", "MATERIAL-CONSTRAINT", "PRODUCTION-HOLD", "SHIPPED", "TRANSIT-NG"];
         const _M = ["AIR", "FOB", "LICENSE", "LOCAL", "SEA", "TRUCK"];
         const _D = ["FOB", "Ghana", "Nigeria"];
@@ -6311,31 +6446,74 @@ dfj
         const CLOSED = new Set(['DELIVERED', 'E-DELIVERED', 'CANCELLED', 'REJECTED']);
         const isOpen = o => !CLOSED.has(o.status);
         const SL = {
-            'BOOKED': 'Booked/Accepted', 'SHIPPED': 'Shipped', 'TRANSIT-NG': 'Transit → Nigeria',
+            'BOOKED': 'Booked/Accepted', 'SHIPPED': 'Shipped', 'PARTLY-SHIPPED': 'Partly Shipped', 'TRANSIT-NG': 'Transit → Nigeria',
             'TRANSIT-GH': 'Transit → Ghana', 'TRANSIT-OT': 'Transit → Other',
             'TO-FORWARDER': '→ Forwarder', 'AT-KDS': 'Goods at KDS', 'AT-ASHOUR': 'Goods at Ashour',
             'AT-EVERBRIGHT': '→ Everbright', 'CLEARING': 'In Clearing / Port',
             'IN-PRODUCTION': 'In Production', 'PRODUCTION-HOLD': 'Production Hold',
             'MATERIAL-CONSTRAINT': 'Material Constraint', 'LICENSE': 'License / Provision',
-            'MISSING': 'Missing ⚠', 'DELIVERED': 'Delivered ✓',
+            'MISSING': 'Missing ⚠', 'DELIVERED': 'Delivered ✓', 'CANCELLED': 'Cancelled',
         };
         const SC = {
-            'BOOKED': '#86b6ce', 'SHIPPED': '#00c8e8', 'TRANSIT-NG': '#f0a800', 'TRANSIT-GH': '#f06028',
+            'BOOKED': '#86b6ce', 'SHIPPED': '#00c8e8', 'PARTLY-SHIPPED': '#38b0e0', 'TRANSIT-NG': '#f0a800', 'TRANSIT-GH': '#f06028',
             'TRANSIT-OT': '#e83888', 'TO-FORWARDER': '#8858ff', 'AT-KDS': '#00c8a8', 'AT-ASHOUR': '#38b0e0',
             'AT-EVERBRIGHT': '#8858ff', 'CLEARING': '#8858ff', 'IN-PRODUCTION': '#f0a800',
             'PRODUCTION-HOLD': '#f06028', 'MATERIAL-CONSTRAINT': '#f02848', 'LICENSE': '#00c8a8',
-            'MISSING': '#f02848', 'DELIVERED': '#00e080',
+            'MISSING': '#f02848', 'DELIVERED': '#00e080', 'CANCELLED': '#8892a0',
         };
         const ST_OPTS = [
             { s: 'BOOKED', l: 'Booked/Accepted', c: '#86b6ce' }, { s: 'IN-PRODUCTION', l: 'In Production', c: '#f0a800' },
             { s: 'PRODUCTION-HOLD', l: 'Production Hold', c: '#f06028' }, { s: 'MATERIAL-CONSTRAINT', l: 'Material Constraint', c: '#f02848' },
-            { s: 'SHIPPED', l: 'Shipped', c: '#00c8e8' }, { s: 'TO-FORWARDER', l: '→ Forwarder', c: '#8858ff' },
+            { s: 'SHIPPED', l: 'Shipped', c: '#00c8e8' }, { s: 'PARTLY-SHIPPED', l: 'Partly Shipped', c: '#38b0e0' }, { s: 'TO-FORWARDER', l: '→ Forwarder', c: '#8858ff' },
             { s: 'TRANSIT-NG', l: 'Transit Nigeria', c: '#f0a800' }, { s: 'TRANSIT-GH', l: 'Transit Ghana', c: '#f06028' },
             { s: 'TRANSIT-OT', l: 'Transit Other', c: '#e83888' }, { s: 'CLEARING', l: 'In Clearing', c: '#8858ff' },
             { s: 'AT-KDS', l: 'Goods at KDS', c: '#00c8a8' }, { s: 'AT-ASHOUR', l: 'Goods at Ashour', c: '#38b0e0' },
             { s: 'AT-EVERBRIGHT', l: '→ Everbright', c: '#8858ff' }, { s: 'LICENSE', l: 'License', c: '#00c8a8' },
             { s: 'MISSING', l: 'Missing ⚠', c: '#f02848' }, { s: 'DELIVERED', l: 'Delivered ✓', c: '#00e080' },
+            { s: 'CANCELLED', l: 'Cancelled', c: '#8892a0' },
         ];
+        // [SCC] Shared status normalizer — every bulk-upload path must run raw statuses
+        // through this so they land on a canonical ST_OPTS code. A value like "In Production"
+        // left as "IN PRODUCTION" has no SL[] label and no s-<code> CSS class, so it renders
+        // blank/uncoloured on the dashboard — that was the "bulk status not retained" bug.
+        const SCC_VALID_STATUSES = new Set([...ST_OPTS.map(s => s.s), ...CLOSED]);
+        const SCC_STATUS_MAP = {
+            'booked': 'BOOKED', 'accepted': 'BOOKED', 'booked accepted': 'BOOKED',
+            'in production': 'IN-PRODUCTION', 'production': 'IN-PRODUCTION', 'in prod': 'IN-PRODUCTION',
+            'production hold': 'PRODUCTION-HOLD', 'prod hold': 'PRODUCTION-HOLD', 'hold': 'PRODUCTION-HOLD',
+            'material constraint': 'MATERIAL-CONSTRAINT', 'constraint': 'MATERIAL-CONSTRAINT',
+            'shipped': 'SHIPPED',
+            'partly shipped': 'PARTLY-SHIPPED', 'partly-shipped': 'PARTLY-SHIPPED', 'part shipped': 'PARTLY-SHIPPED', 'partial shipment': 'PARTLY-SHIPPED', 'partial': 'PARTLY-SHIPPED', 'partly': 'PARTLY-SHIPPED',
+            'forwarder': 'TO-FORWARDER', 'to forwarder': 'TO-FORWARDER',
+            'transit nigeria': 'TRANSIT-NG', 'transit ng': 'TRANSIT-NG',
+            'transit ghana': 'TRANSIT-GH', 'transit gh': 'TRANSIT-GH',
+            'transit other': 'TRANSIT-OT', 'transit ot': 'TRANSIT-OT',
+            'transit': 'TRANSIT-NG',
+            'clearing': 'CLEARING', 'in clearing': 'CLEARING', 'in clearing port': 'CLEARING', 'port': 'CLEARING',
+            'at kds': 'AT-KDS', 'goods at kds': 'AT-KDS', 'kds': 'AT-KDS',
+            'at ashour': 'AT-ASHOUR', 'goods at ashour': 'AT-ASHOUR', 'ashour': 'AT-ASHOUR',
+            'everbright': 'AT-EVERBRIGHT', 'at everbright': 'AT-EVERBRIGHT',
+            'license': 'LICENSE', 'license provision': 'LICENSE', 'provision': 'LICENSE',
+            'missing': 'MISSING',
+            'delivered': 'DELIVERED',
+            'e delivered': 'E-DELIVERED',
+            'cancelled': 'CANCELLED', 'canceled': 'CANCELLED',
+            'rejected': 'REJECTED'
+        };
+        function sccNormStatus(raw)
+        {
+            if (!raw) return 'BOOKED';
+            const s = String(raw).trim();
+            if (!s) return 'BOOKED';
+            const up = s.toUpperCase().replace(/\s+/g, ' ').trim();
+            if (SCC_VALID_STATUSES.has(up)) return up;                              // exact code: "BOOKED"
+            const hy = up.replace(/\s+/g, '-');
+            if (SCC_VALID_STATUSES.has(hy)) return hy;                              // "IN PRODUCTION" -> "IN-PRODUCTION"
+            const low = s.toLowerCase().replace(/[→✓⚠]/g, '').replace(/[/\\\-]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (SCC_STATUS_MAP[low]) return SCC_STATUS_MAP[low];                    // label/alias: "Booked/Accepted"
+            for (const [k, v] of Object.entries(SCC_STATUS_MAP)) { if (low.includes(k)) return v; }  // partial
+            return 'BOOKED';
+        }
         const DC = { 'Nigeria': '#00c8a8', 'Ghana': '#f06028', 'Liberia': '#e83888', 'Sierra Leone': '#38b0e0', 'FOB': '#00e080', 'FOB (Offshore)': '#00e080', 'Other': '#8858ff' };
         const PALETTE = ['#00c8e8', '#00e080', '#f0a800', '#8858ff', '#f06028', '#f02848', '#00c8a8', '#38b0e0', '#f7c948', '#c27dff', '#50fa7b', '#ff79c6', '#8be9fd', '#ffb86c'];
         const UCOLS = ['#00c8e8', '#00e080', '#f0a800', '#8858ff', '#f06028', '#e83888', '#00c8a8', '#38b0e0'];
@@ -6345,6 +6523,7 @@ dfj
         let _user = '', _sess = new Date(), _elog = [], _delivered = [], _newOrds = [];
         let _curId = null, _qeId = null, _filt = [], _sc = -1, _sd = 1;
         let _lines = [], _bluPend = [], _liCtr = 0;
+        let _lfilt = [], _lsc = -1, _lsd = 1;  // Line Items view: filtered rows, sort col, sort dir
 
         const $ = id => document.getElementById(id);
         const fU = v => { if (!v) return '—'; const n = Number(v); if (n >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B'; if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K'; return '$' + n.toLocaleString(undefined, { maximumFractionDigits: 0 }); };
@@ -6375,7 +6554,7 @@ dfj
 
         function renderAll()
         {
-            renderKPIs(); renderPipeline(); applyF();
+            renderKPIs(); renderPipeline(); applyF(); applyLF();
             renderShipments(); renderLegs(); renderAnalytics(); renderCosts(); renderTicker();
         }
 
@@ -6470,17 +6649,36 @@ dfj
             const status = $('f-status')?.value || '';
             const dest = $('f-dest')?.value || '';
             const type = $('f-type')?.value || '';
+            const etaFrom = $('f-eta-from')?.value || '';
+            const etaTo = $('f-eta-to')?.value || '';
+            // [SCC] ETA range — ISO 'YYYY-MM-DD' strings compare correctly lexicographically.
+            // An ETA passes if it sits within the (optionally open-ended) [from, to] window.
+            const inEtaRange = d => { if (!d) return false; if (etaFrom && d < etaFrom) return false; if (etaTo && d > etaTo) return false; return true; };
+            const etaActive = !!(etaFrom || etaTo);
             _filt = orders.filter(o =>
             {
-                if (!isOpen(o.status)) return false;
-                const hay = [o.brand, o.po, o.enet, o.sop, o.pid, o.partner, o.endUser, o.part, o.desc, o.awb, o.container, o.oemInvNo].join(' ').toLowerCase();
+                // [SCC] If user explicitly filters for a status (open OR closed), show it.
+                // Otherwise default to outstanding only.
+                if (!status && !isOpen(o.status)) return false;
+                // [SCC] Include every line item's part no. + description so a part-number search
+                // returns any order that has one or more matching line items, not just the header.
+                const lineHay = Array.isArray(o.lines) ? o.lines.map(l => `${l.part || ''} ${l.desc || ''}`).join(' ') : '';
+                const hay = [o.brand, o.po, o.enet, o.sop, o.pid, o.partner, o.endUser, o.part, o.desc, o.awb, o.container, o.oemInvNo, lineHay].join(' ').toLowerCase();
                 return (!txt || hay.includes(txt)) && (!brand || o.brand === brand)
-                    && (!status || o.status === status)
+                    // [SCC] Match on the order's own status OR any of its line items' statuses
+                    && (!status || o.status === status || (Array.isArray(o.lines) && o.lines.some(l => l.status === status)))
                     && (!dest || o.dest === dest || o.dest === dest.replace(' (Offshore)', ''))
-                    && (!type || o.type === type);
+                    && (!type || o.type === type)
+                    // [SCC] ETA range — match the order's own targetETA OR any line item's eta
+                    && (!etaActive || inEtaRange(o.targetETA) || (Array.isArray(o.lines) && o.lines.some(l => inEtaRange(l.eta))));
             });
             renderTable(_filt);
-            if ($('rc')) $('rc').textContent = _filt.length + ' of ' + orders.filter(isOpen).length;
+            if ($('rc'))
+            {
+                // [SCC] Denominator matches what we're filtering over: all orders if a closed status is selected, otherwise just open
+                const denom = status ? orders.length : orders.filter(isOpen).length;
+                $('rc').textContent = _filt.length + ' of ' + denom;
+            }
         }
 
         function renderTable(data)
@@ -6511,9 +6709,9 @@ dfj
       <td style="color:var(--mt)">${o.endUser || '—'}</td>
       <td style="color:${dc};font-size:9px">${o.dest || '—'}</td>
       <td style="color:var(--acc);font-size:9.5px">${hasL ? `<span style="color:var(--pu)">${o.lines.length}× items</span>` : o.part || '—'}</td>
-      <td style="max-width:180px">${o.desc || '—'}</td>
-      <td class="r">${(o.qty || 0).toLocaleString()}</td>
-      <td class="r" style="color:var(--hd);font-weight:600">${fU(o.totalUSD)}</td>
+      <td style="max-width:180px">${(o.lines && o.lines.length) ? `<button onclick="openDetail('${o.id}');event.stopPropagation()" style="background:transparent;border:1px solid rgba(0,200,232,.3);color:var(--acc);padding:1px 8px;font-size:8.5px;font-family:var(--fm);cursor:pointer;border-radius:var(--r);letter-spacing:.4px" title="View line items">${o.lines.length} line${o.lines.length === 1 ? '' : 's'} →</button>` : '<span style="color:var(--mt)">—</span>'}</td>
+      <td class="r">${(o.lines && o.lines.length ? o.lines.reduce((s, l) => s + (Number(l.qty) || 0), 0) : (o.qty || 0)).toLocaleString()}</td>
+      <td class="r" style="color:var(--hd);font-weight:600">${o.totalUSD ? '$' + Number(o.totalUSD).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
       <td><span class="cur-pill c${o.currency || 'USD'}">${o.currency || 'USD'}</span></td>
       <td><span class="badge" style="background:rgba(0,200,232,.06);color:var(--acc);border:1px solid rgba(0,200,232,.18);font-size:7.5px">${o.mot || 'AIR'}</span></td>
       <td style="${eta ? 'color:var(--wrn)' : 'color:var(--mt)'}">${eta || '—'} ${odTxt}</td>
@@ -6814,6 +7012,8 @@ dfj
     <div class="li-row" id="lir-${l.id}">
       <input id="lip-${l.id}" class="fi" value="${esc(l.part || '')}" placeholder="P/N" oninput="liSet('${l.id}','part',this.value)" style="font-size:9px;padding:4px 7px">
       <input id="lid-${l.id}" class="fi" value="${esc(l.desc || '')}" placeholder="Description" oninput="liSet('${l.id}','desc',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" value="${esc(l.config || '')}" placeholder="Config/Spec" oninput="liSet('${l.id}','config',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" value="${esc(l.colour || '')}" placeholder="Colour" oninput="liSet('${l.id}','colour',this.value)" style="font-size:9px;padding:4px 7px">
       <input class="fi" type="number" value="${l.qty || ''}" placeholder="0" oninput="liCalc('${l.id}','qty',this.value)" style="font-size:9px;padding:4px 7px;text-align:right">
       <input class="fi" type="number" value="${l.unit || ''}" placeholder="0.00" step="0.01" oninput="liCalc('${l.id}','unit',this.value)" style="font-size:9px;padding:4px 7px;text-align:right">
       <input id="lit-${l.id}" class="fi" value="${l.total ? l.total.toLocaleString(undefined, { maximumFractionDigits: 2 }) : ''}" readonly style="font-size:9px;padding:4px 7px;text-align:right;color:var(--hd);font-weight:600">
@@ -6822,6 +7022,9 @@ dfj
       </select>
       <input class="fi" value="${esc(l.awb || '')}" placeholder="AWB" oninput="liSet('${l.id}','awb',this.value)" style="font-size:9px;padding:4px 7px">
       <input class="fi" value="${esc(l.container || '')}" placeholder="Container" oninput="liSet('${l.id}','container',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" value="${esc(l.oem_inv_no || '')}" placeholder="OEM Inv No" oninput="liSet('${l.id}','oem_inv_no',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" type="date" value="${esc(l.oem_inv_date || '')}" oninput="liSet('${l.id}','oem_inv_date',this.value)" onchange="liSet('${l.id}','oem_inv_date',this.value)" style="font-size:9px;padding:4px 7px">
+      <input class="fi" type="date" value="${esc(l.eta || '')}" oninput="liSet('${l.id}','eta',this.value)" onchange="liSet('${l.id}','eta',this.value)" style="font-size:9px;padding:4px 7px" title="Line item target ETA">
       <button class="li-del" onclick="liDel('${l.id}')" type="button">×</button>
     </div>`).join('');
         }
@@ -6840,7 +7043,7 @@ dfj
             const l = {
                 id: 'L' + (_liCtr++), part: part || '', desc: desc || '', config: config || '', colour: colour || '',
                 qty: +qty || 0, unit: +unit || 0, total: +total || (+qty * (+unit || 0)) || 0,
-                status: status || 'BOOKED', awb: awb || '', container: container || ''
+                status: status || 'BOOKED', awb: awb || '', container: container || '', eta: ''
             };
             _lines.push(l); renderLI();
             setTimeout(() => { const el = document.getElementById('lip-' + l.id); if (el) el.focus(); }, 50);
@@ -6848,7 +7051,7 @@ dfj
         function initLI(o)
         {
             if (o.lines && o.lines.length) _lines = o.lines.map(l => ({ ...l, id: 'L' + (_liCtr++) }));
-            else if (o.part || o.desc) _lines = [{ id: 'L' + (_liCtr++), part: o.part || '', desc: o.desc || '', config: o.config || '', colour: o.colour || '', qty: o.qty || 0, unit: o.unit || 0, total: o.total || 0, status: o.status || 'BOOKED', awb: o.awb || '', container: o.container || '' }];
+            else if (o.part || o.desc) _lines = [{ id: 'L' + (_liCtr++), part: o.part || '', desc: o.desc || '', config: o.config || '', colour: o.colour || '', qty: o.qty || 0, unit: o.unit || 0, total: o.total || 0, status: o.status || 'BOOKED', awb: o.awb || '', container: o.container || '', eta: o.targetETA || '' }];
             else _lines = [];
         }
 
@@ -6871,7 +7074,7 @@ dfj
                     const hdrs = rows[hi].map(h => String(h || '').toLowerCase().replace(/[^a-z0-9 /]/g, '').trim());
                     const data = rows.slice(hi + 1).filter(r => r.some(v => String(v || '').trim()));
                     const fm = als => { let idx = -1; als.forEach(a => { if (idx < 0) { const i = hdrs.findIndex(h => h === a || h.includes(a)); if (i >= 0) idx = i; } }); return idx; };
-                    const ci = { part: fm(['part no', 'part number', 'part', 'sku', 'p/n']), desc: fm(['description', 'desc', 'product']), config: fm(['config']), colour: fm(['colour', 'color']), qty: fm(['qty', 'quantity', 'units']), unit: fm(['unit price', 'unit', 'price']), total: fm(['total', 'line total']), awb: fm(['awb', 'airway']), container: fm(['container', 'cntr']), status: fm(['status']) };
+                    const ci = { part: fm(['part no', 'part number', 'part', 'sku', 'p/n']), desc: fm(['description', 'desc', 'product']), config: fm(['config']), colour: fm(['colour', 'color']), qty: fm(['qty', 'quantity', 'units']), unit: fm(['unit price', 'unit', 'price']), total: fm(['total', 'line total']), awb: fm(['awb', 'airway']), container: fm(['container', 'cntr']), status: fm(['status']), oem_inv_no: fm(['oem inv no', 'oem invoice no', 'oem invoice number', 'oem inv', 'oem invoice']), oem_inv_date: fm(['oem inv date', 'oem invoice date']), eta: fm(['target eta', 'line eta', 'eta']) };
                     const gl = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx] || '').trim() : '';
                     const sn = v => parseFloat(String(v || '').replace(/[^0-9.\-]/g, '')) || 0;
                     const SM = { 'booked': 'BOOKED', 'shipped': 'SHIPPED', 'transit': 'TRANSIT-NG', 'at kds': 'AT-KDS', 'clearing': 'CLEARING', 'delivered': 'DELIVERED' };
@@ -6882,11 +7085,11 @@ dfj
                         const qty = sn(gl(row, ci.qty)), unit = sn(gl(row, ci.unit));
                         let total = sn(gl(row, ci.total)); if (!total && qty && unit) total = qty * unit;
                         const rs = gl(row, ci.status).toLowerCase(); let status = 'BOOKED'; for (const [k, v] of Object.entries(SM)) { if (rs.includes(k)) { status = v; break; } }
-                        _bluPend.push({ id: 'L' + (_liCtr++), part, desc, config: gl(row, ci.config), colour: gl(row, ci.colour), qty, unit, total, status, awb: gl(row, ci.awb), container: gl(row, ci.container) });
+                        _bluPend.push({ id: 'L' + (_liCtr++), part, desc, config: gl(row, ci.config), colour: gl(row, ci.colour), qty, unit, total, status, awb: gl(row, ci.awb), container: gl(row, ci.container), oem_inv_no: gl(row, ci.oem_inv_no), oem_inv_date: gl(row, ci.oem_inv_date), eta: gl(row, ci.eta) });
                     });
                     if (!_bluPend.length) { toast('No valid rows found', 'var(--red)'); return; }
-                    $('blu-th').innerHTML = ['Part No.', 'Description', 'Qty', 'Unit $', 'Total $', 'AWB', 'Container'].map(h => `<th>${h}</th>`).join('');
-                    $('blu-bd').innerHTML = _bluPend.map(l => `<tr><td style="color:var(--acc)">${l.part || '—'}</td><td>${l.desc || '—'}</td><td class="r">${l.qty}</td><td class="r">${l.unit ? '$' + l.unit : '—'}</td><td class="r" style="color:var(--hd);font-weight:600">${l.total ? '$' + l.total.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td><td style="color:var(--pu)">${l.awb || '—'}</td><td>${l.container || '—'}</td></tr>`).join('');
+                    $('blu-th').innerHTML = ['Part No.', 'Description', 'Qty', 'Unit $', 'Total $', 'AWB', 'Container', 'OEM Inv No', 'OEM Inv Date'].map(h => `<th>${h}</th>`).join('');
+                    $('blu-bd').innerHTML = _bluPend.map(l => `<tr><td style="color:var(--acc)">${l.part || '—'}</td><td>${l.desc || '—'}</td><td class="r">${l.qty}</td><td class="r">${l.unit ? '$' + l.unit : '—'}</td><td class="r" style="color:var(--hd);font-weight:600">${l.total ? '$' + l.total.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td><td style="color:var(--pu)">${l.awb || '—'}</td><td>${l.container || '—'}</td><td style="color:var(--tl)">${l.oem_inv_no || '—'}</td><td>${l.oem_inv_date || '—'}</td></tr>`).join('');
                     $('blu-info').textContent = `✓ ${_bluPend.length} lines · Total: $${_bluPend.reduce((s, l) => s + l.total, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
                     $('blu-imp-btn').textContent = `IMPORT ${_bluPend.length} LINES`;
                     $('blu-preview').style.display = 'block';
@@ -6897,12 +7100,25 @@ dfj
         function confirmBLU() { _lines = [..._lines, ..._bluPend]; renderLI(); clMod('blu-ov'); toast(`✓ ${_bluPend.length} lines added`, 'var(--grn)'); _bluPend = []; }
         function dlLiTemplate()
         {
-            if (typeof XLSX === 'undefined') { toast('Loading XLSX…', 'var(--wrn)'); return; }
-            const h = ['Part Number', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price $', 'Total $', 'AWB Number', 'Container Number', 'Status'];
-            const ex = [['C9300-48U-E', 'Cisco Catalyst 9300 48-Port PoE Switch', '2×10G', '—', '10', '8500', '85000', '574-001', '', 'BOOKED'], ['C9300-NW-A', 'Network Advantage License', '', '', '10', '1200', '12000', '', '', 'BOOKED']];
-            const ws = XLSX.utils.aoa_to_sheet([h, ...ex]); ws['!cols'] = h.map(() => ({ wch: 22 }));
-            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Lines');
-            XLSX.writeFile(wb, 'ChainView_LineItems_Template.xlsx');
+            const h = ['Part Number', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price $', 'Total $', 'AWB Number', 'Container Number', 'Status', 'OEM Inv No', 'OEM Inv Date', 'Target ETA'];
+            const ex = [
+                ['C9300-48U-E', 'Cisco Catalyst 9300 48-Port PoE Switch', '2×10G', '—', '10', '8500', '85000', '574-001', '', 'BOOKED', 'INV-CSC-2025-042', '2025-08-22', '2025-09-20'],
+                ['C9300-NW-A', 'Network Advantage License', '', '', '10', '1200', '12000', '', '', 'BOOKED', 'INV-CSC-2025-042', '2025-08-22', '2025-09-20']
+            ];
+            if (typeof sccDownloadCSV === 'function')
+            {
+                // Use the reliable CSV download helper from the persistence layer
+                sccDownloadCSV('ChainView_LineItems_Template.csv', h, ex);
+            } else if (typeof XLSX !== 'undefined')
+            {
+                // XLSX fallback (kept for compatibility)
+                const ws = XLSX.utils.aoa_to_sheet([h, ...ex]); ws['!cols'] = h.map(() => ({ wch: 22 }));
+                const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Lines');
+                XLSX.writeFile(wb, 'ChainView_LineItems_Template.xlsx');
+            } else
+            {
+                toast('Cannot download template — XLSX library not loaded', 'var(--red)');
+            }
         }
 
         //============================================================
@@ -7129,20 +7345,20 @@ dfj
         function rtDl() { const ta = $('exp-ta'), fn = $('exp-fn').textContent || 'export.csv'; try { const b = new Blob([ta.value], { type: 'text/csv;charset=utf-8;' }); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = fn; a.click(); URL.revokeObjectURL(u); toast('Download started', 'var(--grn)'); } catch (e) { toast('Use Copy All Data instead', 'var(--wrn)'); } }
         function showExpMenu() { $('exp-menu-ov').classList.add('open'); }
 
-        const HDR = ['Brand', 'PO Reference', 'ENET/SO', 'SOP', 'Order Date', 'Type', 'Status', 'Partner', 'End User', 'Destination', 'Part No', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price', 'Total (Local)', 'Currency', 'FX Rate', 'Total USD', 'OEM Inv No', 'OEM Inv Date', 'Target ETA', 'Planned Ship', 'Actual Ship', 'Shipper ETA', 'Actual Arrival', 'AWB Number', 'Container', 'MOT', 'Ship Line', 'Actual Delivery', 'Delivered By', 'WH Receipt Date', 'Remark'];
-        function rowOf(o) { return [o.brand, o.po, o.enet || '', o.sop || '', o.orderDate, o.type, o.status, o.partner, o.endUser, o.dest, o.part, o.desc, o.config || '', o.colour || '', o.qty, o.unit || '', o.total, o.currency || 'USD', o.fxRate || 1, o.totalUSD || o.total, o.oemInvNo || '', o.oemInvDate || '', o.targetETA || '', o.plannedShip || '', o.actualShip || '', o.shipperETA || '', o.actualArr || '', o.awb || '', o.container || '', o.mot || 'AIR', o.shipLine || '', o.actualDelivery || '', o.deliveredBy || '', o.whDate || '', o.remark || '']; }
+        const HDR = ['Brand', 'PO Reference', 'ENET/SO', 'SOP', 'Order Date', 'Type', 'Status', 'Line Status', 'Partner', 'End User', 'Destination', 'Part No', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price', 'Total (Local)', 'Currency', 'FX Rate', 'Total USD', 'OEM Inv No', 'OEM Inv Date', 'Target ETA', 'Planned Ship', 'Actual Ship', 'Shipper ETA', 'Actual Arrival', 'AWB Number', 'Container', 'MOT', 'Ship Line', 'Actual Delivery', 'Delivered By', 'WH Receipt Date', 'Remark'];
+        function rowOf(o) { const lineStatus = (o.lines && o.lines.length === 1) ? (o.lines[0].status || o.status) : o.status; return [o.brand, o.po, o.enet || '', o.sop || '', o.orderDate, o.type, o.status, lineStatus, o.partner, o.endUser, o.dest, o.part, o.desc, o.config || '', o.colour || '', o.qty, o.unit || '', o.total, o.currency || 'USD', o.fxRate || 1, o.totalUSD || o.total, o.oemInvNo || '', o.oemInvDate || '', o.targetETA || '', o.plannedShip || '', o.actualShip || '', o.shipperETA || '', o.actualArr || '', o.awb || '', o.container || '', o.mot || 'AIR', o.shipLine || '', o.actualDelivery || '', o.deliveredBy || '', o.whDate || '', o.remark || '']; }
         function expandO(oList)
         {
             return oList.flatMap(o =>
             {
                 if (!o.lines || o.lines.length <= 1) return [rowOf(o)];
-                return o.lines.map((l, i) => { const r = [...rowOf(o)]; r[10] = l.part || o.part; r[11] = l.desc || o.desc; r[12] = l.config || ''; r[13] = l.colour || ''; r[14] = l.qty; r[15] = l.unit || ''; r[16] = l.total; r[17] = 'USD'; r[18] = 1; r[19] = l.total; r[26] = l.awb || o.awb || ''; r[27] = l.container || o.container || ''; if (i > 0) { r[1] += '(line ' + (i + 1) + ')'; r[4] = ''; } return r; });
+                return o.lines.map((l, i) => { const r = [...rowOf(o)]; r[7] = l.status || o.status; r[11] = l.part || o.part; r[12] = l.desc || o.desc; r[13] = l.config || ''; r[14] = l.colour || ''; r[15] = l.qty; r[16] = l.unit || ''; r[17] = l.total; r[18] = 'USD'; r[19] = 1; r[20] = l.total; r[28] = l.awb || o.awb || ''; r[29] = l.container || o.container || ''; if (i > 0) { r[1] += '(line ' + (i + 1) + ')'; r[4] = ''; } return r; });
             });
         }
         function expOutstanding()
         {
             const today = new Date(); const data = orders.filter(isOpen);
-            const rows = expandO(data).map(r => { const eta = r[22] || ''; const days = eta ? Math.floor((today - new Date(eta)) / 86400000) : ''; return [...r, days]; });
+            const rows = expandO(data).map(r => { const eta = r[23] || ''; const days = eta ? Math.floor((today - new Date(eta)) / 86400000) : ''; return [...r, days]; });
             doExp(`ChainView_Outstanding_${new Date().toISOString().slice(0, 10)}.csv`, bCSV([...HDR, 'Days Overdue'], rows));
         }
         function expFiltered() { doExp(`ChainView_Filtered_${new Date().toISOString().slice(0, 10)}.csv`, bCSV(HDR, expandO(_filt.length ? _filt : orders.filter(isOpen)))); }
@@ -7150,9 +7366,110 @@ dfj
         function expLog() { if (!_elog.length) { toast('No edits this session', 'var(--mt)'); return; } doExp(`ChainView_EditLog_${new Date().toISOString().slice(0, 10)}.csv`, bCSV(['Timestamp', 'User', 'PO Reference', 'Changes', 'Note'], _elog.map(e => [e.td, e.user, e.po, e.chg, e.note]))); }
 
         //============================================================
+        // LINE ITEM RECORDS  (flatten every order's lines into a searchable / filterable / exportable view)
+        //============================================================
+        const LI_COLS = ['PO REFERENCE', 'BRAND', 'PARTNER', 'END USER', 'DEST', 'PART NO', 'DESCRIPTION', 'QTY', 'UNIT $', 'TOTAL $', 'STATUS', 'AWB', 'CONTAINER', 'OEM INV NO', '⭐ ETA'];
+        const LI_CKEYS = ['po', 'brand', 'partner', 'endUser', 'dest', 'part', 'desc', 'qty', 'unit', 'total', 'status', 'awb', 'container', 'oem_inv_no', 'eta'];
+        const LI_HDR = ['PO Reference', 'Brand', 'Partner', 'End User', 'Destination', 'Order Status', 'Part No', 'Description', 'Config', 'Colour', 'Qty', 'Unit Price', 'Line Total', 'Line Status', 'AWB', 'Container', 'OEM Inv No', 'OEM Inv Date', 'ETA'];
+
+        // Flatten orders → one row per line item, each carrying its parent order's context.
+        // Orders with no explicit lines but with order-level part/desc emit a single synthesized row.
+        function flattenLines(list)
+        {
+            const out = [];
+            (list || []).forEach(o =>
+            {
+                const ctx = { oid: o.id, po: o.po || '', brand: o.brand || '', partner: o.partner || '', endUser: o.endUser || '', dest: o.dest || '', orderStatus: o.status || '' };
+                if (Array.isArray(o.lines) && o.lines.length)
+                {
+                    o.lines.forEach(l => out.push({
+                        ...ctx, part: l.part || '', desc: l.desc || '', config: l.config || '', colour: l.colour || '',
+                        qty: Number(l.qty) || 0, unit: Number(l.unit) || 0, total: Number(l.total) || 0,
+                        status: l.status || o.status || 'BOOKED', awb: l.awb || o.awb || '', container: l.container || o.container || '',
+                        oem_inv_no: l.oem_inv_no || '', oem_inv_date: l.oem_inv_date || '', eta: l.eta || o.targetETA || ''
+                    }));
+                } else if (o.part || o.desc)
+                {
+                    out.push({
+                        ...ctx, part: o.part || '', desc: o.desc || '', config: o.config || '', colour: o.colour || '',
+                        qty: Number(o.qty) || 0, unit: Number(o.unit) || 0, total: Number(o.total) || 0,
+                        status: o.status || 'BOOKED', awb: o.awb || '', container: o.container || '',
+                        oem_inv_no: o.oemInvNo || '', oem_inv_date: o.oemInvDate || '', eta: o.targetETA || ''
+                    });
+                }
+            });
+            return out;
+        }
+
+        function applyLF()
+        {
+            const txt = ($('li-srch')?.value || '').toLowerCase();
+            const status = $('li-f-status')?.value || '';
+            const etaFrom = $('li-f-eta-from')?.value || '';
+            const etaTo = $('li-f-eta-to')?.value || '';
+            const inEta = d => { if (!d) return false; if (etaFrom && d < etaFrom) return false; if (etaTo && d > etaTo) return false; return true; };
+            const etaActive = !!(etaFrom || etaTo);
+            const all = flattenLines(orders);
+            _lfilt = all.filter(r =>
+            {
+                // Default to outstanding lines only; selecting a status reveals that status (open or closed) — mirrors the Orders view
+                if (!status && CLOSED.has(r.status)) return false;
+                const hay = [r.po, r.brand, r.partner, r.endUser, r.dest, r.part, r.desc].join(' ').toLowerCase();
+                return (!txt || hay.includes(txt))
+                    && (!status || r.status === status)
+                    && (!etaActive || inEta(r.eta));
+            });
+            if (_lsc >= 0)
+            {
+                const k = LI_CKEYS[_lsc];
+                if (k) _lfilt.sort((a, b) => { const av = a[k] || '', bv = b[k] || ''; return typeof av === 'number' ? (av - bv) * _lsd : String(av).localeCompare(String(bv)) * _lsd; });
+            }
+            renderLITable(_lfilt);
+            if ($('li-rc'))
+            {
+                const denom = status ? all.length : all.filter(r => !CLOSED.has(r.status)).length;
+                $('li-rc').textContent = _lfilt.length + ' of ' + denom + ' line items';
+            }
+        }
+
+        function renderLITable(rows)
+        {
+            const th = $('lt-thead'), tb = $('lt-tbody'); if (!th || !tb) return;
+            th.innerHTML = LI_COLS.map((c, i) => `<th onclick="srtLI(${i})" class="${i === _lsc ? 'srt' : ''}">${c}<span style="opacity:.4;font-size:7px;margin-left:2px">${i === _lsc ? (_lsd === 1 ? '↑' : '↓') : '⇅'}</span></th>`).join('');
+            if (!rows.length) { tb.innerHTML = `<tr><td colspan="${LI_COLS.length}" style="padding:24px;text-align:center;color:var(--mt);font-family:var(--fm);font-size:9px">No line items match the current filters</td></tr>`; return; }
+            tb.innerHTML = rows.map(r => `<tr onclick="openDetail('${r.oid}')" style="cursor:pointer" title="Open parent order">
+      <td style="color:var(--acc);font-weight:600">${esc(r.po) || '—'}</td>
+      <td><span class="brand-pill">${esc(r.brand)}</span></td>
+      <td>${esc(r.partner) || '—'}</td>
+      <td style="color:var(--mt)">${esc(r.endUser) || '—'}</td>
+      <td style="color:${DC[r.dest] || 'var(--tx2)'};font-size:9px">${esc(r.dest) || '—'}</td>
+      <td style="color:var(--acc);font-size:9.5px">${esc(r.part) || '—'}</td>
+      <td style="max-width:240px">${esc(r.desc) || '—'}</td>
+      <td class="r">${(r.qty || 0).toLocaleString()}</td>
+      <td class="r" style="color:var(--tx2)">${r.unit ? '$' + Number(r.unit).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}</td>
+      <td class="r" style="color:var(--hd);font-weight:600">${r.total ? '$' + Number(r.total).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
+      <td>${sb(r.status)}</td>
+      <td style="color:var(--pu);font-size:9px">${esc(r.awb) || '—'}</td>
+      <td style="color:var(--tx2);font-size:9px">${esc(r.container) || '—'}</td>
+      <td style="color:var(--tl);font-size:9px">${esc(r.oem_inv_no) || '—'}</td>
+      <td style="${r.eta ? 'color:var(--wrn)' : 'color:var(--mt)'}">${esc(r.eta) || '—'}</td>
+    </tr>`).join('');
+        }
+
+        function srtLI(col) { if (_lsc === col) _lsd *= -1; else { _lsc = col; _lsd = 1; } applyLF(); }
+
+        function liRowOf(r) { return [r.po, r.brand, r.partner, r.endUser, r.dest, r.orderStatus, r.part, r.desc, r.config, r.colour, r.qty, r.unit, r.total, r.status, r.awb, r.container, r.oem_inv_no, r.oem_inv_date, r.eta]; }
+        function expLineItems()
+        {
+            const rows = (_lfilt && _lfilt.length) ? _lfilt : flattenLines(orders);
+            if (!rows.length) { toast('No line items to export', 'var(--mt)'); return; }
+            doExp(`ChainView_LineItems_${new Date().toISOString().slice(0, 10)}.csv`, bCSV(LI_HDR, rows.map(liRowOf)));
+        }
+
+        //============================================================
         // NAV / MODAL HELPERS
         //============================================================
-        function navTo(id, btn) { document.querySelectorAll('.tn').forEach(b => b.classList.remove('a')); if (btn) btn.classList.add('a'); tabTo(id, document.querySelectorAll('.tab')[['t-orders', 't-ship', 't-legs', 't-an', 't-costs'].indexOf(id)]); }
+        function navTo(id, btn) { document.querySelectorAll('.tn').forEach(b => b.classList.remove('a')); if (btn) btn.classList.add('a'); tabTo(id, document.querySelectorAll('.tab')[['t-orders', 't-li', 't-ship', 't-legs', 't-an', 't-costs'].indexOf(id)]); }
         function tabTo(id, btn) { document.querySelectorAll('.tab').forEach(b => b.classList.remove('a')); document.querySelectorAll('.pane').forEach(p => p.classList.remove('a')); if (btn) btn.classList.add('a'); $(id)?.classList.add('a'); }
         function mTab(id, btn) { document.querySelectorAll('.mtab').forEach(b => b.classList.remove('a')); document.querySelectorAll('.mpane').forEach(p => p.classList.remove('a')); if (btn) btn.classList.add('a'); $(id)?.classList.add('a'); }
         function clMod(id) { $(id)?.classList.remove('open'); }
@@ -7224,6 +7541,13 @@ dfj
                 updated_by: o._updatedBy || '',
                 updated_at: o._updatedAt || ''
             };
+            // [SCC] shipLine ("Shipping Line / Carrier") and shippingLine ("Shipping Line")
+            // both map to ship_line. Resolve here (prefer non-empty) so a carrier typed in
+            // EITHER field is persisted; pre-seeding out.ship_line makes the loop below skip both.
+            if (o.shipLine !== undefined || o.shippingLine !== undefined)
+            {
+                out.ship_line = o.shipLine || o.shippingLine || '';
+            }
             for (const [appKey, sheetKey] of Object.entries(SCC_F_MAP))
             {
                 if (o[appKey] !== undefined && out[sheetKey] === undefined)
@@ -7251,6 +7575,10 @@ dfj
             o._updatedAt = s.updated_at || '';
             // Ensure totalUSD getter works — use stored value
             if (!o.totalUSD && s.total_usd) o.totalUSD = +s.total_usd || 0;
+            // [SCC] ship_line reverse-maps to only one of shipLine/shippingLine (last one wins in
+            // SCC_F_RMAP), so the carrier value used to land on shippingLine and vanish from the
+            // "Shipping Line / Carrier" field on refresh. Mirror it onto both keys.
+            if (s.ship_line !== undefined) { o.shipLine = s.ship_line; o.shippingLine = s.ship_line; }
             return o;
         }
 
@@ -7269,7 +7597,10 @@ dfj
                 total: +l.total || 0,
                 status: l.status || 'BOOKED',
                 awb: l.awb || '',
-                container: l.container || ''
+                container: l.container || '',
+                oem_inv_no: l.oem_inv_no || '',
+                oem_inv_date: l.oem_inv_date || '',
+                eta: l.eta || ''
             };
         }
 
@@ -7286,7 +7617,10 @@ dfj
                 total: +s.total || 0,
                 status: s.status || 'BOOKED',
                 awb: s.awb || '',
-                container: s.container || ''
+                container: s.container || '',
+                oem_inv_no: s.oem_inv_no || '',
+                oem_inv_date: s.oem_inv_date || '',
+                eta: s.eta || ''
             };
         }
 
@@ -7303,7 +7637,7 @@ dfj
       <div class="scc-loader-inner">
         <div class="scc-loader-spin"></div>
         <div class="scc-loader-text" id="scc-loader-text">Loading…</div>
-        <div class="scc-loader-sub" id="scc-loader-sub">Fetching data, please wait.</div>
+        <div class="scc-loader-sub" id="scc-loader-sub">Fetching orders from Google Sheets</div>
       </div>`;
                 document.body.appendChild(el);
                 this.el = el;
@@ -7367,7 +7701,7 @@ dfj
             if (!silent)
             {
                 SCC_SYNC.set('sync', 'Loading…');
-                SCC_LOADER.show('Loading…', 'Fetching data, please wait.');
+                SCC_LOADER.show('Loading…', 'Fetching orders from Google Sheets');
             }
             try
             {
@@ -7387,6 +7721,26 @@ dfj
                     o.lines = linesById[o.id] || [];
                     return o;
                 });
+
+                // [SCC] Sort by date added DESC (newest first), fallback to orderDate DESC
+                // Converts strings to millisecond timestamps for precise comparison.
+                // Newer (higher ms) values come first. Records with no date sink to the bottom.
+                const _toMs = v =>
+                {
+                    if (!v) return 0;
+                    const s = String(v).trim();
+                    if (!s) return 0;
+                    // Try parsing as a date/timestamp
+                    const t = Date.parse(s);
+                    return isNaN(t) ? 0 : t;
+                };
+                newOrders.sort((a, b) =>
+                {
+                    const aMs = _toMs(a.addedAt) || _toMs(a.orderDate);
+                    const bMs = _toMs(b.addedAt) || _toMs(b.orderDate);
+                    return bMs - aMs;  // DESC: newest first
+                });
+
                 // Replace global orders array
                 if (typeof orders !== 'undefined')
                 {
@@ -7577,9 +7931,143 @@ dfj
             if (btn) btn.textContent = next === 'dark' ? '☀' : '☾';
         }
 
-        // ─── Wrap the existing functions (saveOrder, saveQE, doLogin, etc.) ─────────
+        // ─── View mode controls ────────────────────────────────────────────────────
+        function sccInjectViewModeControls()
+        {
+            if (document.getElementById('scc-vm-banner')) return;
+
+            // 1. Inject "VIEW MODE" banner + EDIT button into the modal header area
+            const modHeader = document.querySelector('#mod-ov .mh');
+            if (modHeader)
+            {
+                const banner = document.createElement('div');
+                banner.id = 'scc-vm-banner';
+                banner.style.cssText = 'display:none;align-items:center;gap:10px;padding:6px 12px;background:rgba(0,200,232,.08);border:1px solid rgba(0,200,232,.25);border-radius:var(--r);font-family:var(--fm);font-size:9px;letter-spacing:1px;color:var(--acc);text-transform:uppercase;';
+                banner.innerHTML = '<span>👁 VIEW MODE</span><span style="color:var(--tx2);text-transform:none;letter-spacing:0;font-size:8.5px">Click EDIT to modify</span>';
+                modHeader.appendChild(banner);
+            }
+
+            // 2. Inject an EDIT button next to the SAVE button in the footer
+            const saveBtn = document.querySelector('#mod-ov button.btn.pri[onclick*="saveOrder"]');
+            if (saveBtn)
+            {
+                const editBtn = document.createElement('button');
+                editBtn.id = 'scc-vm-edit-btn';
+                editBtn.className = 'btn pri';
+                editBtn.style.display = 'none';
+                editBtn.innerHTML = '✎ EDIT';
+                editBtn.onclick = (e) => { e.preventDefault(); sccSetViewMode(false); };
+                saveBtn.parentNode.insertBefore(editBtn, saveBtn);
+            }
+
+            // Adjust the Cancel button text dynamically too
+        }
+
+        function sccSetViewMode(isView)
+        {
+            const modOv = document.getElementById('mod-ov');
+            if (!modOv) return;
+
+            const banner = document.getElementById('scc-vm-banner');
+            const editBtn = document.getElementById('scc-vm-edit-btn');
+            const saveBtn = modOv.querySelector('button.btn.pri[onclick*="saveOrder"]');
+            const cancelBtn = modOv.querySelector('button.btn[onclick*="clMod"]');
+
+            // Toggle banner
+            if (banner) banner.style.display = isView ? 'inline-flex' : 'none';
+            if (editBtn) editBtn.style.display = isView ? 'inline-flex' : 'none';
+            if (saveBtn) saveBtn.style.display = isView ? 'none' : 'inline-flex';
+            if (cancelBtn) cancelBtn.textContent = isView ? 'CLOSE' : 'CANCEL';
+
+            // Lock/unlock all form inputs in the modal body
+            const inputs = modOv.querySelectorAll('.mpane input, .mpane select, .mpane textarea, .li-row input, .li-row select, .li-row button.li-del');
+            inputs.forEach(el =>
+            {
+                if (el.tagName === 'BUTTON')
+                {
+                    // line-item delete buttons
+                    el.style.display = isView ? 'none' : '';
+                    el.disabled = isView;
+                } else if (el.tagName === 'SELECT')
+                {
+                    el.disabled = isView;
+                    el.style.cursor = isView ? 'default' : '';
+                    el.style.opacity = isView ? '0.92' : '';
+                } else
+                {
+                    el.readOnly = isView;
+                    if (el.type !== 'number' && el.type !== 'text' && el.type !== 'date' && el.type !== '')
+                    {
+                        // unknown input type, leave alone
+                    }
+                    el.style.cursor = isView ? 'default' : '';
+                    el.style.opacity = isView ? '0.92' : '';
+                }
+            });
+
+            // Hide "+ Add line" button and bulk-upload-lines button in view mode
+            const addLineBtns = modOv.querySelectorAll('button[onclick*="addLI("], button[onclick*="openBulkLI"]');
+            addLineBtns.forEach(b => { b.style.display = isView ? 'none' : ''; });
+
+            // Note: Edit log section remains visible (read-only by nature)
+        }
+
+        // ─── Wrap the existing functions (saveOrder, saveQE, logEdit, etc.) ─────────
         function sccPatchMutations()
         {
+            // Patch logEdit so every in-memory log entry also writes to the EditLog sheet tab
+            if (typeof logEdit === 'function' && !window.__scc_patched_logEdit)
+            {
+                window.__scc_patched_logEdit = true;
+                const origLogEdit = logEdit;
+                window.logEdit = function (id, po, chg, note)
+                {
+                    const entry = origLogEdit.apply(this, arguments);  // keeps existing in-memory _elog behavior
+                    // Fire-and-forget write to the Sheet's EditLog tab
+                    try
+                    {
+                        sccApiPost('logEdit', {
+                            timestamp: entry.ts || new Date().toISOString(),
+                            user: entry.user || (typeof _user !== 'undefined' ? _user : ''),
+                            order_id: id || '',
+                            po: po || '',
+                            change: chg || '',
+                            note: note || ''
+                        }).catch(err => console.error('[scc] logEdit sheet write failed:', err));
+                    } catch (e)
+                    {
+                        console.error('[scc] logEdit sync error:', e);
+                    }
+                    return entry;
+                };
+            }
+
+            // ─── VIEW MODE patch ────────────────────────────────────────────────────
+            // openDetail() now opens in view mode (all fields readonly, EDIT button to switch to edit).
+            // openNew() opens in edit mode directly (new orders need editable fields).
+            if (typeof openDetail === 'function' && !window.__scc_patched_openDetail)
+            {
+                window.__scc_patched_openDetail = true;
+                sccInjectViewModeControls();
+                const origOpenDetail = openDetail;
+                window.openDetail = function (id)
+                {
+                    const result = origOpenDetail.apply(this, arguments);
+                    sccSetViewMode(true);
+                    return result;
+                };
+            }
+            if (typeof openNew === 'function' && !window.__scc_patched_openNew)
+            {
+                window.__scc_patched_openNew = true;
+                const origOpenNew = openNew;
+                window.openNew = function ()
+                {
+                    const result = origOpenNew.apply(this, arguments);
+                    sccSetViewMode(false);
+                    return result;
+                };
+            }
             if (typeof saveOrder === 'function' && !window.__scc_patched_saveOrder)
             {
                 window.__scc_patched_saveOrder = true;
@@ -7616,34 +8104,515 @@ dfj
                 };
             }
 
-            // Patch procUpFile (bulk Excel/CSV import) so it bulk-saves to sheet
-            if (typeof procUpFile === 'function' && !window.__scc_patched_procUpFile)
+            // Note: procUpFile is now overridden directly below (not poll-patched) — it uses the new schema
+            // and saves to Sheet immediately. See sccOverrideOrdersUpload IIFE below.
+        }
+
+        // ─── Bulk upload: tab switching, templates, lines upload ───────────────────
+        function sccUpTab(name)
+        {
+            const o = document.getElementById('up-panel-orders');
+            const l = document.getElementById('up-panel-lines');
+            const to = document.getElementById('up-tab-orders');
+            const tl = document.getElementById('up-tab-lines');
+            if (name === 'lines')
             {
-                window.__scc_patched_procUpFile = true;
-                const origProcUpFile = procUpFile;
-                window.procUpFile = function (file)
-                {
-                    const beforeCount = orders.length;
-                    const result = origProcUpFile.apply(this, arguments);
-                    // The function is async (FileReader callback); we need to detect when it's done
-                    // and grab the newly-added orders. Poll briefly.
-                    let tries = 0;
-                    const poll = setInterval(() =>
-                    {
-                        tries++;
-                        if (orders.length > beforeCount)
-                        {
-                            clearInterval(poll);
-                            const newCount = orders.length - beforeCount;
-                            const newlyAdded = orders.slice(0, newCount);
-                            sccBulkAddToSheet(newlyAdded);
-                        }
-                        if (tries > 60) clearInterval(poll);  // 30 sec max wait
-                    }, 500);
-                    return result;
-                };
+                if (o) o.style.display = 'none';
+                if (l) l.style.display = 'block';
+                if (to) to.classList.remove('a');
+                if (tl) tl.classList.add('a');
+            } else
+            {
+                if (o) o.style.display = 'block';
+                if (l) l.style.display = 'none';
+                if (to) to.classList.add('a');
+                if (tl) tl.classList.remove('a');
             }
         }
+
+        // ─── CSV download helper (more reliable than XLSX, no library dependency) ───
+        function sccDownloadCSV(filename, headers, rows)
+        {
+            const esc = v =>
+            {
+                if (v === null || v === undefined) return '';
+                const s = String(v);
+                if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
+                {
+                    return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            };
+            const lines = [headers.join(',')].concat(rows.map(r => r.map(esc).join(',')));
+            // Prepend UTF-8 BOM so Excel opens with correct encoding for non-ASCII chars
+            const csv = '\uFEFF' + lines.join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() =>
+            {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+        }
+
+        // Updated Orders template — matches the new schema
+        function sccDlOrdersTemplate()
+        {
+            const headers = [
+                'po', 'brand', 'enet', 'sop', 'order_date', 'type', 'status', 'partner', 'end_user', 'dest',
+                'mot', 'currency', 'fx_rate', 'total', 'oem_inv_no', 'oem_inv_date',
+                'target_eta', 'planned_ship', 'actual_ship', 'shipper_eta', 'actual_arr',
+                'awb', 'container', 'ship_line', 'delivery_point', 'remark'
+            ];
+            const example1 = [
+                'TD/HP-PSG/MTN-25AUG-001', 'HP PSG', 'SO123456', 'SOP001',
+                '2025-08-15', 'B2B', 'BOOKED', 'Tretten Solutions', 'MTN Nigeria', 'Nigeria',
+                'AIR', 'USD', '1', '125000', 'INV-2025-0815', '2025-08-15',
+                '2025-09-20', '2025-09-05', '', '', '',
+                '', '', '', 'KDS Nigeria', 'Sample order'
+            ];
+            const example2 = [
+                'TD/CS/BANK-25AUG-002', 'Cisco', 'SO123457', 'SOP002',
+                '2025-08-16', 'B2B', 'BOOKED', 'Inlaks Computers', 'Access Bank', 'Nigeria',
+                'SEA', 'USD', '1', '85000', '', '',
+                '2025-10-15', '', '', '', '',
+                '', '', '', 'KDS Nigeria', ''
+            ];
+            sccDownloadCSV('ChainView_Orders_Template.csv', headers, [example1, example2]);
+        }
+
+        // Lines template
+        function sccDlLinesTemplate()
+        {
+            const headers = ['po', 'part', 'desc', 'config', 'colour', 'qty', 'unit', 'total', 'status', 'awb', 'container', 'oem_inv_no', 'oem_inv_date', 'eta'];
+            const example1 = ['TD/HP-PSG/MTN-25AUG-001', '15-FQ123AA', 'HP ProBook 450 G10 i7', '16GB/512GB SSD', 'Silver', '50', '850', '42500', 'BOOKED', '', '', 'INV-HP-2025-001', '2025-08-20', '2025-09-20'];
+            const example2 = ['TD/HP-PSG/MTN-25AUG-001', '15-FQ124AA', 'HP ProBook 450 G10 i5', '8GB/256GB SSD', 'Silver', '100', '650', '65000', 'BOOKED', '', '', 'INV-HP-2025-001', '2025-08-20', '2025-10-05'];
+            const example3 = ['TD/CS/BANK-25AUG-002', 'C9300-48U-E', 'Cisco Catalyst 9300 48-Port', '', '', '10', '8500', '85000', 'BOOKED', '', '', 'INV-CSC-2025-042', '2025-08-22', '2025-10-15'];
+            sccDownloadCSV('ChainView_Lines_Template.csv', headers, [example1, example2, example3]);
+        }
+
+        function sccHandleLinesDrop(e)
+        {
+            e.preventDefault();
+            const f = e.dataTransfer.files[0];
+            if (f) sccProcLinesFile(f);
+        }
+        function sccHandleLinesFile(inp)
+        {
+            if (inp.files[0]) sccProcLinesFile(inp.files[0]);
+        }
+
+        function sccProcLinesFile(file)
+        {
+            const ext = file.name.split('.').pop().toLowerCase();
+            const r = new FileReader();
+            r.onload = async (e) =>
+            {
+                try
+                {
+                    let rows = [];
+                    if (ext === 'csv')
+                    {
+                        // Parse CSV with proper handling
+                        rows = sccParseCSV(e.target.result);
+                    } else
+                    {
+                        if (typeof XLSX === 'undefined') { toast('XLSX library not loaded', 'var(--red)'); return; }
+                        const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true, dateNF: 'yyyy-mm-dd', defval: '' });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' }).filter(r => r.some(v => String(v || '').trim()));
+                    }
+                    if (rows.length < 2) { toast('No data rows found', 'var(--red)'); return; }
+
+                    // Find header row (first row with 3+ non-empty cells)
+                    let hi = 0;
+                    for (let i = 0; i < Math.min(rows.length, 5); i++)
+                    {
+                        if (rows[i] && rows[i].filter(v => String(v || '').trim()).length >= 3) { hi = i; break; }
+                    }
+                    const headers = rows[hi].map(h => String(h || '').toLowerCase().trim());
+                    const data = rows.slice(hi + 1).filter(r => r.some(v => String(v || '').trim()));
+
+                    const findCol = (...aliases) =>
+                    {
+                        for (const a of aliases)
+                        {
+                            const i = headers.findIndex(h => h === a || h.includes(a));
+                            if (i >= 0) return i;
+                        }
+                        return -1;
+                    };
+                    const ci = {
+                        po: findCol('po reference', 'po ref', 'po'),
+                        part: findCol('part number', 'part no', 'part', 'sku'),
+                        desc: findCol('description', 'desc', 'product'),
+                        config: findCol('config', 'configuration'),
+                        colour: findCol('colour', 'color'),
+                        qty: findCol('qty', 'quantity'),
+                        unit: findCol('unit price', 'unit'),
+                        total: findCol('total'),
+                        status: findCol('status'),
+                        awb: findCol('awb'),
+                        container: findCol('container'),
+                        oem_inv_no: findCol('oem_inv_no', 'oem inv no', 'oem invoice no', 'oem invoice number', 'oem inv', 'oem invoice'),
+                        oem_inv_date: findCol('oem_inv_date', 'oem inv date', 'oem invoice date'),
+                        eta: findCol('target eta', 'line eta', 'eta')
+                    };
+                    if (ci.po < 0) { toast('No "po" column found in Lines file', 'var(--red)'); return; }
+
+                    const get = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx] || '').trim() : '';
+                    const num = v => parseFloat(String(v || '').replace(/[^0-9.\-]/g, '')) || 0;
+
+                    // Group rows by PO
+                    const linesByPo = {};
+                    let badRows = 0;
+
+                    // [SCC] Robust status normalizer — accepts codes (BOOKED), labels (Booked/Accepted),
+                    // partial matches ("transit"), case-insensitive variants, and friendly arrows/checkmarks
+                    const VALID_STATUSES = new Set(['BOOKED', 'IN-PRODUCTION', 'PRODUCTION-HOLD', 'MATERIAL-CONSTRAINT', 'SHIPPED', 'TO-FORWARDER', 'TRANSIT-NG', 'TRANSIT-GH', 'TRANSIT-OT', 'CLEARING', 'AT-KDS', 'AT-ASHOUR', 'AT-EVERBRIGHT', 'LICENSE', 'MISSING', 'DELIVERED', 'E-DELIVERED', 'CANCELLED', 'REJECTED']);
+                    const SCC_STATUS_MAP = {
+                        'booked': 'BOOKED', 'accepted': 'BOOKED', 'booked/accepted': 'BOOKED',
+                        'in production': 'IN-PRODUCTION', 'production': 'IN-PRODUCTION',
+                        'production hold': 'PRODUCTION-HOLD', 'hold': 'PRODUCTION-HOLD',
+                        'material constraint': 'MATERIAL-CONSTRAINT', 'constraint': 'MATERIAL-CONSTRAINT',
+                        'shipped': 'SHIPPED',
+                        'forwarder': 'TO-FORWARDER', 'to forwarder': 'TO-FORWARDER',
+                        'transit nigeria': 'TRANSIT-NG', 'transit ng': 'TRANSIT-NG', 'transit-ng': 'TRANSIT-NG',
+                        'transit ghana': 'TRANSIT-GH', 'transit gh': 'TRANSIT-GH', 'transit-gh': 'TRANSIT-GH',
+                        'transit other': 'TRANSIT-OT', 'transit ot': 'TRANSIT-OT', 'transit-ot': 'TRANSIT-OT',
+                        'transit': 'TRANSIT-NG',
+                        'clearing': 'CLEARING', 'in clearing': 'CLEARING', 'port': 'CLEARING',
+                        'at kds': 'AT-KDS', 'kds': 'AT-KDS', 'goods at kds': 'AT-KDS',
+                        'at ashour': 'AT-ASHOUR', 'ashour': 'AT-ASHOUR',
+                        'everbright': 'AT-EVERBRIGHT', 'at everbright': 'AT-EVERBRIGHT',
+                        'license': 'LICENSE',
+                        'missing': 'MISSING',
+                        'delivered': 'DELIVERED', 'delivered ✓': 'DELIVERED',
+                        'e-delivered': 'E-DELIVERED', 'e delivered': 'E-DELIVERED',
+                        'cancelled': 'CANCELLED', 'canceled': 'CANCELLED',
+                        'rejected': 'REJECTED'
+                    };
+                    function sccNormStatus(raw)
+                    {
+                        if (!raw) return 'BOOKED';
+                        const s = String(raw).trim();
+                        if (!s) return 'BOOKED';
+                        const up = s.toUpperCase();
+                        if (VALID_STATUSES.has(up)) return up;  // exact code
+                        const low = s.toLowerCase().replace(/[→✓]/g, '').replace(/[/\\-]/g, ' ').replace(/\s+/g, ' ').trim();
+                        if (SCC_STATUS_MAP[low]) return SCC_STATUS_MAP[low];
+                        // partial: try each key as substring
+                        for (const [k, v] of Object.entries(SCC_STATUS_MAP))
+                        {
+                            if (low.includes(k)) return v;
+                        }
+                        return 'BOOKED';
+                    }
+
+                    data.forEach((row) =>
+                    {
+                        const po = get(row, ci.po);
+                        if (!po) { badRows++; return; }
+                        const part = get(row, ci.part);
+                        const desc = get(row, ci.desc);
+                        if (!part && !desc) { badRows++; return; }  // need at least part or desc
+                        if (!linesByPo[po]) linesByPo[po] = [];
+                        const qty = num(get(row, ci.qty));
+                        const unit = num(get(row, ci.unit));
+                        linesByPo[po].push({
+                            part: part,
+                            desc: desc,
+                            config: get(row, ci.config),
+                            colour: get(row, ci.colour),
+                            qty: qty,
+                            unit: unit,
+                            total: num(get(row, ci.total)) || (qty * unit),
+                            status: sccNormStatus(get(row, ci.status)),
+                            awb: get(row, ci.awb),
+                            container: get(row, ci.container),
+                            oem_inv_no: get(row, ci.oem_inv_no),
+                            oem_inv_date: get(row, ci.oem_inv_date),
+                            eta: get(row, ci.eta)
+                        });
+                    });
+
+                    // Match POs to orders in memory, attach lines, queue saves to Sheet
+                    const matched = [];
+                    const unmatched = [];
+                    let linesAdded = 0;
+                    for (const [po, newLines] of Object.entries(linesByPo))
+                    {
+                        const order = orders.find(o => o.po === po);
+                        if (!order) { unmatched.push(po); continue; }
+                        // Append (per user choice)
+                        if (!Array.isArray(order.lines)) order.lines = [];
+                        newLines.forEach((l, idx) =>
+                        {
+                            order.lines.push({
+                                id: 'L' + Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 5),
+                                ...l
+                            });
+                        });
+                        matched.push(order);
+                        linesAdded += newLines.length;
+                    }
+
+                    // Persist all matched orders back to Sheets (each save replaces lines for that order)
+                    const resEl = document.getElementById('up-res-lines');
+                    if (resEl) resEl.innerHTML = `<span style="color:var(--acc)">⏳ Saving ${matched.length} orders to sheet…</span>`;
+
+                    let savedOk = 0, savedErr = 0;
+                    for (const o of matched)
+                    {
+                        const ok = await sccSaveOrderToSheet(o, false);
+                        if (ok) savedOk++; else savedErr++;
+                    }
+
+                    // Update the UI to reflect new line counts
+                    if (typeof renderAll === 'function') renderAll();
+
+                    // Show result
+                    const summary = [
+                        `✓ ${linesAdded} line items added across ${matched.length} order(s)`,
+                        unmatched.length ? `<span style="color:var(--wrn)">⚠ ${unmatched.length} PO(s) not found: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}</span>` : '',
+                        badRows ? `<span style="color:var(--mt)">${badRows} row(s) skipped (missing po/part/desc)</span>` : '',
+                        savedErr ? `<span style="color:var(--red)">${savedErr} orders failed to save to sheet</span>` : ''
+                    ].filter(Boolean).join('<br>');
+                    if (resEl) resEl.innerHTML = summary;
+                    toast(`✓ ${linesAdded} line items added to ${matched.length} orders`, 'var(--grn)');
+
+                } catch (err)
+                {
+                    console.error('[scc] lines upload error:', err);
+                    toast('Lines upload error: ' + err.message, 'var(--red)');
+                    const resEl = document.getElementById('up-res-lines');
+                    if (resEl) resEl.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+                }
+            };
+            if (ext === 'csv') r.readAsText(file);
+            else r.readAsBinaryString(file);
+        }
+
+        // Simple CSV parser that handles quoted fields with commas
+        function sccParseCSV(text)
+        {
+            const rows = [];
+            const lines = text.split(/\r?\n/);
+            for (const line of lines)
+            {
+                if (!line.trim()) continue;
+                const row = [];
+                let cur = '';
+                let inQuote = false;
+                for (let i = 0; i < line.length; i++)
+                {
+                    const c = line[i];
+                    if (inQuote)
+                    {
+                        if (c === '"')
+                        {
+                            if (line[i + 1] === '"') { cur += '"'; i++; }
+                            else inQuote = false;
+                        } else cur += c;
+                    } else
+                    {
+                        if (c === '"') inQuote = true;
+                        else if (c === ',') { row.push(cur); cur = ''; }
+                        else cur += c;
+                    }
+                }
+                row.push(cur);
+                rows.push(row);
+            }
+            return rows;
+        }
+
+        // Override the existing dlUpTemplate (which uses old schema) with the new one
+        (function sccOverrideOrdersTemplate()
+        {
+            // Override after DOM ready, since dlUpTemplate is defined in the manager's script
+            document.addEventListener('DOMContentLoaded', () =>
+            {
+                if (typeof dlUpTemplate === 'function')
+                {
+                    window.dlUpTemplate = sccDlOrdersTemplate;
+                }
+            });
+        })();
+
+        // Override procUpFile to use new schema (matching the Orders template)
+        (function sccOverrideOrdersUpload()
+        {
+            document.addEventListener('DOMContentLoaded', () =>
+            {
+                if (typeof procUpFile !== 'function') return;
+
+                window.procUpFile = function (file)
+                {
+                    const ext = file.name.split('.').pop().toLowerCase();
+                    const r = new FileReader();
+                    r.onload = async (e) =>
+                    {
+                        try
+                        {
+                            let rows = [];
+                            if (ext === 'csv')
+                            {
+                                rows = sccParseCSV(e.target.result);
+                            } else
+                            {
+                                if (typeof XLSX === 'undefined') { toast('XLSX library not loaded', 'var(--red)'); return; }
+                                const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true, dateNF: 'yyyy-mm-dd', defval: '' });
+                                const ws = wb.Sheets[wb.SheetNames[0]];
+                                rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' }).filter(r => r.some(v => String(v || '').trim()));
+                            }
+                            if (rows.length < 2) { toast('No data rows found', 'var(--red)'); return; }
+
+                            let hi = 0;
+                            for (let i = 0; i < Math.min(rows.length, 5); i++)
+                            {
+                                if (rows[i] && rows[i].filter(v => String(v || '').trim()).length >= 3) { hi = i; break; }
+                            }
+                            const headers = rows[hi].map(h => String(h || '').toLowerCase().trim().replace(/\s+/g, '_'));
+                            const data = rows.slice(hi + 1).filter(r => r.some(v => String(v || '').trim()));
+
+                            const findCol = (...aliases) =>
+                            {
+                                for (const a of aliases)
+                                {
+                                    const i = headers.findIndex(h => h === a || h.replace(/_/g, ' ').includes(a) || h.includes(a));
+                                    if (i >= 0) return i;
+                                }
+                                return -1;
+                            };
+                            const ci = {
+                                po: findCol('po reference', 'po_reference', 'po_ref', 'po'),
+                                brand: findCol('brand'),
+                                enet: findCol('enet', 'so_no', 'sono'),
+                                sop: findCol('sop'),
+                                order_date: findCol('order_date', 'order date', 'date'),
+                                type: findCol('type'),
+                                status: findCol('status'),
+                                partner: findCol('partner', 'reseller'),
+                                end_user: findCol('end_user', 'enduser', 'end user', 'customer'),
+                                dest: findCol('destination', 'dest', 'country'),
+                                mot: findCol('mot', 'mode'),
+                                currency: findCol('currency', 'ccy'),
+                                fx_rate: findCol('fx_rate', 'fx rate', 'exchange'),
+                                total: findCol('total'),
+                                oem_inv_no: findCol('oem_inv_no', 'oem inv'),
+                                oem_inv_date: findCol('oem_inv_date', 'oem inv date'),
+                                target_eta: findCol('target_eta', 'target eta', 'eta'),
+                                planned_ship: findCol('planned_ship', 'planned ship'),
+                                actual_ship: findCol('actual_ship', 'actual ship'),
+                                shipper_eta: findCol('shipper_eta', 'shipper eta'),
+                                actual_arr: findCol('actual_arr', 'actual arr', 'actual arrival'),
+                                awb: findCol('awb', 'airway'),
+                                container: findCol('container'),
+                                ship_line: findCol('ship_line', 'ship line', 'shipping line'),
+                                delivery_point: findCol('delivery_point', 'delivery point'),
+                                remark: findCol('remark', 'note', 'remarks')
+                            };
+                            if (ci.po < 0) { toast('No "po" column found', 'var(--red)'); return; }
+
+                            const get = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx] || '').trim() : '';
+                            const num = v => parseFloat(String(v || '').replace(/[^0-9.\-]/g, '')) || 0;
+
+                            const newOrders = [];
+                            let imp = 0;
+                            data.forEach((row, i) =>
+                            {
+                                const po = get(row, ci.po); if (!po) return;
+                                const cur = (get(row, ci.currency) || 'USD').toUpperCase();
+                                const fx = num(get(row, ci.fx_rate)) || 1;
+                                const total = num(get(row, ci.total));
+                                const totalUSD = cur === 'USD' ? total : (fx > 0 ? total / fx : total);
+                                const status = sccNormStatus(get(row, ci.status));  // [SCC] canonicalise to ST_OPTS code so dashboard retains it
+                                const newOrder = {
+                                    id: 'UP' + Date.now() + '_' + i,
+                                    po: po,
+                                    brand: get(row, ci.brand) || 'Unknown',
+                                    enet: get(row, ci.enet),
+                                    sop: get(row, ci.sop),
+                                    pid: '',
+                                    orderDate: get(row, ci.order_date),
+                                    type: get(row, ci.type) || 'B2B',
+                                    status: status,
+                                    partner: get(row, ci.partner),
+                                    endUser: get(row, ci.end_user),
+                                    dest: get(row, ci.dest) || 'Nigeria',
+                                    mot: (get(row, ci.mot) || 'AIR').toUpperCase(),
+                                    currency: cur,
+                                    fxRate: fx,
+                                    total: total,
+                                    totalUSD: Math.round(totalUSD * 100) / 100,
+                                    oemInvNo: get(row, ci.oem_inv_no),
+                                    oemInvDate: get(row, ci.oem_inv_date),
+                                    targetETA: get(row, ci.target_eta),
+                                    plannedShip: get(row, ci.planned_ship),
+                                    actualShip: get(row, ci.actual_ship),
+                                    shipperETA: get(row, ci.shipper_eta),
+                                    actualArr: get(row, ci.actual_arr),
+                                    awb: get(row, ci.awb),
+                                    container: get(row, ci.container),
+                                    shipLine: get(row, ci.ship_line),
+                                    deliveryPoint: get(row, ci.delivery_point) || 'KDS Nigeria',
+                                    actualDelivery: '', deliveredBy: '',
+                                    paarDate: '', paarRef: '', dutyDate: '', fob: 0, fobDisc: 0,
+                                    dutyNgn: 0, paarFee: 0, shipChg: 0, terminal: 0, transport: 0,
+                                    clearing: 0, son: 0, freight: 0, whDate: '', formM: '', ba: '',
+                                    remark: get(row, ci.remark),
+                                    lines: [],
+                                    editLog: [],
+                                    addedBy: (typeof _user !== 'undefined' ? _user : '') || '',
+                                    addedAt: new Date().toISOString(),
+                                    source: 'manual'
+                                };
+                                orders.unshift(newOrder);
+                                if (typeof _newOrds !== 'undefined') _newOrds.unshift(newOrder);
+                                newOrders.push(newOrder);
+                                imp++;
+                            });
+
+                            if (typeof renderAll === 'function') renderAll();
+                            const resEl = document.getElementById('up-res');
+                            if (resEl) resEl.innerHTML = `<span style="color:var(--acc)">⏳ Saving ${imp} orders to sheet…</span>`;
+
+                            // Save to Sheet
+                            const ok = await sccBulkAddToSheet(newOrders);
+                            if (resEl)
+                            {
+                                resEl.innerHTML = ok
+                                    ? `<span style="color:var(--grn)">✓ ${imp} orders imported and synced to sheet</span>`
+                                    : `<span style="color:var(--wrn)">✓ ${imp} orders imported locally, but sheet sync failed (will retry on next refresh)</span>`;
+                            }
+                            toast(`✓ ${imp} orders imported`, 'var(--grn)');
+                        } catch (err)
+                        {
+                            console.error('[scc] upload error:', err);
+                            toast('Upload error: ' + err.message, 'var(--red)');
+                            const resEl = document.getElementById('up-res');
+                            if (resEl) resEl.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+                        }
+                    };
+                    if (ext === 'csv') r.readAsText(file);
+                    else r.readAsBinaryString(file);
+                };
+            });
+        })();
+
+        // Active tab styling for the upload modal tabs (matches existing .mtab.a pattern)
+        document.addEventListener('DOMContentLoaded', () =>
+        {
+            const to = document.getElementById('up-tab-orders');
+            if (to) to.classList.add('a');
+        });
 
         // ─── Init theme early to prevent flash ──────────────────────────────────────
         (function sccInitTheme()
