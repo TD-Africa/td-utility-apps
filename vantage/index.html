@@ -440,7 +440,8 @@ const TD_AFRICA_LOGO_B64 = "iVBORw0KGgoAAAANSUhEUgAAAQQAAAFgCAYAAABdbQdGAAABWGlD
    ============================================================ */
 
 const STATE = {
-  session: null,            // {userId, name, role, businessGroup} — audit label, not a credential
+  session: null,            // {userId, name, email, role, businessGroup} — set by the server from your token
+  login: null,              // {step:'bootstrap'|'email'|'code', email, name, role, error, busy, resendAt, expiresInMinutes}
   bootstrapped: false,
   loading: true,
   fatalError: null,
@@ -574,7 +575,10 @@ async function rpc(action, payload){
     res = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({action: action, payload: payload, accessCode: accessCode()}),
+      body: JSON.stringify({
+        action: action, payload: payload,
+        sessionToken: sessionToken(), accessCode: accessCode()
+      }),
       redirect: 'follow'
     });
   }catch(err){
@@ -599,6 +603,17 @@ async function rpc(action, payload){
     if(data.error === 'ACCESS_CODE_REQUIRED'){
       const e = new Error('This Vantage Sheet needs an access code.');
       e.accessCodeRequired = true;
+      throw e;
+    }
+    /* Handled in one place so that every screen reacts the same way to a token
+       that has expired, been revoked, or belongs to a disabled account. */
+    if(data.error === 'SESSION_REQUIRED' || data.error === 'SESSION_INVALID' || data.error === 'SESSION_EXPIRED'){
+      const message = data.error === 'SESSION_EXPIRED'
+        ? 'Your session has expired. Sign in again to carry on.'
+        : 'Please sign in again.';
+      onSessionLost(message);
+      const e = new Error(message);
+      e.sessionInvalid = true;
       throw e;
     }
     throw new Error(data.error);
@@ -647,24 +662,46 @@ async function mutate(label, fnName, payload, options){
 /* There is no authentication in this build by design. The name is stored so
    a refresh does not interrupt work, and is sent with every write purely so
    the history says who did it. Anyone can pick any name. */
-const SESSION_KEY = 'vantage_session_v1';
-let memorySession = null;
+const SESSION_TOKEN_KEY = 'vantage_session';
+let memoryToken = '';
 
-function loadStoredSession(){
-  try{
-    const raw = window.localStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  }catch(e){ return memorySession; }
+/* What this browser holds is a signed token, not an identity. The server
+   decides who that token belongs to on every single call, which is why a page
+   can no longer act as somebody else simply by saying it is them. */
+function sessionToken(){
+  if(memoryToken) return memoryToken;
+  try{ return window.localStorage.getItem(SESSION_TOKEN_KEY) || ''; }catch(e){ return ''; }
 }
-function storeSession(session){
-  memorySession = session;
+function setSessionToken(token){
+  memoryToken = token || '';
   try{
-    if(session) window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    else window.localStorage.removeItem(SESSION_KEY);
-  }catch(e){ /* storage partitioned in the sandbox — memory fallback is enough */ }
+    if(memoryToken) window.localStorage.setItem(SESSION_TOKEN_KEY, memoryToken);
+    else window.localStorage.removeItem(SESSION_TOKEN_KEY);
+  }catch(e){ /* private browsing — the in-memory token lasts the session */ }
 }
-function actorPayload(){
-  return STATE.session ? {userId: STATE.session.userId, name: STATE.session.name} : null;
+
+/* Drops the token and everything read with it, so no other person's data is
+   left on screen or in memory after a sign-out. */
+function signOut(){
+  setSessionToken('');
+  STATE.session = null;
+  STATE.bootstrapped = false;
+  STATE.opportunities = [];
+  STATE.directory = [];
+  STATE.leakage = [];
+  STATE.activity = null;
+  STATE.modal = null;
+  STATE.detail = null;
+  STATE.saveError = null;
+  STATE.staleRevision = null;
+  if(typeof stopPolling === 'function') stopPolling();
+}
+
+function onSessionLost(message){
+  signOut();
+  STATE.loading = false;
+  STATE.login = {step: 'email', email: (STATE.login && STATE.login.email) || '', error: message, busy: false};
+  render();
 }
 
 /* ---------------- Formatting ---------------- */
@@ -1057,8 +1094,8 @@ function render(){
     return;
   }
   if(!STATE.session){
-    app.innerHTML = renderEntry();
-    wireEntry();
+    app.innerHTML = renderLogin();
+    wireLogin();
     restoreUiState(snap);
     return;
   }
@@ -1093,9 +1130,32 @@ function renderFatal(){
     '<div style="font-size:12.5px;color:var(--text-soft);line-height:1.6;margin-bottom:16px;">' +
       escapeHtml(STATE.fatalError) +
     '</div>' +
-    '<div class="field-hint" style="margin-bottom:16px;">If this is the first run, open the Apps Script editor and run <b>setupVantage</b> once to create the tabs in the Sheet.</div>' +
+    '<div class="field-hint" style="margin-bottom:16px;">' + fatalHint(STATE.fatalError) + '</div>' +
     '<button class="btn btn-gold" id="fatal-retry" style="width:100%;justify-content:center;">Try again</button>' +
     '</div></div>';
+}
+
+/* The generic "run setupVantage" advice was wrong for most failures and sent
+   people down the wrong path. Match the actual cause instead. */
+function fatalHint(message){
+  const text = String(message || '');
+  if(/Unknown action/i.test(text)){
+    return 'The Google Sheet backend is running an <b>older version of Code.gs</b> than this page expects. ' +
+      'Saving in the Apps Script editor is not enough — the deployment has to be republished: ' +
+      '<b>Deploy → Manage deployments → ✏️ → Version: New version → Deploy</b>. ' +
+      'Keep the same deployment so the link does not change.';
+  }
+  if(/Missing tab|setupVantage/i.test(text)){
+    return 'Open the Apps Script editor and run <b>setupVantage</b> once to create the tabs in the Sheet.';
+  }
+  if(/No spreadsheet is attached/i.test(text)){
+    return 'The script is not bound to a Sheet. Open it via <b>Extensions → Apps Script</b> from inside the ' +
+      'Sheet, or set the <b>VANTAGE_SHEET_ID</b> script property.';
+  }
+  if(/sign-in page|Who has access/i.test(text)){
+    return 'Re-deploy the Web App with <b>Execute as: Me</b> and <b>Who has access: Anyone</b>.';
+  }
+  return 'Check that the Web App is deployed and reachable. Opening the /exec URL in a browser should return JSON.';
 }
 function wireFatal(){
   const btn = document.getElementById('fatal-retry');
@@ -1156,58 +1216,223 @@ function wireUnlock(){
   });
 }
 
-/* ---------------- Entry screen ---------------- */
+/* ---------------- Sign in ----------------
+   Email, then a 6-digit code sent to that address. Three steps share one
+   screen: `bootstrap` (this Sheet has no Admin yet), `email`, and `code`. */
 
-function renderEntry(){
-  const hasAdmin = STATE.directory.some(function(d){ return d.role === 'admin'; });
-  const active = STATE.directory.filter(function(d){ return d.status !== 'disabled'; });
+function loginState(){
+  if(!STATE.login) STATE.login = {step: 'email', email: '', error: null, busy: false};
+  return STATE.login;
+}
 
-  const brand =
+function loginShell(subtitle, inner){
+  return '<div class="login-wrap"><div class="login-card">' +
     '<div class="login-brand">' +
       '<img class="login-mark" src="data:image/png;base64,' + TD_AFRICA_LOGO_B64 + '" alt="TD Africa">' +
-      '<h1>Vantage</h1>';
+      '<h1>Vantage</h1>' +
+      '<p>' + subtitle + '</p>' +
+    '</div>' +
+    (loginState().error ? '<div class="modal-error">' + escapeHtml(loginState().error) + '</div>' : '') +
+    inner +
+    '</div></div>';
+}
 
-  if(!hasAdmin){
-    return '<div class="login-wrap"><div class="login-card">' +
-      brand +
-      '<p>No one has been set up yet. Create the first Executive / Admin account — they onboard everyone else with the right role and Business Group.</p>' +
-      '</div>' +
-      (STATE.modalError ? '<div class="modal-error">' + escapeHtml(STATE.modalError) + '</div>' : '') +
+function renderLogin(){
+  const L = loginState();
+  const busy = L.busy;
+
+  if(L.step === 'bootstrap'){
+    return loginShell(
+      'No one has been set up yet. Create the first Executive / Admin account — they onboard everyone else.',
       '<form id="bootstrap-form">' +
         '<div class="field"><label>Your full name</label>' +
-        '<input type="text" id="bs-name" placeholder="e.g. Chioma Ekeh" autocomplete="off" required></div>' +
-        '<div class="field-hint" style="margin-bottom:14px;">This account is created as Executive / Admin. Everyone else must be added from the Team Directory before their name appears here.</div>' +
-        '<button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;padding:11px;" ' +
-          (STATE.modalBusy ? 'disabled' : '') + '>' +
-          (STATE.modalBusy ? '<span class="spinner"></span>Creating…' : 'Create Admin account') +
-        '</button>' +
-      '</form>' +
-      '</div></div>';
+          '<input type="text" id="bs-name" value="' + escapeHtml(L.name || '') + '" autocomplete="name" required></div>' +
+        '<div class="field"><label>Your work email</label>' +
+          '<input type="email" id="bs-email" value="' + escapeHtml(L.email || '') + '" ' +
+            'placeholder="you@tdafrica.com" autocomplete="email" spellcheck="false" required>' +
+          '<div class="field-hint">This is how you will sign in. Vantage sends a code here to confirm you hold the mailbox.</div></div>' +
+        '<button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;padding:11px;"' +
+          (busy ? ' disabled' : '') + '>' +
+          (busy ? '<span class="spinner"></span>Creating…' : 'Create Admin account') + '</button>' +
+      '</form>'
+    );
   }
 
-  return '<div class="login-wrap"><div class="login-card">' +
-    brand +
-    '<p>Enter your name to start. Everything you log is recorded against it, so the team can see who raised, edited, or closed each quote.</p>' +
-    '</div>' +
-    (STATE.modalError ? '<div class="modal-error">' + escapeHtml(STATE.modalError) + '</div>' : '') +
-    '<form id="entry-form">' +
-      '<div class="field"><label>Your name</label>' +
-        '<select id="entry-user" required>' +
-          '<option value="">Select your name…</option>' +
-          active.map(function(d){
-            return '<option value="' + escapeHtml(d.userId) + '">' + escapeHtml(d.name) + ' — ' +
-              escapeHtml(roleLabel(d.role)) + (d.businessGroup ? ' · ' + escapeHtml(d.businessGroup) : '') + '</option>';
-          }).join('') +
-        '</select>' +
-        '<div class="field-hint">Not listed? Ask an Admin to add you — roles and Business Groups are assigned in the Team Directory, not chosen here.</div>' +
-      '</div>' +
-      '<button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;padding:11px;" ' +
-        (STATE.modalBusy ? 'disabled' : '') + '>' +
-        (STATE.modalBusy ? '<span class="spinner"></span>Opening…' : 'Enter Vantage') +
-      '</button>' +
-      '<div class="field-hint" style="margin-top:14px;text-align:center;">This build has no password. Names identify who did what; they do not restrict access.</div>' +
-    '</form>' +
-    '</div></div>';
+  if(L.step === 'code'){
+    const who = L.name ? escapeHtml(L.name) + (L.role ? ' · ' + escapeHtml(roleLabel(L.role)) : '') : '';
+    return loginShell(
+      'We sent a 6-digit code to <b>' + escapeHtml(L.email) + '</b>. It expires in ' +
+        (L.expiresInMinutes || 10) + ' minutes.',
+      (who ? '<div class="field-hint" style="text-align:center;margin-bottom:14px;">Signing in as ' + who + '</div>' : '') +
+      '<form id="code-form">' +
+        '<div class="field"><label>Sign-in code</label>' +
+          '<input type="text" id="li-code" inputmode="numeric" autocomplete="one-time-code" ' +
+            'maxlength="6" pattern="[0-9]{6}" placeholder="000000" spellcheck="false" required autofocus ' +
+            'style="font-family:\'IBM Plex Mono\',monospace;font-size:22px;letter-spacing:8px;text-align:center;">' +
+          '<div class="field-hint">Check your inbox, and your spam folder if it is not there.</div></div>' +
+        '<button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;padding:11px;"' +
+          (busy ? ' disabled' : '') + '>' +
+          (busy ? '<span class="spinner"></span>Checking…' : 'Sign in') + '</button>' +
+      '</form>' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:14px;">' +
+        '<button type="button" class="btn btn-ghost btn-sm" id="resend-btn">Send a new code</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" id="change-email-btn">Use a different address</button>' +
+      '</div>'
+    );
+  }
+
+  return loginShell(
+    'Sign in with your work email. Vantage sends a one-time code — there is no password to remember.',
+    '<form id="email-form">' +
+      '<div class="field"><label>Work email</label>' +
+        '<input type="email" id="li-email" value="' + escapeHtml(L.email || '') + '" ' +
+          'placeholder="you@tdafrica.com" autocomplete="email" spellcheck="false" required autofocus>' +
+        '<div class="field-hint">Not set up yet? Ask an Admin to add you to the Team Directory.</div></div>' +
+      '<button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;padding:11px;"' +
+        (busy ? ' disabled' : '') + '>' +
+        (busy ? '<span class="spinner"></span>Sending code…' : 'Send me a code') + '</button>' +
+    '</form>'
+  );
+}
+
+/* Counts down the resend button in place, rather than re-rendering the whole
+   screen every second and fighting the code field for focus. */
+let resendTimer = null;
+function startResendTicker(){
+  if(resendTimer) clearInterval(resendTimer);
+  const tick = function(){
+    const btn = document.getElementById('resend-btn');
+    if(!btn){ clearInterval(resendTimer); resendTimer = null; return; }
+    const left = Math.ceil(((loginState().resendAt || 0) - Date.now()) / 1000);
+    if(left > 0){
+      btn.disabled = true;
+      btn.textContent = 'Send a new code (' + left + 's)';
+    }else{
+      btn.disabled = false;
+      btn.textContent = 'Send a new code';
+      clearInterval(resendTimer);
+      resendTimer = null;
+    }
+  };
+  tick();
+  resendTimer = setInterval(tick, 1000);
+}
+
+async function requestCode(email){
+  const L = loginState();
+  L.busy = true;
+  L.error = null;
+  render();
+  try{
+    const res = await rpc('requestOtp', {email: email});
+    L.step = 'code';
+    L.email = res.email;
+    L.name = res.name;
+    L.role = res.role;
+    L.expiresInMinutes = res.expiresInMinutes;
+    L.resendAt = Date.now() + (res.resendInSeconds || 45) * 1000;
+    L.error = null;
+  }catch(err){
+    L.error = String(err.message || err);
+  }finally{
+    L.busy = false;
+    render();
+    if(loginState().step === 'code') startResendTicker();
+  }
+}
+
+function wireLogin(){
+  const L = loginState();
+
+  const emailForm = document.getElementById('email-form');
+  if(emailForm) emailForm.addEventListener('submit', function(e){
+    e.preventDefault();
+    const email = document.getElementById('li-email').value.trim();
+    if(!isValidEmail(email)){
+      L.error = 'That does not look like a valid email address.';
+      render();
+      return;
+    }
+    L.email = email;
+    requestCode(email);
+  });
+
+  const bootstrapForm = document.getElementById('bootstrap-form');
+  if(bootstrapForm) bootstrapForm.addEventListener('submit', async function(e){
+    e.preventDefault();
+    const name = document.getElementById('bs-name').value.trim();
+    const email = document.getElementById('bs-email').value.trim();
+    if(!name) return;
+    if(!isValidEmail(email)){
+      L.error = 'Enter a valid work email address.';
+      render();
+      return;
+    }
+    L.busy = true; L.error = null; L.name = name; L.email = email;
+    render();
+    try{
+      await rpc('createFirstAdmin', {name: name, email: email});
+      L.busy = false;
+      /* The account exists, but they still confirm the mailbox before getting in. */
+      await requestCode(email);
+      return;
+    }catch(err){
+      L.error = String(err.message || err);
+      L.busy = false;
+      render();
+    }
+  });
+
+  const codeForm = document.getElementById('code-form');
+  if(codeForm){
+    const input = document.getElementById('li-code');
+    const submit = async function(){
+      const code = input.value.replace(/\D/g, '');
+      if(code.length !== 6){
+        L.error = 'Enter the 6-digit code from your email.';
+        render();
+        return;
+      }
+      L.busy = true; L.error = null; render();
+      try{
+        const res = await rpc('verifyOtp', {email: L.email, code: code});
+        setSessionToken(res.sessionToken);
+        STATE.login = null;
+        if(resendTimer){ clearInterval(resendTimer); resendTimer = null; }
+        await boot();
+        toast('Signed in as ' + res.session.name);
+        return;
+      }catch(err){
+        L.error = String(err.message || err);
+        L.busy = false;
+        const el = document.getElementById('li-code');
+        if(el) el.value = '';
+        render();
+      }
+    };
+    codeForm.addEventListener('submit', function(e){ e.preventDefault(); submit(); });
+    /* Typing or pasting the sixth digit submits — the usual expectation for a
+       one-time code, and it removes a step on a phone. */
+    if(input) input.addEventListener('input', function(){
+      const digits = input.value.replace(/\D/g, '').slice(0, 6);
+      if(input.value !== digits) input.value = digits;
+      if(digits.length === 6 && !L.busy) submit();
+    });
+    startResendTicker();
+  }
+
+  const resend = document.getElementById('resend-btn');
+  if(resend) resend.addEventListener('click', function(){
+    if((loginState().resendAt || 0) > Date.now()) return;
+    requestCode(loginState().email);
+  });
+
+  const change = document.getElementById('change-email-btn');
+  if(change) change.addEventListener('click', function(){
+    if(resendTimer){ clearInterval(resendTimer); resendTimer = null; }
+    STATE.login = {step: 'email', email: L.email, error: null, busy: false};
+    render();
+  });
 }
 
 /* ---------------- Alert strips ---------------- */
@@ -1276,9 +1501,11 @@ function renderSidebar(){
         '<div class="who-avatar">' + escapeHtml(initials(s.name)) + '</div>' +
         '<div><div class="who-name">' + escapeHtml(s.name) + '</div>' +
         '<div class="who-role">' + escapeHtml(roleLabel(s.role)) +
-          (s.businessGroup ? ' · ' + escapeHtml(s.businessGroup) : ' · All Groups') + '</div></div>' +
-      '</div>' +
-      '<button class="logout-btn" id="switch-user-btn">Switch user</button>' +
+          (s.businessGroup ? ' · ' + escapeHtml(s.businessGroup) : ' · All Groups') + '</div>' +
+        (s.email ? '<div class="who-role" style="font-size:9.5px;opacity:.75;">' + escapeHtml(s.email) + '</div>' : '') +
+        /* closes the name/role stack, then .who */
+        '</div></div>' +
+      '<button class="logout-btn" id="switch-user-btn">Sign out</button>' +
       (STATE.spreadsheetUrl
         ? '<a class="sheet-link" href="' + escapeHtml(STATE.spreadsheetUrl) + '" target="_blank" rel="noopener">Open the underlying Google Sheet ↗</a>'
         : '') +
@@ -1304,6 +1531,18 @@ function renderPolicyBanner(){
 }
 
 function renderCurrentView(){
+  /* Belt and braces alongside the server check: an unrecognised role would
+     otherwise render a full set of screens with nothing on them. */
+  const known = (STATE.refData.roles || []).map(function(r){ return r.id; });
+  if(STATE.session && known.indexOf(STATE.session.role) < 0){
+    return '<div class="card card-pad">' +
+      '<h2 style="font-size:15px;margin-bottom:8px;">Your account needs attention</h2>' +
+      '<div style="font-size:12.5px;color:var(--text-soft);line-height:1.6;">Vantage does not recognise ' +
+      '<b>' + escapeHtml(STATE.session.role || '(blank)') + '</b> as a role, so it cannot work out what you ' +
+      'should see. Your row on the Directory tab of the Sheet most likely has its columns shifted.<br><br>' +
+      'Ask an Admin to run <b>diagnoseDirectory</b> in the Apps Script editor — it names exactly which ' +
+      'cells are wrong.</div></div>';
+  }
   switch(STATE.view){
     case 'board': return renderBoard();
     case 'list': return renderList();
@@ -2081,6 +2320,11 @@ function renderDirectory(){
       '<form id="add-member-form">' +
         '<div class="field-row">' +
           '<div class="field"><label>Full name</label><input type="text" id="atm-name" autocomplete="off" required></div>' +
+          '<div class="field"><label>Work email</label>' +
+            '<input type="email" id="atm-email" autocomplete="off" spellcheck="false" placeholder="name@tdafrica.com" required>' +
+            '<div class="field-hint">How they sign in — a one-time code goes here.</div></div>' +
+        '</div>' +
+        '<div class="field-row">' +
           '<div class="field"><label>Role</label><select id="atm-role"' + (isAdmin ? '' : ' disabled') + '>' +
             (isAdmin
               ? (STATE.refData.roles || []).map(function(r){ return '<option value="' + r.id + '">' + escapeHtml(r.label) + '</option>'; }).join('')
@@ -2100,7 +2344,7 @@ function renderDirectory(){
     '<div class="section-title"><h2>Team directory</h2>' +
       '<span class="hint">' + dir.length + ' ' + pluralize(dir.length, 'person', 'people') + '</span></div>' +
     '<div class="card table-wrap"><table>' +
-      '<thead><tr><th>Name</th><th>Role</th><th>Business Group</th><th>Status</th>' +
+      '<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Business Group</th><th>Status</th>' +
         '<th>Added by</th><th>Last active</th><th></th></tr></thead><tbody>' +
       (dir.length
         ? dir.slice().sort(function(a, b){ return String(a.name).localeCompare(String(b.name)); }).map(function(d){
@@ -2117,6 +2361,9 @@ function renderDirectory(){
             }
             return '<tr>' +
               '<td><span class="avatar-sm">' + escapeHtml(initials(d.name)) + '</span>&nbsp; ' + escapeHtml(d.name) + '</td>' +
+              '<td>' + (d.email
+                ? '<span class="mono" style="font-size:11.5px;">' + escapeHtml(d.email) + '</span>'
+                : '<span style="color:var(--danger);">No email — cannot sign in</span>') + '</td>' +
               '<td>' + escapeHtml(roleLabel(d.role)) + '</td>' +
               '<td>' + escapeHtml(d.businessGroup || 'All Groups') + '</td>' +
               '<td>' + (d.status === 'disabled'
@@ -2127,7 +2374,7 @@ function renderDirectory(){
               '<td><div style="display:flex;gap:6px;flex-wrap:wrap;">' + actions + '</div></td>' +
             '</tr>';
           }).join('')
-        : '<tr><td colspan="7" class="empty-cell">No one added yet.</td></tr>') +
+        : '<tr><td colspan="8" class="empty-cell">No one added yet.</td></tr>') +
     '</tbody></table></div>';
 }
 
@@ -2211,6 +2458,8 @@ function renderSettings(){
         escapeHtml(backendUrl()) + '</span></div>' +
       '<div class="kv"><span>Access code</span><span>' +
         (accessCode() ? 'in use on this device' : 'not required') + '</span></div>' +
+      '<div class="kv"><span>Signed in as</span><span class="mono" style="font-size:11.5px;">' +
+        escapeHtml((STATE.session && STATE.session.email) || '—') + '</span></div>' +
       '<div class="kv"><span>Current data revision</span><span class="mono">' + STATE.revision + '</span></div>' +
       '<div class="kv"><span>Opportunities stored</span><span>' + STATE.opportunities.length + '</span></div>' +
       '<div class="kv"><span>People in the directory</span><span>' + STATE.directory.length + '</span></div>' +
@@ -2993,6 +3242,9 @@ function renderMemberModal(){
       '<div class="field"><label>Full name</label>' +
         '<input type="text" id="mem-name" value="' + escapeHtml(m.name) + '" required>' +
         '<div class="field-hint">Renaming updates the name shown on every quote they own — the link itself is by id, so nothing is orphaned.</div></div>' +
+      '<div class="field"><label>Work email</label>' +
+        '<input type="email" id="mem-email" value="' + escapeHtml(m.email || '') + '" spellcheck="false" required>' +
+        '<div class="field-hint">Changing this signs them out of every device — the address is part of what their session is signed against.</div></div>' +
       '<div class="field-row">' +
         '<div class="field"><label>Role</label><select id="mem-role">' +
           (STATE.refData.roles || []).map(function(r){
@@ -3163,7 +3415,7 @@ async function exportWithLineItemsCsv(){
   STATE.busy = 'Collecting line items…';
   render();
   try{
-    const res = await rpc('getLineItemsFor', list.map(function(o){ return o.id; }));
+    const res = await rpc('getLineItemsFor', {ids: list.map(function(o){ return o.id; })});
     const byOpp = {};
     (res.lineItems || []).forEach(function(li){
       if(!byOpp[li.oppId]) byOpp[li.oppId] = [];
@@ -3670,16 +3922,36 @@ function upsertLeak(l){
   const i = STATE.leakage.findIndex(function(x){ return x.id === l.id; });
   if(i >= 0) STATE.leakage[i] = l; else STATE.leakage.push(l);
 }
+/* Defends against a payload from an older or partly-configured backend. A
+   missing `settings` or `refData` used to take the whole app down with a message
+   that named neither — so every field falls back to something renderable. */
 function applyBootstrap(data){
-  STATE.refData = data.refData;
-  STATE.settings = data.settings;
-  STATE.directory = data.directory || [];
-  STATE.opportunities = data.opportunities || [];
-  STATE.leakage = data.leakage || [];
-  STATE.revision = data.revision;
+  const d = data || {};
+  const ref = d.refData || {};
+  STATE.refData = {
+    businessGroups: ref.businessGroups || [],
+    businessUnitMap: ref.businessUnitMap || {},
+    orderTypes: ref.orderTypes || [],
+    lossReasons: ref.lossReasons || [],
+    roles: ref.roles || [
+      {id: 'rep', label: 'Sales Representative'},
+      {id: 'head', label: 'Business Group Head'},
+      {id: 'admin', label: 'Executive / Admin'}
+    ]
+  };
+  const set = d.settings || {};
+  STATE.settings = {
+    fxRate: Number(set.fxRate) || 1650,
+    agingThresholdDays: Number(set.agingThresholdDays) || 30,
+    lostDeleteAfterDays: Number(set.lostDeleteAfterDays) || 90
+  };
+  STATE.directory = d.directory || [];
+  STATE.opportunities = d.opportunities || [];
+  STATE.leakage = d.leakage || [];
+  STATE.revision = d.revision || 0;
   STATE.staleRevision = null;
-  STATE.today = data.today;
-  STATE.spreadsheetUrl = data.spreadsheetUrl || '';
+  STATE.today = d.today || new Date().toISOString().slice(0, 10);
+  STATE.spreadsheetUrl = d.spreadsheetUrl || '';
 }
 
 async function reloadAll(silent){
@@ -3707,7 +3979,7 @@ async function openDetail(id){
   STATE.detail = {id: id, loading: true};
   render();
   try{
-    const res = await rpc('getOpportunityDetail', id);
+    const res = await rpc('getOpportunityDetail', {id: id});
     upsertOpportunity(res.opportunity);
     STATE.detail = {id: id, loading: false, lineItems: res.lineItems, notes: res.notes, history: res.history};
   }catch(err){
@@ -3722,7 +3994,7 @@ async function ensureDetail(id){
   STATE.detail = {id: id, loading: true};
   render();
   try{
-    const res = await rpc('getOpportunityDetail', id);
+    const res = await rpc('getOpportunityDetail', {id: id});
     upsertOpportunity(res.opportunity);
     STATE.detail = {id: id, loading: false, lineItems: res.lineItems, notes: res.notes, history: res.history};
   }catch(err){
@@ -3734,7 +4006,7 @@ async function loadActivity(){
   STATE.activity = null;
   render();
   try{
-    const res = await rpc('getActivityFeed', 400);
+    const res = await rpc('getActivityFeed', {limit: 400});
     STATE.activity = {items: res.items};
   }catch(err){
     STATE.activity = {error: String(err.message || err), items: []};
@@ -3752,58 +4024,6 @@ function backToDetail(id){
   STATE.modal = {type: 'detail', id: id};
   STATE.modalError = null;
   render();
-}
-
-/* ---------------- Entry screen ---------------- */
-
-function wireEntry(){
-  const bootstrapForm = document.getElementById('bootstrap-form');
-  if(bootstrapForm){
-    bootstrapForm.addEventListener('submit', async function(e){
-      e.preventDefault();
-      const name = document.getElementById('bs-name').value.trim();
-      if(!name) return;
-      STATE.modalBusy = true; STATE.modalError = null; render();
-      try{
-        const res = await rpc('createFirstAdmin', {name: name});
-        upsertMember(res.member);
-        STATE.revision = res.revision;
-        STATE.session = {
-          userId: res.member.userId, name: res.member.name,
-          role: res.member.role, businessGroup: res.member.businessGroup
-        };
-        storeSession(STATE.session);
-      }catch(err){
-        STATE.modalError = String(err.message || err);
-      }finally{
-        STATE.modalBusy = false;
-        render();
-      }
-    });
-    return;
-  }
-
-  const entryForm = document.getElementById('entry-form');
-  if(entryForm){
-    entryForm.addEventListener('submit', async function(e){
-      e.preventDefault();
-      const userId = document.getElementById('entry-user').value;
-      if(!userId) return;
-      STATE.modalBusy = true; STATE.modalError = null; render();
-      try{
-        const res = await rpc('touchLastActive', {userId: userId});
-        STATE.session = res.session;
-        storeSession(STATE.session);
-        const m = STATE.directory.filter(function(d){ return d.userId === userId; })[0];
-        if(m) m.lastActive = new Date().toISOString();
-      }catch(err){
-        STATE.modalError = String(err.message || err);
-      }finally{
-        STATE.modalBusy = false;
-        render();
-      }
-    });
-  }
 }
 
 /* ---------------- Main wiring ---------------- */
@@ -3839,10 +4059,9 @@ function wireAll(){
 
   const switchBtn = document.getElementById('switch-user-btn');
   if(switchBtn) switchBtn.addEventListener('click', function(){
-    STATE.session = null;
-    storeSession(null);
-    STATE.modal = null;
-    STATE.detail = null;
+    if(!confirm('Sign out of Vantage on this device?')) return;
+    signOut();
+    STATE.login = {step: 'email', email: '', error: null, busy: false};
     render();
   });
 
@@ -4093,7 +4312,7 @@ function wireOpportunityForm(){
     try{
       if(isEdit){
         const res = await mutate('Saving changes…', 'editOpportunity',
-          {actor: actorPayload(), id: o.id, data: data}, {inModal: true});
+          {id: o.id, data: data}, {inModal: true});
         upsertOpportunity(res.opportunity);
         toast('Quote updated');
         /* Refetch rather than patch: the edit appends a history entry naming
@@ -4101,7 +4320,7 @@ function wireOpportunityForm(){
         openDetail(o.id);
       }else{
         const res = await mutate('Saving…', 'createOpportunity',
-          {actor: actorPayload(), data: data}, {inModal: true});
+          {data: data}, {inModal: true});
         upsertOpportunity(res.opportunity);
         closeModal();
         toast(booked
@@ -4133,7 +4352,7 @@ function wireSecondaryForms(){
       }
       try{
         const res = await mutate('Sending quote…', 'sendQuoteForOpportunity', {
-          actor: actorPayload(), id: id, lineItems: lineItems,
+          id: id, lineItems: lineItems,
           currency: document.getElementById('f-currency').value,
           validityDays: document.getElementById('f-validity').value
         }, {inModal: true});
@@ -4166,7 +4385,7 @@ function wireSecondaryForms(){
       }
       try{
         const res = await mutate('Creating linked quote…', 'duplicateQuoteForPartner', {
-          actor: actorPayload(), sourceId: sourceId,
+          sourceId: sourceId,
           data: {
             customerName: document.getElementById('dup-customer').value.trim(),
             partnerName: document.getElementById('dup-partner').value.trim(),
@@ -4196,7 +4415,7 @@ function wireSecondaryForms(){
       const id = modalId();
       try{
         const res = await mutate('Closing…', 'markLost', {
-          actor: actorPayload(), id: id,
+          id: id,
           reasonCode: document.getElementById('lost-reason').value,
           reasonNote: document.getElementById('lost-note').value
         }, {inModal: true});
@@ -4213,7 +4432,7 @@ function wireSecondaryForms(){
     const id = modalId();
     try{
       const res = await mutate('Recording…', 'raiseSalesOrder', {
-        actor: actorPayload(), id: id, soNumber: document.getElementById('so-number').value
+        id: id, soNumber: document.getElementById('so-number').value
       }, {inModal: true});
       upsertOpportunity(res.opportunity);
       toast('Sales Order ' + res.opportunity.soNumber + ' recorded — moved to Pipeline 1');
@@ -4227,7 +4446,7 @@ function wireSecondaryForms(){
     const id = modalId();
     try{
       const res = await mutate('Recording…', 'markInvoiced', {
-        actor: actorPayload(), id: id, invoiceNumber: document.getElementById('invoice-number').value
+        id: id, invoiceNumber: document.getElementById('invoice-number').value
       }, {inModal: true});
       upsertOpportunity(res.opportunity);
       toast(res.opportunity.customerName + ' invoiced — closed won');
@@ -4241,7 +4460,7 @@ function wireSecondaryForms(){
     const id = modalId();
     try{
       const res = await mutate('Reopening…', 'reopenOpportunity', {
-        actor: actorPayload(), id: id, pipeline: document.getElementById('reopen-pipeline').value
+        id: id, pipeline: document.getElementById('reopen-pipeline').value
       }, {inModal: true});
       upsertOpportunity(res.opportunity);
       toast('Reopened into Pipeline ' + res.opportunity.pipeline);
@@ -4254,9 +4473,10 @@ function wireSecondaryForms(){
     e.preventDefault();
     try{
       const res = await mutate('Saving…', 'updateTeamMember', {
-        actor: actorPayload(), userId: STATE.modal.userId,
+        userId: STATE.modal.userId,
         data: {
           name: document.getElementById('mem-name').value,
+          email: document.getElementById('mem-email').value,
           role: document.getElementById('mem-role').value,
           businessGroup: document.getElementById('mem-bg').value
         }
@@ -4265,9 +4485,13 @@ function wireSecondaryForms(){
       /* A rename changes stored display names on their quotes, so pull fresh. */
       if(res.opportunitiesUpdated) await reloadAll(true);
       if(STATE.session && STATE.session.userId === res.member.userId){
-        STATE.session = {userId: res.member.userId, name: res.member.name,
-          role: res.member.role, businessGroup: res.member.businessGroup};
-        storeSession(STATE.session);
+        /* Editing your own row can change your name, role, group or address.
+           A changed address invalidates the token, and the next call will send
+           you back to sign-in — which is the correct outcome. */
+        STATE.session = Object.assign({}, STATE.session, {
+          name: res.member.name, email: res.member.email,
+          role: res.member.role, businessGroup: res.member.businessGroup
+        });
       }
       closeModal();
       toast('Team member updated' + (res.opportunitiesUpdated ? ' — ' + res.opportunitiesUpdated + ' quotes relabelled' : ''));
@@ -4279,8 +4503,7 @@ function wireSecondaryForms(){
     e.preventDefault();
     try{
       const res = await mutate('Saving settings…', 'saveSettings', {
-        actor: actorPayload(),
-        data: {
+                data: {
           fxRate: document.getElementById('set-fx').value,
           agingThresholdDays: document.getElementById('set-aging').value,
           lostDeleteAfterDays: document.getElementById('set-delete').value
@@ -4312,7 +4535,7 @@ function wireRecordActions(){
     if(!input || !input.value.trim()) return;
     const text = input.value.trim();
     try{
-      const res = await mutate('Adding note…', 'addNote', {actor: actorPayload(), id: id, text: text}, {inModal: true});
+      const res = await mutate('Adding note…', 'addNote', {id: id, text: text}, {inModal: true});
       upsertOpportunity(res.opportunity);
       if(STATE.detail && STATE.detail.id === id){
         STATE.detail.notes = (STATE.detail.notes || []).concat([res.note]);
@@ -4328,7 +4551,7 @@ function wireRecordActions(){
     if(!confirm('Permanently delete the closed-lost opportunity ' + displayRef(o) + ' for ' + o.customerName +
       '?\n\nIts line items, notes and history go with it. A record of the deletion stays in the Activity Log. This cannot be undone.')) return;
     try{
-      await mutate('Deleting…', 'deleteLostOpportunity', {actor: actorPayload(), id: id}, {});
+      await mutate('Deleting…', 'deleteLostOpportunity', {id: id}, {});
       STATE.opportunities = STATE.opportunities.filter(function(x){ return x.id !== id; });
       if(STATE.activity) STATE.activity = null;
       toast(displayRef(o) + ' deleted');
@@ -4340,7 +4563,7 @@ function wireRecordActions(){
 async function doReprofile(id, pipeline){
   try{
     const res = await mutate('Reprofiling…', 'reprofileOpportunity',
-      {actor: actorPayload(), id: id, pipeline: pipeline}, {inModal: !!STATE.modal});
+      {id: id, pipeline: pipeline}, {inModal: !!STATE.modal});
     upsertOpportunity(res.opportunity);
     if(!res.unchanged) toast(res.opportunity.customerName + ' moved to Pipeline ' + res.opportunity.pipeline);
     render();
@@ -4356,15 +4579,16 @@ function wireDirectoryAndCompliance(){
     const nameEl = document.getElementById('atm-name');
     try{
       const res = await mutate('Adding…', 'addTeamMember', {
-        actor: actorPayload(),
-        data: {
+                data: {
           name: nameEl.value,
+          email: document.getElementById('atm-email').value,
           role: document.getElementById('atm-role').value,
           businessGroup: document.getElementById('atm-bg').value
         }
       }, {});
       upsertMember(res.member);
       nameEl.value = '';
+      document.getElementById('atm-email').value = '';
       toast(res.member.name + ' added — they can now enter Vantage');
       render();
     }catch(err){ render(); }
@@ -4385,8 +4609,7 @@ function wireDirectoryAndCompliance(){
     e.preventDefault();
     try{
       const res = await mutate('Logging…', 'logLeakage', {
-        actor: actorPayload(),
-        data: {
+                data: {
           soNumber: document.getElementById('lk-so').value,
           customerName: document.getElementById('lk-customer').value,
           businessGroup: document.getElementById('lk-bg').value,
@@ -4408,7 +4631,7 @@ function wireDirectoryAndCompliance(){
     const l = STATE.leakage.filter(function(x){ return x.id === id; })[0];
     if(!l || !confirm('Remove the compliance entry for ' + l.soNumber + '? This cannot be undone.')) return;
     try{
-      await mutate('Deleting…', 'deleteLeakage', {actor: actorPayload(), id: id}, {});
+      await mutate('Deleting…', 'deleteLeakage', {id: id}, {});
       STATE.leakage = STATE.leakage.filter(function(x){ return x.id !== id; });
       toast('Entry removed');
       render();
@@ -4419,7 +4642,7 @@ function wireDirectoryAndCompliance(){
 async function setMemberStatus(userId, status){
   try{
     const res = await mutate('Updating access…', 'setUserStatus',
-      {actor: actorPayload(), userId: userId, status: status}, {});
+      {userId: userId, status: status}, {});
     upsertMember(res.member);
     toast(res.member.name + ' ' + (status === 'disabled' ? 'disabled' : 'enabled'));
     render();
@@ -4428,7 +4651,7 @@ async function setMemberStatus(userId, status){
 async function setLeakResolved(id, resolved){
   try{
     const res = await mutate('Updating…', 'setLeakageResolved',
-      {actor: actorPayload(), id: id, resolved: resolved}, {});
+      {id: id, resolved: resolved}, {});
     upsertLeak(res.leak);
     render();
   }catch(err){ render(); }
@@ -4453,7 +4676,7 @@ function wireBulk(){
     const count = BULK_READY.length;
     try{
       const res = await mutate('Importing ' + count + ' ' + pluralize(count, 'quote') + '…',
-        'bulkCreateOpportunities', {actor: actorPayload(), groups: BULK_READY}, {inModal: true});
+        'bulkCreateOpportunities', {groups: BULK_READY}, {inModal: true});
       BULK_READY = [];
       await reloadAll(true);
       closeModal();
@@ -4507,7 +4730,7 @@ function wireEmail(){
 
     try{
       const res = await mutate('Logging…', 'logQuoteEmailed',
-        {actor: actorPayload(), id: id, to: to, cc: cc}, {inModal: true});
+        {id: id, to: to, cc: cc}, {inModal: true});
       upsertOpportunity(res.opportunity);
       toast('Email app opened for ' + to.length + ' ' + pluralize(to.length, 'recipient') +
         ' — attach the quote document before sending');
@@ -4522,8 +4745,11 @@ function wireEmail(){
    counter and offers to pull the change in. */
 
 let pollTimer = null;
+function stopPolling(){
+  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+}
 function startPolling(){
-  if(pollTimer) clearInterval(pollTimer);
+  stopPolling();
   pollTimer = setInterval(async function(){
     if(document.hidden || STATE.busy || STATE.modalBusy || STATE.needsAccessCode) return;
     try{
@@ -4566,36 +4792,51 @@ async function boot(){
   STATE.loading = true;
   STATE.fatalError = null;
   render();
-  try{
-    const data = await rpc('getBootstrap');
-    applyBootstrap(data);
 
-    const stored = loadStoredSession();
-    if(stored && stored.userId){
-      const match = STATE.directory.filter(function(d){
-        return d.userId === stored.userId && d.status !== 'disabled';
-      })[0];
-      if(match){
-        STATE.session = {userId: match.userId, name: match.name, role: match.role, businessGroup: match.businessGroup};
-      }else{
-        storeSession(null);
+  try{
+    if(sessionToken()){
+      try{
+        const data = await rpc('getBootstrap');
+        /* No `me` means the backend accepted the token but did not say who it
+           belongs to — an older Code.gs that ignores the payload. Bouncing to
+           the sign-in screen would just loop, so name the real cause. */
+        if(!data || !data.me || !data.me.userId){
+          throw new Error('The backend accepted your sign-in but did not return who you are. ' +
+            'Its Code.gs is older than this page expects — republish the Web App as a new version.');
+        }
+        applyBootstrap(data);
+        /* Identity comes from the server's reading of the token. */
+        STATE.session = data.me;
+        STATE.login = null;
+        STATE.loading = false;
+        STATE.bootstrapped = true;
+        render();
+        startPolling();
+        return;
+      }catch(err){
+        if(!(err && err.sessionInvalid)) throw err;
+        /* Token no longer good — fall through to sign-in. */
       }
     }
+
+    const ctx = await rpc('getLoginContext');
     STATE.loading = false;
-    STATE.bootstrapped = true;
+    STATE.login = {
+      step: ctx.needsBootstrap ? 'bootstrap' : 'email',
+      email: (STATE.login && STATE.login.email) || '',
+      error: (STATE.login && STATE.login.error) || null,
+      busy: false
+    };
     render();
-    startPolling();
   }catch(err){
     STATE.loading = false;
     if(err && err.accessCodeRequired){
-      /* First visit, or the code was rotated. Either way: ask for it, rather
-         than showing a dead end that looks like the backend is broken. */
       STATE.needsAccessCode = true;
       if(accessCode()){
         setAccessCode('');
         STATE.unlockError = 'The code saved on this device was not accepted. Enter the current one.';
       }
-    }else{
+    }else if(!(err && err.sessionInvalid)){
       STATE.fatalError = String(err.message || err);
     }
     render();
