@@ -561,8 +561,29 @@ function setAccessCode(code){
   }catch(e){ /* private browsing — the in-memory value still works this session */ }
 }
 
+/* Reads are safe to repeat, so a one-off transport hiccup is retried rather
+   than shown to anyone. Writes are not in this list: repeating one could send a
+   second sign-in code or create a second quote. */
+const RETRYABLE_ACTIONS = {
+  getBootstrap: true, getRevision: true, getLoginContext: true,
+  getOpportunityDetail: true, getActivityFeed: true, getLineItemsFor: true
+};
+
+/* Set once any call has succeeded. After that we know the deployment exists, so
+   a later 404 is a transport failure rather than a wrong URL — and the two need
+   very different advice. */
+let backendProvenAlive = false;
+
 /* Every server call goes through here, so a failure surfaces in one place
-   instead of being swallowed. `action` names a function in Code.gs. */
+   instead of being swallowed. `action` names a function in Code.gs.
+
+   An Apps Script /exec POST does not answer directly: it runs the script, then
+   302-redirects to script.googleusercontent.com, which serves the payload. fetch
+   follows that automatically — but the two hops fail differently, and it matters
+   which one did. A failure on the second hop means the script already ran. For a
+   write like requestOtp that means the email really was sent, even though the
+   caller saw an error. Anything transport-level is therefore flagged so callers
+   can say so instead of claiming the action failed. */
 async function rpc(action, payload){
   const url = backendUrl();
   if(!url){
@@ -570,6 +591,24 @@ async function rpc(action, payload){
       'Whoever published it needs to set VANTAGE_BACKEND_URL in vantage.html.');
   }
 
+  const attempts = RETRYABLE_ACTIONS[action] ? 2 : 1;
+  let lastError = null;
+
+  for(let attempt = 1; attempt <= attempts; attempt++){
+    try{
+      return await rpcOnce(action, payload, url);
+    }catch(err){
+      lastError = err;
+      /* Only a transport failure is worth repeating; an application error would
+         come back the same way every time. */
+      if(!err.transport || attempt === attempts) throw err;
+      await new Promise(function(resolve){ setTimeout(resolve, 700 * attempt); });
+    }
+  }
+  throw lastError;
+}
+
+async function rpcOnce(action, payload, url){
   let res;
   try{
     res = await fetch(url, {
@@ -584,10 +623,32 @@ async function rpc(action, payload){
   }catch(err){
     /* A cross-origin failure lands here with no detail, by design. The causes
        worth naming are the ones the person can actually fix. */
-    throw new Error('Could not reach the Vantage backend. Check your internet connection, ' +
+    const e = new Error('Could not reach the Vantage backend. Check your internet connection, ' +
       'and that the Web App is deployed with "Who has access" set to Anyone.');
+    e.transport = true;
+    throw e;
   }
-  if(!res.ok) throw new Error('The backend returned HTTP ' + res.status + '. Re-deploy the Web App and try again.');
+
+  if(!res.ok){
+    if(res.status === 404 && backendProvenAlive){
+      /* This deployment has already answered in this session, so it exists. A
+         404 now is Google's content-serving hop failing, not a wrong URL. */
+      const e = new Error('Google did not return the reply, though the request itself went through. ' +
+        'This usually clears on a second try.');
+      e.transport = true;
+      throw e;
+    }
+    if(res.status === 404){
+      const e = new Error('Nothing is deployed at the address this page is pointed at, so the Google Sheet ' +
+        'backend cannot be reached. Copy the current Web app URL from the Apps Script editor ' +
+        '(Deploy → Manage deployments) and set VANTAGE_BACKEND_URL in vantage.html to match.');
+      e.transport = true;
+      throw e;
+    }
+    const e = new Error('The backend returned HTTP ' + res.status + '. Re-deploy the Web App and try again.');
+    if(res.status >= 500) e.transport = true;
+    throw e;
+  }
 
   const text = await res.text();
   let data;
@@ -599,6 +660,9 @@ async function rpc(action, payload){
     throw new Error('The backend replied with a sign-in page instead of data. ' +
       'Re-deploy the Web App with "Execute as: Me" and "Who has access: Anyone".');
   }
+
+  backendProvenAlive = true;
+
   if(data.error){
     if(data.error === 'ACCESS_CODE_REQUIRED'){
       const e = new Error('This Vantage Sheet needs an access code.');
@@ -657,11 +721,105 @@ async function mutate(label, fnName, payload, options){
   }
 }
 
-/* ---------------- Session (audit identity only) ---------------- */
+/* ---------------- Connection check ----------------
+   An /exec call is two hops: the script runs at script.google.com, which then
+   302-redirects to script.googleusercontent.com carrying a single-use content
+   key, and the reply is served from there.
 
-/* There is no authentication in this build by design. The name is stored so
-   a refresh does not interrupt work, and is sent with every write purely so
-   the history says who did it. Anyone can pick any name. */
+   The distinction that matters when something breaks:
+
+     · fetch throws       → the host was never reached (offline, DNS, firewall)
+     · a 404 comes back   → something answered and rejected the content key.
+                            Anything that pre-fetches or follows redirects — a
+                            proxy, web filter, or security scanner — consumes
+                            that single-use key, so the browser's own request
+                            then finds it already spent.
+
+   This probes both hops and reports which failed, so a network team is handed
+   evidence rather than a guess. */
+async function connectionCheck(){
+  const url = backendUrl();
+  const lines = [
+    'Vantage connection check',
+    'When    : ' + new Date().toISOString(),
+    'Page    : ' + location.origin,
+    'Backend : ' + (url || '(not set)'),
+    ''
+  ];
+  if(!url){
+    lines.push('No backend URL is configured, so there is nothing to test.');
+    return lines;
+  }
+
+  const probe = async function(label, init){
+    const started = Date.now();
+    try{
+      const res = await fetch(url, init);
+      const took = Date.now() - started;
+      const body = await res.text();
+      let shape;
+      try{
+        const parsed = JSON.parse(body);
+        shape = (parsed.result && parsed.result.app === 'vantage') ? 'Vantage JSON'
+          : (parsed.error ? 'JSON error: ' + parsed.error : 'JSON, unrecognised');
+      }catch(e){
+        shape = /<html|<!doctype/i.test(body) ? 'an HTML page (usually a Google sign-in)' : 'not JSON';
+      }
+      lines.push(label + ': HTTP ' + res.status + ' in ' + took + 'ms');
+      lines.push('        replied from : ' + (res.url || '(not reported)'));
+      lines.push('        body         : ' + shape);
+      return {status: res.status, finalUrl: res.url || '', shape: shape};
+    }catch(err){
+      lines.push(label + ': could not connect (' + (Date.now() - started) + 'ms)');
+      lines.push('        ' + String(err.message || err));
+      return {status: 0, finalUrl: '', shape: 'no reply'};
+    }
+  };
+
+  const get = await probe('GET   ', {method: 'GET', redirect: 'follow'});
+  lines.push('');
+  const post = await probe('POST  ', {
+    method: 'POST',
+    headers: {'Content-Type': 'text/plain;charset=utf-8'},
+    body: JSON.stringify({action: 'getLoginContext'}),
+    redirect: 'follow'
+  });
+
+  lines.push('');
+  lines.push('What this means:');
+  const reachedContentHost = (get.finalUrl + post.finalUrl).indexOf('googleusercontent') >= 0;
+
+  if(post.shape.indexOf('JSON') >= 0){
+    lines.push('  The backend is reachable from this device and answering normally.');
+  }else if(post.status === 0 && get.status === 0){
+    lines.push('  Nothing answered at all — this device is offline, or script.google.com is blocked.');
+  }else if(post.status === 404 || get.status === 404){
+    lines.push('  Something answered but rejected the one-time key in Google\'s redirect.');
+    lines.push('  That key is good for a single request. Anything on this network that follows or');
+    lines.push('  pre-fetches redirects — a proxy, web filter, or security scanner — spends it first,');
+    lines.push('  so the browser then finds it used.');
+    lines.push('  Decisive test: load this page on a phone hotspot. If it works there, it is the network.');
+  }else if(post.shape.indexOf('HTML') >= 0){
+    lines.push('  A Google sign-in page came back instead of data. Re-deploy the Web App with');
+    lines.push('  "Execute as: Me" and "Who has access: Anyone".');
+  }else{
+    lines.push('  Unexpected reply — the HTTP status above is the thing to look into.');
+  }
+  if(!reachedContentHost && post.status !== 0){
+    lines.push('  Note: nothing replied from script.googleusercontent.com. Apps Script always serves');
+    lines.push('  replies from there, so it looks like that host was never reached.');
+  }
+
+  lines.push('');
+  lines.push('Both hosts must be reachable AND exempt from redirect pre-fetching / inspection:');
+  lines.push('  script.google.com');
+  lines.push('  script.googleusercontent.com');
+  return lines;
+}
+
+/* ---------------- Session ----------------
+   Sign-in is by emailed one-time code. What this browser holds afterwards is a
+   signed token; the identity behind it is decided by the server on every call. */
 const SESSION_TOKEN_KEY = 'vantage_session';
 let memoryToken = '';
 
@@ -1044,9 +1202,42 @@ function toast(message, isError){
 /* Focus and scroll survive a re-render. The prototype re-rendered the whole
    document on every keystroke and papered over the lost caret with a
    value-reassignment hack on one specific input; this handles every field. */
+/* Raw contents of the line-item rows, exactly as typed — including a row that
+   is still half-filled. Deliberately not collectLineItems(), which normalises
+   and drops rows and would turn an untouched row into a real line. */
+function snapshotLineItemRows(){
+  const container = document.getElementById('line-items-container');
+  if(!container) return null;
+  return Array.prototype.slice.call(container.querySelectorAll('.line-item-row')).map(function(row){
+    return {
+      description: row.querySelector('.li-desc').value,
+      sku: row.querySelector('.li-sku').value,
+      qty: row.querySelector('.li-qty').value,
+      unitPrice: row.querySelector('.li-price').value
+    };
+  });
+}
+
+function modalKey(){
+  return STATE.modal ? JSON.stringify(STATE.modal) : '';
+}
+
 function captureUiState(){
   const el = document.activeElement;
-  const snap = {scrollY: window.scrollY, focusId: null, start: null, end: null, scrolls: {}};
+  const snap = {scrollY: window.scrollY, focusId: null, start: null, end: null, scrolls: {},
+    modalKey: modalKey(), values: {}, lineItems: null, recipients: null, ccs: null};
+
+  /* Everything typed into the open dialog, so a redraw cannot silently discard
+     work in progress. */
+  if(snap.modalKey){
+    document.querySelectorAll('.overlay input[id], .overlay select[id], .overlay textarea[id]')
+      .forEach(function(field){
+        snap.values[field.id] = (field.type === 'checkbox') ? field.checked : field.value;
+      });
+    snap.lineItems = snapshotLineItemRows();
+    if(document.getElementById('recipients-container')) snap.recipients = collectRecipients('recipients-container');
+    if(document.getElementById('cc-container')) snap.ccs = collectRecipients('cc-container');
+  }
   if(el && el.id){
     snap.focusId = el.id;
     try{ snap.start = el.selectionStart; snap.end = el.selectionEnd; }catch(e){}
@@ -1058,6 +1249,34 @@ function captureUiState(){
 }
 function restoreUiState(snap){
   if(!snap) return;
+
+  /* Only ever restore into the same dialog — never carry one form's contents
+     into another. */
+  if(snap.modalKey && snap.modalKey === modalKey()){
+    if(snap.lineItems && snap.lineItems.length){
+      const container = document.getElementById('line-items-container');
+      if(container){
+        container.innerHTML = '';
+        snap.lineItems.forEach(function(li){ addLineItemRow(li); });
+      }
+    }
+    if(snap.recipients && snap.recipients.length){
+      const box = document.getElementById('recipients-container');
+      if(box){ box.innerHTML = ''; snap.recipients.forEach(function(a){ addRecipientRow('recipients-container', a); }); }
+    }
+    if(snap.ccs && snap.ccs.length){
+      const box = document.getElementById('cc-container');
+      if(box){ box.innerHTML = ''; snap.ccs.forEach(function(a){ addRecipientRow('cc-container', a); }); }
+    }
+    Object.keys(snap.values).forEach(function(id){
+      const field = document.getElementById(id);
+      if(!field) return;
+      if(field.type === 'checkbox') field.checked = snap.values[id];
+      else field.value = snap.values[id];
+    });
+    if(document.getElementById('quote-total-display')) recalcQuoteTotal();
+  }
+
   Object.keys(snap.scrolls).forEach(function(key){
     const node = document.querySelector('[data-keep-scroll="' + key + '"]');
     if(node) node.scrollTop = snap.scrolls[key];
@@ -1131,7 +1350,16 @@ function renderFatal(){
       escapeHtml(STATE.fatalError) +
     '</div>' +
     '<div class="field-hint" style="margin-bottom:16px;">' + fatalHint(STATE.fatalError) + '</div>' +
+    (backendUrl()
+      ? '<div class="field-hint" style="margin-bottom:16px;">This page is pointed at:<br>' +
+        '<span class="mono" style="font-size:10.5px;word-break:break-all;color:var(--text-soft);">' +
+        escapeHtml(backendUrl()) + '</span></div>'
+      : '') +
     '<button class="btn btn-gold" id="fatal-retry" style="width:100%;justify-content:center;">Try again</button>' +
+    '<button class="btn btn-ghost btn-sm" id="fatal-check" style="width:100%;justify-content:center;margin-top:10px;">Run connection check</button>' +
+    '<pre id="fatal-check-out" style="display:none;white-space:pre-wrap;word-break:break-word;font-family:monospace;' +
+      'font-size:10.5px;line-height:1.55;background:var(--surface);border:1px solid var(--border);border-radius:8px;' +
+      'padding:12px;margin-top:12px;max-height:300px;overflow:auto;"></pre>' +
     '</div></div>';
 }
 
@@ -1152,6 +1380,18 @@ function fatalHint(message){
     return 'The script is not bound to a Sheet. Open it via <b>Extensions → Apps Script</b> from inside the ' +
       'Sheet, or set the <b>VANTAGE_SHEET_ID</b> script property.';
   }
+  if(/did not return the reply|did not confirm the request/i.test(text)){
+    return 'The request reached Google but the reply did not come back. This is Google\'s ' +
+      'content-serving step failing, not your Sheet. Try again. If it happens repeatedly for the same ' +
+      'person, have them try a private window, or check that <b>script.googleusercontent.com</b> is not ' +
+      'blocked on the network — that is the address Apps Script serves replies from.';
+  }
+  if(/Nothing is deployed at the address|HTTP 404/i.test(text)){
+    return 'The address below is not serving a Vantage backend. In the Apps Script editor open ' +
+      '<b>Deploy → Manage deployments</b>, copy the <b>Web app URL</b> shown there, and set ' +
+      '<b>VANTAGE_BACKEND_URL</b> in vantage.html to exactly that. Creating a <i>new deployment</i> ' +
+      'rather than a new <i>version</i> changes this URL, which is the usual cause.';
+  }
   if(/sign-in page|Who has access/i.test(text)){
     return 'Re-deploy the Web App with <b>Execute as: Me</b> and <b>Who has access: Anyone</b>.';
   }
@@ -1160,6 +1400,21 @@ function fatalHint(message){
 function wireFatal(){
   const btn = document.getElementById('fatal-retry');
   if(btn) btn.addEventListener('click', function(){ boot(); });
+  const check = document.getElementById('fatal-check');
+  if(check) check.addEventListener('click', async function(){
+    const out = document.getElementById('fatal-check-out');
+    check.disabled = true;
+    check.textContent = 'Checking…';
+    out.style.display = 'block';
+    out.textContent = 'Running two probes…';
+    try{
+      out.textContent = (await connectionCheck()).join('\n');
+    }catch(err){
+      out.textContent = 'The check itself failed: ' + String(err.message || err);
+    }
+    check.disabled = false;
+    check.textContent = 'Run connection check again';
+  });
 }
 
 /* ---------------- Access code ----------------
@@ -1333,7 +1588,20 @@ async function requestCode(email){
     L.resendAt = Date.now() + (res.resendInSeconds || 45) * 1000;
     L.error = null;
   }catch(err){
-    L.error = String(err.message || err);
+    if(err && err.transport){
+      /* The request reached Google and the script ran — the reply was lost on the
+         way back. The code has almost certainly been sent, so move on to the code
+         step rather than insisting the whole thing failed and making them ask for
+         a second one. */
+      L.step = 'code';
+      L.email = email;
+      L.expiresInMinutes = L.expiresInMinutes || 10;
+      L.resendAt = Date.now() + 45000;
+      L.error = 'Google did not confirm the request, but your code was most likely sent. ' +
+        'Check your email and enter it below. If nothing arrives, ask for a new code in a moment.';
+    }else{
+      L.error = String(err.message || err);
+    }
   }finally{
     L.busy = false;
     render();
@@ -1403,7 +1671,13 @@ function wireLogin(){
         toast('Signed in as ' + res.session.name);
         return;
       }catch(err){
-        L.error = String(err.message || err);
+        /* A single-use code is consumed the moment the server accepts it. If the
+           reply was lost, the code is spent and retyping it cannot work — say so
+           plainly rather than letting them wear down their attempts. */
+        L.error = (err && err.transport)
+          ? 'Google did not return the reply, so this code has been used up without signing you in. ' +
+            'Ask for a new code and try once more.'
+          : String(err.message || err);
         L.busy = false;
         const el = document.getElementById('li-code');
         if(el) el.value = '';
@@ -2469,10 +2743,14 @@ function renderSettings(){
           : '') +
         '<button class="btn btn-ghost btn-sm" data-export-csv="1">Export all opportunities to CSV</button>' +
         '<button class="btn btn-ghost btn-sm" data-export-lines="1">Export with line items</button>' +
+        '<button class="btn btn-ghost btn-sm" data-connection-check="1">Run connection check</button>' +
         (accessCode()
           ? '<button class="btn btn-ghost btn-sm" data-forget-code="1">Forget access code on this device</button>'
           : '') +
       '</div>' +
+      '<pre id="settings-check-out" style="display:none;white-space:pre-wrap;word-break:break-word;' +
+        'font-family:monospace;font-size:10.5px;line-height:1.55;background:var(--surface);' +
+        'border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:12px;max-height:320px;overflow:auto;"></pre>' +
       '<div class="field-hint" style="margin-top:10px;">Every Vantage user shares this one Sheet. The app points at it through <b>VANTAGE_BACKEND_URL</b> in vantage.html, set once when the file is published.<br>' +
       'To set or change the shared access code, edit the <b>accessCode</b> row on the <b>Settings</b> tab of the Sheet. Blank means no code is asked for — and the Web App link alone then grants read and write to anyone who has it.</div>' +
       '<div class="field-hint" style="margin-top:12px;">Business Groups, Business Units, Order Types and loss reasons are edited directly in the <b>RefData</b> tab of the Sheet — add a row, set <b>active</b> to TRUE, then reload Vantage.</div>' +
@@ -2612,8 +2890,14 @@ function collectLineItems(){
     const sku = row.querySelector('.li-sku').value.trim();
     const qty = Number(row.querySelector('.li-qty').value) || 0;
     const unitPrice = Number(row.querySelector('.li-price').value) || 0;
-    if(description || sku || qty || unitPrice){
-      items.push({description: description || 'Item', sku: sku, qty: qty, unitPrice: unitPrice, subtotal: qty * unitPrice});
+    /* Identified by what it is, not by what it costs — a zero price is a valid
+       line. Rows with neither a description nor a SKU are the untouched blank
+       row the form always leaves ready, and are not lines at all. */
+    if(description || sku){
+      items.push({
+        description: description || sku, sku: sku, qty: qty,
+        unitPrice: unitPrice, subtotal: qty * unitPrice
+      });
     }
   });
   return items;
@@ -2621,7 +2905,7 @@ function collectLineItems(){
 function lineItemsBlock(scrollClass){
   return '<div class="field">' +
       '<label>Quote line items</label>' +
-      '<div class="field-hint" style="margin-bottom:8px;">The total is calculated from these lines — nothing is pasted in from an outside document. Lines with no quantity or no price are ignored.</div>' +
+      '<div class="field-hint" style="margin-bottom:8px;">The total is calculated from these lines — nothing is pasted in from an outside document. Leave the price at 0 for a no-charge line such as a bundled accessory. Rows with no description are ignored.</div>' +
       /* Same classes as the row itself, so the two stay aligned by construction. */
       '<div class="li-head">' +
         '<div class="li-sn">S/N</div>' +
@@ -3589,7 +3873,11 @@ function parseBulkRow(row, headerMap, rowIndex){
   const businessUnitRaw = String(get('businessUnit') || '').trim();
   const businessUnit = businessGroup ? normalizeBusinessUnit(businessGroup, businessUnitRaw) : null;
   const quantity = Number(get('quantity')) || 1;
-  const unitPrice = Number(get('unitPrice'));
+  /* Blank and zero mean different things here. A blank price column is almost
+     always a mistake; an explicit 0 is a deliberate no-charge line. */
+  const rawUnitPrice = get('unitPrice');
+  const unitPriceBlank = (rawUnitPrice === '' || rawUnitPrice === null || rawUnitPrice === undefined);
+  const unitPrice = Number(rawUnitPrice);
   let salesRep = String(get('salesRep') || '').trim();
   if(s.role === 'rep') salesRep = s.name;
   let pipeline = Number(get('pipeline'));
@@ -3603,7 +3891,11 @@ function parseBulkRow(row, headerMap, rowIndex){
       ? 'Unrecognised Business Unit "' + businessUnitRaw + '" for ' + businessGroup
       : 'Missing Business Unit');
   }
-  if(!unitPrice || unitPrice <= 0) errors.push('Missing or invalid unit price');
+  const itemDescription = String(get('itemDescription') || '').trim();
+  const skuValue = String(get('sku') || '').trim();
+  if(!itemDescription && !skuValue) errors.push('Missing item description and SKU — one of them is needed');
+  if(unitPriceBlank) errors.push('Missing unit price — enter 0 for a no-charge line');
+  else if(isNaN(unitPrice) || unitPrice < 0) errors.push('Unit price "' + rawUnitPrice + '" is not a valid amount');
   if(!quantity || quantity <= 0) errors.push('Quantity must be greater than zero');
   if(!salesRep) errors.push('Missing sales rep');
   if([1, 2, 3].indexOf(pipeline) < 0) errors.push('Invalid Pipeline value "' + String(get('pipeline') || '') + '" (must be 1, 2 or 3)');
@@ -3619,8 +3911,8 @@ function parseBulkRow(row, headerMap, rowIndex){
     contactPerson: String(get('contactPerson') || '').trim(),
     contactEmail: String(get('contactEmail') || '').trim(),
     lineItem: {
-      description: String(get('itemDescription') || '').trim() || 'Item',
-      sku: String(get('sku') || '').trim(),
+      description: itemDescription || skuValue,
+      sku: skuValue,
       qty: quantity, unitPrice: unitPrice, subtotal: quantity * unitPrice
     },
     currency: (String(get('currency') || 'NGN').trim().toUpperCase() === 'USD') ? 'USD' : 'NGN',
@@ -3668,7 +3960,8 @@ function validateBulkGroup(group){
     });
   });
 
-  const lineItems = rows.filter(function(r){ return r.lineItem.unitPrice > 0 && r.lineItem.qty > 0; })
+  const lineItems = rows
+    .filter(function(r){ return (r.lineItem.description || r.lineItem.sku) && r.lineItem.qty > 0; })
     .map(function(r){ return r.lineItem; });
   const total = lineItems.reduce(function(a, li){ return a + li.subtotal; }, 0);
   const rowLabel = indexes.length > 1 ? indexes[0] + '–' + indexes[indexes.length - 1] : String(indexes[0]);
@@ -3813,6 +4106,8 @@ function downloadBulkTemplate(){
       'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+    ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
+      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
     ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
       '', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Confirmed, awaiting PO']
   ];
@@ -4076,6 +4371,20 @@ function wireAll(){
   });
   on('[data-dismiss-save]', 'click', function(){ STATE.saveError = null; render(); });
   on('[data-refresh-now]', 'click', function(){ reloadAll(false); });
+  on('[data-connection-check]', 'click', async function(e){
+    const btn = e.currentTarget;
+    const out = document.getElementById('settings-check-out');
+    if(!out) return;
+    btn.disabled = true;
+    out.style.display = 'block';
+    out.textContent = 'Running two probes…';
+    try{
+      out.textContent = (await connectionCheck()).join('\n');
+    }catch(err){
+      out.textContent = 'The check itself failed: ' + String(err.message || err);
+    }
+    btn.disabled = false;
+  });
   on('[data-forget-code]', 'click', function(){
     if(!confirm('Forget the access code on this device? You will be asked for it again next time.')) return;
     setAccessCode('');
@@ -4302,11 +4611,23 @@ function wireOpportunityForm(){
       estimatedValue: booked ? Number(document.getElementById('f-estimated').value) || 0 : undefined,
       quoteSent: !booked
     };
-    if(!booked && !data.lineItems.length){
-      STATE.modalError = 'Add at least one line item with a quantity and a unit price' +
-        (isEdit ? '.' : ', or tick "Book this opportunity without sending a quote yet".');
-      render();
-      return;
+    if(!booked){
+      if(!data.lineItems.length){
+        STATE.modalError = 'Add at least one line item with a description' +
+          (isEdit ? '. A zero price is fine.' : ', or tick "Book this opportunity without sending a quote yet". A zero price is fine.');
+        render();
+        return;
+      }
+      /* Say which line is short rather than dropping it on save. */
+      const noQty = data.lineItems
+        .map(function(li, i){ return {li: li, n: i + 1}; })
+        .filter(function(entry){ return !(Number(entry.li.qty) > 0); });
+      if(noQty.length){
+        STATE.modalError = 'Line ' + noQty.map(function(e){ return e.n; }).join(', ') +
+          ' needs a quantity greater than zero.';
+        render();
+        return;
+      }
     }
 
     try{
@@ -4756,7 +5077,11 @@ function startPolling(){
       const rev = await rpc('getRevision');
       if(rev && rev !== STATE.revision && rev !== STATE.staleRevision){
         STATE.staleRevision = rev;
-        render();
+        /* Record it, but do not redraw while someone is filling in a form.
+           render() rebuilds the whole page, so a colleague saving anything used
+           to wipe an open quote mid-entry. The notice appears once the form is
+           closed, where it can actually be seen and acted on. */
+        if(!STATE.modal) render();
       }
     }catch(err){
       /* A dropped poll is not worth interrupting anyone over — but a rejected
