@@ -449,12 +449,13 @@ const STATE = {
   unlockError: null,
   unlocking: false,
 
-  refData: {businessGroups:[], businessUnitMap:{}, orderTypes:[], lossReasons:[], roles:[]},
-  settings: {fxRate:1650, agingThresholdDays:30, lostDeleteAfterDays:90},
+  refData: {businessGroups:[], businessUnitMap:{}, orderTypes:[], lossReasons:[], quoteValidityOptions:[], roles:[]},
+  settings: {fxRate:1650, agingThresholdDays:30, lostDeleteAfterDays:90, mistakeWindowDays:30, repScope:'unit'},
   directory: [],
   opportunities: [],
   leakage: [],
   activity: null,           // lazily loaded by the Activity view
+  importBatches: null,      // lazily loaded by the Settings view
   spreadsheetUrl: '',
   today: '',
 
@@ -465,9 +466,11 @@ const STATE = {
   view: 'dashboard',
   /* `flag` is set when a dashboard nudge deep-links into the list view
      (expired quotes, quotes due to move to Pipeline 3, unquoted bookings). */
-  filters: {bg:'all', rep:'all', status:'open', q:'', flag:null},
+  filters: {bg:'all', unit:'all', rep:'all', status:'open', q:'', flag:null, from:'', to:'', dateField:'dateRaised'},
   sort: {key:'updatedAt', dir:'desc'},
-  page: 1,
+  /* One page number per view, so paging through the activity log does not leave
+     the opportunity list on page 7. */
+  pages: {list:1, orders:1, compliance:1, directory:1, activity:1, lost:1},
   pageSize: 25,
 
   modal: null,
@@ -971,19 +974,53 @@ function needsReprofile(o){
 /* Role scoping is a convenience so people see their own work first. With no
    authentication it is not a security boundary, and the server does not
    rely on it for reads. */
+/* Both of these get asked for several times while drawing one screen — the
+   sidebar wants the counts, then the view wants the same figures again. They are
+   pure functions of state, so the answer is kept for the duration of a single
+   render and discarded at the start of the next. */
+let renderMemo = {key: null, scoped: null, analytics: null};
+function resetRenderMemo(){ renderMemo = {key: null, scoped: null, analytics: null}; }
+
+/* Keyed on who is asking, so swapping user can never be served another
+   person's cached view. Data changes are handled by the explicit resets in
+   render(), applyBootstrap() and upsertOpportunity(). */
+function memoKey(){
+  const s = STATE.session;
+  return s ? [s.userId, s.role, s.businessGroup, s.businessUnit || ''].join('|') : '';
+}
+
 function scopedOpportunities(){
+  const key = memoKey();
+  if(renderMemo.scoped && renderMemo.key === key) return renderMemo.scoped;
+  renderMemo = {key: key, scoped: computeScopedOpportunities(), analytics: null};
+  return renderMemo.scoped;
+}
+
+/* Figures for the signed-in user's scope. Prefer this over calling
+   computeAnalytics(scopedOpportunities()) again. */
+function analytics(){
+  const list = scopedOpportunities();
+  if(!renderMemo.analytics) renderMemo.analytics = computeAnalytics(list);
+  return renderMemo.analytics;
+}
+
+/* Mirrors scopeOpportunitiesForActor_ on the server, which is what actually
+   enforces this — the payload has already been narrowed. This only keeps the
+   interface consistent. */
+function computeScopedOpportunities(){
   const s = STATE.session;
   if(!s) return [];
-  if(s.role === 'rep'){
-    return STATE.opportunities.filter(function(o){
-      return o.businessGroup === s.businessGroup &&
-        (o.salesRepId ? o.salesRepId === s.userId : o.salesRep === s.name);
-    });
-  }
+  if(s.role === 'admin') return STATE.opportunities.slice();
   if(s.role === 'head'){
     return STATE.opportunities.filter(function(o){ return o.businessGroup === s.businessGroup; });
   }
-  return STATE.opportunities.slice();
+  const ownOnly = (STATE.settings.repScope !== 'unit') || !s.businessUnit;
+  return STATE.opportunities.filter(function(o){
+    if(o.businessGroup !== s.businessGroup) return false;
+    if(s.businessUnit && o.businessUnit !== s.businessUnit) return false;
+    if(!ownOnly) return true;
+    return o.salesRepId ? o.salesRepId === s.userId : o.salesRep === s.name;
+  });
 }
 function scopedLeakage(){
   const s = STATE.session;
@@ -1005,6 +1042,8 @@ function applyFilters(list){
     if(f.status === 'open' && !isOpenActive(o)) return false;
     if(f.status === 'invoiced' && o.status !== 'invoiced') return false;
     if(f.status === 'lost' && o.status !== 'lost') return false;
+    if(f.unit !== 'all' && o.businessUnit !== f.unit) return false;
+    if(!withinDateRange(o[f.dateField || 'dateRaised'], f.from, f.to)) return false;
     if(q){
       const hay = [o.customerName, o.quoteNumber, o.placeholderRef, o.productLine,
         o.partnerName, o.businessUnit, o.salesRep, o.soNumber, o.invoiceNumber]
@@ -1016,18 +1055,60 @@ function applyFilters(list){
 }
 function filtersActive(){
   const f = STATE.filters;
-  return f.bg !== 'all' || f.rep !== 'all' || f.q.trim() !== '' || f.status !== 'open';
+  return f.bg !== 'all' || f.unit !== 'all' || f.rep !== 'all' || f.q.trim() !== '' ||
+    f.status !== 'open' || !!f.from || !!f.to || !!f.flag;
+}
+
+/* Every unit present in what this session can see, so the dropdown never offers
+   a unit whose records they cannot reach. */
+function unitsInScope(){
+  const seen = {};
+  scopedOpportunities().forEach(function(o){ if(o.businessUnit) seen[o.businessUnit] = true; });
+  return Object.keys(seen).sort();
+}
+
+/* Inclusive on both ends, comparing dates only — a timestamp field is cut to its
+   date so "to: today" includes everything logged today. */
+function withinDateRange(value, from, to){
+  if(!from && !to) return true;
+  const d = String(value || '').slice(0, 10);
+  if(!d) return false;
+  if(from && d < from) return false;
+  if(to && d > to) return false;
+  return true;
 }
 function repsInScope(list){
   const names = {};
   list.forEach(function(o){ if(o.salesRep) names[o.salesRep] = true; });
   return Object.keys(names).sort();
 }
+/* The units a session may file against: their own if they are a rep, otherwise
+   every unit of the selected group. */
+function businessUnitsAvailable(businessGroup){
+  const s = STATE.session;
+  if(s && s.role === 'rep' && s.businessUnit) return [s.businessUnit];
+  return STATE.refData.businessUnitMap[businessGroup] || [];
+}
+
 function businessGroupsAvailable(){
   const s = STATE.session;
   if(!s) return [];
   return s.role === 'admin' ? (STATE.refData.businessGroups || []) : [s.businessGroup];
 }
+/* Mirrors deletionAllowed_ on the server, so the button is only offered when
+   pressing it would actually work. The server decides regardless. */
+function canDelete(o){
+  const s = STATE.session;
+  if(!s || s.role !== 'admin') return false;
+  if(o.soNumber || o.invoiceNumber || o.status === 'invoiced') return false;
+  if(o.status === 'lost'){
+    const daysLost = o.lostAt ? daysBetween(String(o.lostAt).slice(0, 10), todayStr()) : null;
+    if(daysLost !== null && daysLost >= (Number(STATE.settings.lostDeleteAfterDays) || 90)) return true;
+  }
+  const age = o.createdAt ? daysBetween(String(o.createdAt).slice(0, 10), todayStr()) : null;
+  return age !== null && age <= (Number(STATE.settings.mistakeWindowDays) || 30);
+}
+
 /* Whether this session may act on a record. Heads and admins may act within
    their scope; a rep only on their own. Mirrored on the server. */
 function canAct(o){
@@ -1296,6 +1377,7 @@ function restoreUiState(snap){
 function render(){
   const app = document.getElementById('app');
   const snap = captureUiState();
+  resetRenderMemo();
 
   if(STATE.fatalError){
     app.innerHTML = renderFatal();
@@ -1734,7 +1816,7 @@ function renderAlerts(){
 function renderSidebar(){
   const s = STATE.session;
   const scoped = scopedOpportunities();
-  const a = computeAnalytics(scoped);
+  const a = analytics();
   const isRep = s.role === 'rep';
   const isAdmin = s.role === 'admin';
   const openLeaks = scopedLeakage().filter(function(l){ return !l.resolved; }).length;
@@ -1775,7 +1857,8 @@ function renderSidebar(){
         '<div class="who-avatar">' + escapeHtml(initials(s.name)) + '</div>' +
         '<div><div class="who-name">' + escapeHtml(s.name) + '</div>' +
         '<div class="who-role">' + escapeHtml(roleLabel(s.role)) +
-          (s.businessGroup ? ' · ' + escapeHtml(s.businessGroup) : ' · All Groups') + '</div>' +
+          (s.businessGroup ? ' · ' + escapeHtml(s.businessGroup) : ' · All Groups') +
+          (s.businessUnit ? ' · ' + escapeHtml(s.businessUnit) : '') + '</div>' +
         (s.email ? '<div class="who-role" style="font-size:9.5px;opacity:.75;">' + escapeHtml(s.email) + '</div>' : '') +
         /* closes the name/role stack, then .who */
         '</div></div>' +
@@ -1926,7 +2009,7 @@ function renderOppMiniTable(list, mode){
 function renderDashboard(){
   const s = STATE.session;
   const scoped = scopedOpportunities();
-  const a = computeAnalytics(scoped);
+  const a = analytics();
   const isRep = s.role === 'rep';
 
   let out = renderHealthBar(a);
@@ -1998,6 +2081,41 @@ function renderDashboard(){
 
 /* ---------------- Filter bar ---------------- */
 
+function resetPages(){
+  Object.keys(STATE.pages).forEach(function(k){ STATE.pages[k] = 1; });
+}
+function pageOf(view){ return Math.max(1, STATE.pages[view] || 1); }
+
+/* Slices a list for the named view and clamps the page if the list shrank
+   under it — otherwise filtering down to two rows while on page 5 shows an
+   empty table with no hint why. */
+function paginate(view, list){
+  const size = STATE.pageSize;
+  const pageCount = Math.max(1, Math.ceil(list.length / size));
+  const page = Math.min(pageOf(view), pageCount);
+  STATE.pages[view] = page;
+  return {rows: list.slice((page - 1) * size, page * size), page: page, pageCount: pageCount, total: list.length};
+}
+
+function renderPager(view, p, noun){
+  if(p.total === 0) return '';
+  const first = (p.page - 1) * STATE.pageSize + 1;
+  const last = Math.min(p.page * STATE.pageSize, p.total);
+  return '<div class="pager">' +
+    '<span>' + first + '–' + last + ' of ' + p.total + ' ' + (noun || 'records') + '</span>' +
+    '<button class="btn btn-ghost btn-sm" data-page-view="' + view + '" data-page-step="-1"' +
+      (p.page <= 1 ? ' disabled' : '') + '>Previous</button>' +
+    '<span>Page ' + p.page + ' of ' + p.pageCount + '</span>' +
+    '<button class="btn btn-ghost btn-sm" data-page-view="' + view + '" data-page-step="1"' +
+      (p.page >= p.pageCount ? ' disabled' : '') + '>Next</button>' +
+    '<select id="page-size"><option value="25"' + (STATE.pageSize === 25 ? ' selected' : '') + '>25 per page</option>' +
+      '<option value="50"' + (STATE.pageSize === 50 ? ' selected' : '') + '>50 per page</option>' +
+      '<option value="100"' + (STATE.pageSize === 100 ? ' selected' : '') + '>100 per page</option>' +
+      '<option value="200"' + (STATE.pageSize === 200 ? ' selected' : '') + '>200 per page</option></select>' +
+    '<div class="pager-spacer"></div>' +
+  '</div>';
+}
+
 function renderFilterBar(list, summaryHtml){
   const s = STATE.session;
   const scoped = scopedOpportunities();
@@ -2027,6 +2145,22 @@ function renderFilterBar(list, summaryHtml){
           parts[1] + '</option>';
       }).join('') +
     '</select>' +
+    (bgs.length > 1 || (STATE.refData.businessUnitMap[bgs[0]] || []).length > 1
+      ? '<select id="filter-unit"><option value="all">All Business Units</option>' +
+        unitsInScope().map(function(u){
+          return '<option value="' + escapeHtml(u) + '"' + (STATE.filters.unit === u ? ' selected' : '') + '>' +
+            escapeHtml(u) + '</option>';
+        }).join('') + '</select>'
+      : '') +
+    '<select id="filter-date-field">' +
+      [['dateRaised', 'Date raised'], ['expectedCloseDate', 'Expected close'], ['updatedAt', 'Last touched']]
+        .map(function(pair){
+          return '<option value="' + pair[0] + '"' + (STATE.filters.dateField === pair[0] ? ' selected' : '') + '>' +
+            pair[1] + '</option>';
+        }).join('') +
+    '</select>' +
+    '<input type="date" id="filter-from" value="' + escapeHtml(STATE.filters.from) + '" title="From">' +
+    '<input type="date" id="filter-to" value="' + escapeHtml(STATE.filters.to) + '" title="To">' +
     (filtersActive() ? '<button class="btn btn-ghost btn-sm" data-clear-filters="1">Clear filters</button>' : '') +
     '<div class="flex-spacer"></div>' +
     '<span class="filter-summary">' + summaryHtml + '</span>' +
@@ -2175,9 +2309,8 @@ function renderList(){
   const sorted = sortOpportunities(filtered);
   const totalUSD = filtered.reduce(function(acc, o){ return acc + usdOf(o); }, 0);
 
-  const pageCount = Math.max(1, Math.ceil(sorted.length / STATE.pageSize));
-  const page = Math.min(Math.max(1, STATE.page), pageCount);
-  const slice = sorted.slice((page - 1) * STATE.pageSize, page * STATE.pageSize);
+  const paged = paginate('list', sorted);
+  const slice = paged.rows;
 
   const flagBanner = STATE.filters.flag
     ? '<div class="policy-banner" style="border-left-color:var(--p2);">' +
@@ -2223,19 +2356,10 @@ function renderList(){
     renderFilterBar(filtered, filtered.length + ' ' + pluralize(filtered.length, 'record') + ' · ' + fmtUSD(totalUSD)) +
     '<div class="card">' +
       '<div class="table-wrap"><table><thead><tr>' + header + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
-      '<div class="pager">' +
-        '<span>Page ' + page + ' of ' + pageCount + '</span>' +
-        '<button class="btn btn-ghost btn-sm" data-page="prev"' + (page <= 1 ? ' disabled' : '') + '>Previous</button>' +
-        '<button class="btn btn-ghost btn-sm" data-page="next"' + (page >= pageCount ? ' disabled' : '') + '>Next</button>' +
-        '<select id="page-size">' +
-          [25, 50, 100, 200].map(function(n){
-            return '<option value="' + n + '"' + (STATE.pageSize === n ? ' selected' : '') + '>' + n + ' per page</option>';
-          }).join('') +
-        '</select>' +
+      renderPager('list', paged, 'opportunities').replace('<div class="pager-spacer"></div>',
         '<div class="pager-spacer"></div>' +
         '<button class="btn btn-ghost btn-sm" data-export-csv="1">Export these ' + filtered.length + ' to CSV</button>' +
-        '<button class="btn btn-ghost btn-sm" data-export-lines="1">Export with line items</button>' +
-      '</div>' +
+        '<button class="btn btn-ghost btn-sm" data-export-lines="1">Export with line items</button>') +
     '</div>';
 }
 
@@ -2267,7 +2391,7 @@ function sortedEntries(obj, includeZero){
 function renderAnalytics(){
   const s = STATE.session;
   const isAdmin = s.role === 'admin';
-  const a = computeAnalytics(scopedOpportunities());
+  const a = analytics();
 
   const momentumDelta = a.momentum.prev30ValueUSD
     ? Math.round(((a.momentum.last30ValueUSD - a.momentum.prev30ValueUSD) / a.momentum.prev30ValueUSD) * 100)
@@ -2412,9 +2536,11 @@ function renderOrders(){
   const withInv = filtered.filter(function(o){ return o.invoiceNumber; }).length;
   const awaiting = filtered.filter(function(o){ return Number(o.pipeline) === 1 && !o.invoiceNumber; });
 
-  const rows = filtered.slice().sort(function(a, b){
+  const ordered = filtered.slice().sort(function(a, b){
     return String(b.updatedAt).localeCompare(String(a.updatedAt));
-  }).slice(0, 100);
+  });
+  const pagedOrders = paginate('orders', ordered);
+  const rows = pagedOrders.rows;
 
   return '<div class="policy-banner" style="border-left-color:var(--p2);">' +
       '<span>ⓘ</span><span>Vantage does not connect to Dynamics 365 in this build. Raise the Sales Order and the invoice in D365 as usual, then record the reference here so the two systems can be reconciled.</span></div>' +
@@ -2437,7 +2563,7 @@ function renderOrders(){
       '</div>' +
     '</div>' +
 
-    renderFilterBar(filtered, rows.length + ' most recently touched shown') +
+    renderFilterBar(filtered, filtered.length + ' in scope') +
 
     '<div class="card">' +
       (rows.length
@@ -2462,7 +2588,8 @@ function renderOrders(){
                 '<button class="btn btn-ghost btn-sm" data-open-detail="' + escapeHtml(o.id) + '">Open</button></div>' +
             '</div>';
           }).join('')
-        : '<div class="empty-state">No opportunities in scope yet.</div>') +
+        : '<div class="empty-state">No opportunities match these filters.</div>') +
+      renderPager('orders', pagedOrders, 'opportunities') +
     '</div>';
 }
 
@@ -2476,8 +2603,21 @@ function renderCompliance(){
   const bgs = businessGroupsAvailable();
   const window = Number(STATE.settings.lostDeleteAfterDays) || 90;
 
+  const q = STATE.filters.q.trim().toLowerCase();
+  const leakRows = scope.slice()
+    .filter(function(l){
+      if(!withinDateRange(l.dateDetected, STATE.filters.from, STATE.filters.to)) return false;
+      if(STATE.filters.bg !== 'all' && l.businessGroup !== STATE.filters.bg) return false;
+      if(!q) return true;
+      return (l.soNumber + ' ' + l.customerName + ' ' + l.detectedBy + ' ' + (l.note || ''))
+        .toLowerCase().indexOf(q) >= 0;
+    })
+    .sort(function(a, b){ return String(b.dateDetected).localeCompare(String(a.dateDetected)); });
+  const pagedLeaks = paginate('compliance', leakRows);
+
   const lostScope = scopedOpportunities().filter(function(o){ return o.status === 'lost'; })
     .sort(function(a, b){ return String(a.lostAt).localeCompare(String(b.lostAt)); });
+  const pagedLost = paginate('lost', lostScope);
 
   return '<div class="grid kpi-row-3">' +
       kpiCard('Quotes logged in Vantage', inScopeQuotes, 'p1') +
@@ -2507,13 +2647,29 @@ function renderCompliance(){
       '</form>' +
     '</div>' +
 
-    '<div class="section-title"><h2>Register</h2></div>' +
-    '<div class="card table-wrap"><table>' +
+    '<div class="section-title"><h2>Register</h2>' +
+      '<span class="hint">Search and narrow by date detected</span></div>' +
+    '<div class="filters">' +
+      '<input type="text" id="filter-q" placeholder="Search SO number, customer, note…" value="' +
+        escapeHtml(STATE.filters.q) + '">' +
+      (s.role === 'admin'
+        ? '<select id="filter-bg"><option value="all">All Business Groups</option>' +
+          bgs.map(function(bg){
+            return '<option value="' + escapeHtml(bg) + '"' + (STATE.filters.bg === bg ? ' selected' : '') + '>' +
+              escapeHtml(bg) + '</option>';
+          }).join('') + '</select>'
+        : '') +
+      '<input type="date" id="filter-from" value="' + escapeHtml(STATE.filters.from) + '" title="Detected from">' +
+      '<input type="date" id="filter-to" value="' + escapeHtml(STATE.filters.to) + '" title="Detected to">' +
+      (filtersActive() ? '<button class="btn btn-ghost btn-sm" data-clear-filters="1">Clear filters</button>' : '') +
+      '<div class="flex-spacer"></div>' +
+      '<span class="filter-summary">' + leakRows.length + ' of ' + scope.length + ' shown</span>' +
+    '</div>' +
+    '<div class="card"><div class="table-wrap"><table>' +
       '<thead><tr><th>SO #</th><th>Customer</th><th>Business Group</th><th class="num-cell">Value</th>' +
         '<th>Logged by</th><th>When</th><th>Status</th><th></th></tr></thead><tbody>' +
-      (scope.length
-        ? scope.slice().sort(function(a, b){ return String(b.dateDetected).localeCompare(String(a.dateDetected)); })
-          .map(function(l){
+      (pagedLeaks.rows.length
+        ? pagedLeaks.rows.map(function(l){
             return '<tr>' +
               '<td class="mono">' + escapeHtml(l.soNumber) + '</td>' +
               '<td>' + escapeHtml(l.customerName) +
@@ -2535,16 +2691,18 @@ function renderCompliance(){
               '</div></td>' +
             '</tr>';
           }).join('')
-        : '<tr><td colspan="8" class="empty-cell">Nothing logged. Every Dynamics 365 order in scope matches a Vantage quote.</td></tr>') +
-    '</tbody></table></div>' +
+        : '<tr><td colspan="8" class="empty-cell">' +
+          (scope.length ? 'Nothing matches these filters.' : 'Nothing logged. Every Dynamics 365 order in scope matches a Vantage quote.') +
+          '</td></tr>') +
+    '</tbody></table></div>' + renderPager('compliance', pagedLeaks, 'entries') + '</div>' +
 
     '<div class="section-title"><h2>Lost opportunity cleanup</h2>' +
       '<span class="hint">Closed-lost records can be permanently deleted by an Admin after ' + window + ' days</span></div>' +
     '<div class="card table-wrap"><table>' +
       '<thead><tr><th>Customer</th><th>Business Group</th><th class="num-cell">Value</th><th>Reason</th>' +
         '<th>Lost on</th><th class="num-cell">Days ago</th><th></th></tr></thead><tbody>' +
-      (lostScope.length
-        ? lostScope.map(function(o){
+      (pagedLost.rows.length
+        ? pagedLost.rows.map(function(o){
             const daysLost = o.lostAt ? daysBetween(String(o.lostAt).slice(0, 10), todayStr()) : 0;
             const eligible = daysLost !== null && daysLost >= window;
             return '<tr>' +
@@ -2564,7 +2722,7 @@ function renderCompliance(){
             '</tr>';
           }).join('')
         : '<tr><td colspan="7" class="empty-cell">No lost opportunities in scope.</td></tr>') +
-    '</tbody></table></div>';
+    '</tbody></table>' + renderPager('lost', pagedLost, 'lost records') + '</div>';
 }
 
 /* ---------------- Team Directory ---------------- */
@@ -2581,6 +2739,18 @@ function renderDirectory(){
     if(isAdmin) return true;
     return s.role === 'head' && d.role === 'rep' && d.businessGroup === s.businessGroup;
   };
+
+  const dq = STATE.filters.q.trim().toLowerCase();
+  const dirRows = dir.slice()
+    .filter(function(d){
+      if(STATE.filters.status === 'open' && d.status === 'disabled') return false;
+      if(STATE.filters.status === 'lost' && d.status !== 'disabled') return false;
+      if(!dq) return true;
+      return [d.name, d.email, d.businessGroup, d.businessUnit, roleLabel(d.role)]
+        .join(' ').toLowerCase().indexOf(dq) >= 0;
+    })
+    .sort(function(a, b){ return String(a.name).localeCompare(String(b.name)); });
+  const pagedDir = paginate('directory', dirRows);
 
   return '<div class="policy-banner" style="border-left-color:var(--gold);">' +
       '<span>◆</span><span>Access is assigned here, not chosen at sign-in. ' +
@@ -2605,23 +2775,44 @@ function renderDirectory(){
               : '<option value="rep">' + escapeHtml(roleLabel('rep')) + '</option>') +
           '</select></div>' +
         '</div>' +
-        '<div class="field"><label>Business Group</label><select id="atm-bg"' + (isAdmin ? '' : ' disabled') + '>' +
-          (isAdmin
-            ? '<option value="">— Not applicable for Admin —</option>' +
-              (STATE.refData.businessGroups || []).map(function(bg){ return '<option value="' + escapeHtml(bg) + '">' + escapeHtml(bg) + '</option>'; }).join('')
-            : '<option value="' + escapeHtml(s.businessGroup) + '" selected>' + escapeHtml(s.businessGroup) + '</option>') +
-        '</select></div>' +
+        '<div class="field-row">' +
+          '<div class="field"><label>Business Group</label><select id="atm-bg"' + (isAdmin ? '' : ' disabled') + '>' +
+            (isAdmin
+              ? '<option value="">— Not applicable for Admin —</option>' +
+                (STATE.refData.businessGroups || []).map(function(bg){ return '<option value="' + escapeHtml(bg) + '">' + escapeHtml(bg) + '</option>'; }).join('')
+              : '<option value="' + escapeHtml(s.businessGroup) + '" selected>' + escapeHtml(s.businessGroup) + '</option>') +
+          '</select></div>' +
+          '<div class="field"><label>Business Unit</label><select id="atm-bu">' +
+            (STATE.refData.businessUnitMap[isAdmin ? (STATE.refData.businessGroups[0] || '') : s.businessGroup] || [])
+              .map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('') +
+          '</select>' +
+          '<div class="field-hint">A Sales Rep works inside one unit and sees only its records. Heads and Admins span their whole group, so this is ignored for them.</div>' +
+          '</div>' +
+        '</div>' +
         '<button type="submit" class="btn btn-gold btn-sm">Add to Vantage</button>' +
       '</form>' +
     '</div>' +
 
     '<div class="section-title"><h2>Team directory</h2>' +
       '<span class="hint">' + dir.length + ' ' + pluralize(dir.length, 'person', 'people') + '</span></div>' +
-    '<div class="card table-wrap"><table>' +
-      '<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Business Group</th><th>Status</th>' +
-        '<th>Added by</th><th>Last active</th><th></th></tr></thead><tbody>' +
-      (dir.length
-        ? dir.slice().sort(function(a, b){ return String(a.name).localeCompare(String(b.name)); }).map(function(d){
+    '<div class="filters">' +
+      '<input type="text" id="filter-q" placeholder="Search name, email, unit…" value="' +
+        escapeHtml(STATE.filters.q) + '">' +
+      '<select id="filter-status">' +
+        [['open', 'Active only'], ['all', 'Everyone'], ['lost', 'Disabled only']].map(function(pair){
+          return '<option value="' + pair[0] + '"' + (STATE.filters.status === pair[0] ? ' selected' : '') + '>' +
+            pair[1] + '</option>';
+        }).join('') +
+      '</select>' +
+      (filtersActive() ? '<button class="btn btn-ghost btn-sm" data-clear-filters="1">Clear filters</button>' : '') +
+      '<div class="flex-spacer"></div>' +
+      '<span class="filter-summary">' + pagedDir.total + ' shown</span>' +
+    '</div>' +
+    '<div class="card"><div class="table-wrap"><table>' +
+      '<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Business Group</th><th>Business Unit</th>' +
+        '<th>Status</th><th>Added by</th><th>Last active</th><th></th></tr></thead><tbody>' +
+      (pagedDir.rows.length
+        ? pagedDir.rows.map(function(d){
             const isLastAdmin = d.role === 'admin' && activeAdmins <= 1 && d.status !== 'disabled';
             let actions = '';
             if(canManage(d)){
@@ -2640,6 +2831,11 @@ function renderDirectory(){
                 : '<span style="color:var(--danger);">No email — cannot sign in</span>') + '</td>' +
               '<td>' + escapeHtml(roleLabel(d.role)) + '</td>' +
               '<td>' + escapeHtml(d.businessGroup || 'All Groups') + '</td>' +
+              '<td>' + (d.role === 'rep'
+                ? (d.businessUnit
+                    ? escapeHtml(d.businessUnit)
+                    : '<span style="color:var(--danger);">Not set — sees only their own</span>')
+                : '<span style="color:var(--text-faint);">Whole group</span>') + '</td>' +
               '<td>' + (d.status === 'disabled'
                 ? '<span class="status-pill st-lost">Disabled</span>'
                 : '<span class="status-pill st-invoiced">Active</span>') + '</td>' +
@@ -2648,8 +2844,9 @@ function renderDirectory(){
               '<td><div style="display:flex;gap:6px;flex-wrap:wrap;">' + actions + '</div></td>' +
             '</tr>';
           }).join('')
-        : '<tr><td colspan="8" class="empty-cell">No one added yet.</td></tr>') +
-    '</tbody></table></div>';
+        : '<tr><td colspan="9" class="empty-cell">' +
+          (dir.length ? 'Nobody matches these filters.' : 'No one added yet.') + '</td></tr>') +
+    '</tbody></table></div>' + renderPager('directory', pagedDir, 'people') + '</div>';
 }
 
 /* ---------------- Activity log ----------------
@@ -2677,17 +2874,34 @@ function renderActivity(){
       return (it.actor + ' ' + it.customerName + ' ' + it.quoteNumber + ' ' + it.detail).toLowerCase().indexOf(q) >= 0;
     });
   }
+  /* Entries carry a timestamp, so the range is compared on its date part. */
+  items = items.filter(function(it){
+    return withinDateRange(it.ts, STATE.filters.from, STATE.filters.to);
+  });
+  const actors = Object.keys(items.reduce(function(acc, it){ acc[it.actor] = true; return acc; }, {})).sort();
+  if(STATE.filters.rep !== 'all'){
+    items = items.filter(function(it){ return it.actor === STATE.filters.rep; });
+  }
+  const pagedActivity = paginate('activity', items);
 
   return '<div class="filters">' +
       '<input type="text" id="filter-q" placeholder="Search by person, customer, ref or wording…" value="' + escapeHtml(STATE.filters.q) + '">' +
+      '<select id="filter-rep"><option value="all">Everyone</option>' +
+        actors.map(function(a){
+          return '<option value="' + escapeHtml(a) + '"' + (STATE.filters.rep === a ? ' selected' : '') + '>' +
+            escapeHtml(a) + '</option>';
+        }).join('') + '</select>' +
+      '<input type="date" id="filter-from" value="' + escapeHtml(STATE.filters.from) + '" title="From">' +
+      '<input type="date" id="filter-to" value="' + escapeHtml(STATE.filters.to) + '" title="To">' +
+      (filtersActive() ? '<button class="btn btn-ghost btn-sm" data-clear-filters="1">Clear filters</button>' : '') +
       '<button class="btn btn-ghost btn-sm" data-reload-activity="1">Refresh</button>' +
       '<div class="flex-spacer"></div>' +
-      '<span class="filter-summary">' + items.length + ' most recent ' + pluralize(items.length, 'entry', 'entries') + '</span>' +
+      '<span class="filter-summary">' + items.length + ' ' + pluralize(items.length, 'entry', 'entries') + '</span>' +
     '</div>' +
     '<div class="card table-wrap"><table>' +
       '<thead><tr><th>When</th><th>Who</th><th>What</th><th>Opportunity</th></tr></thead><tbody>' +
-      (items.length
-        ? items.map(function(it){
+      (pagedActivity.rows.length
+        ? pagedActivity.rows.map(function(it){
             return '<tr' + (it.oppId && it.oppId !== '__deleted__' ? ' class="tr-hover" data-open-detail="' + escapeHtml(it.oppId) + '"' : '') + '>' +
               '<td style="white-space:nowrap;">' + fmtDateTime(it.ts) + '</td>' +
               '<td><b>' + escapeHtml(it.actor) + '</b></td>' +
@@ -2696,8 +2910,8 @@ function renderActivity(){
                 (it.quoteNumber ? ' <span class="mono" style="color:var(--text-faint);">· ' + escapeHtml(it.quoteNumber) + '</span>' : '') + '</td>' +
             '</tr>';
           }).join('')
-        : '<tr><td colspan="4" class="empty-cell">Nothing recorded yet.</td></tr>') +
-    '</tbody></table></div>';
+        : '<tr><td colspan="4" class="empty-cell">Nothing matches these filters.</td></tr>') +
+    '</tbody></table>' + renderPager('activity', pagedActivity, 'entries') + '</div>';
 }
 
 /* ---------------- Settings (Admin) ---------------- */
@@ -2718,9 +2932,19 @@ function renderSettings(){
             '<input type="number" id="set-aging" min="1" max="365" value="' + escapeHtml(st.agingThresholdDays) + '" required>' +
             '<div class="field-hint">A quote older than this belongs in Pipeline 3. Vantage flags them but never moves them itself.</div></div>' +
         '</div>' +
-        '<div class="field" style="max-width:340px;"><label>Lost-record deletion window (days)</label>' +
+        '<div class="field-row">' +
+          '<div class="field"><label>What a Sales Rep sees</label>' +
+            '<select id="set-rep-scope">' +
+              '<option value="unit"' + (STATE.settings.repScope === 'unit' ? ' selected' : '') + '>' +
+                'Everything in their Business Unit</option>' +
+              '<option value="own"' + (STATE.settings.repScope === 'own' ? ' selected' : '') + '>' +
+                'Only the records they own</option>' +
+            '</select>' +
+            '<div class="field-hint">Either way a rep never sees outside their own Business Unit. Heads always see their whole Business Group.</div></div>' +
+          '<div class="field"><label>Lost-record deletion window (days)</label>' +
           '<input type="number" id="set-delete" min="30" max="3650" value="' + escapeHtml(st.lostDeleteAfterDays) + '" required>' +
-          '<div class="field-hint">How long a closed-lost opportunity must sit before an Admin can delete it permanently.</div></div>' +
+            '<div class="field-hint">How long a closed-lost opportunity must sit before an Admin can delete it permanently.</div></div>' +
+        '</div>' +
         '<button type="submit" class="btn btn-gold btn-sm">Save settings</button>' +
       '</form>' +
     '</div>' +
@@ -2754,6 +2978,35 @@ function renderSettings(){
       '<div class="field-hint" style="margin-top:10px;">Every Vantage user shares this one Sheet. The app points at it through <b>VANTAGE_BACKEND_URL</b> in vantage.html, set once when the file is published.<br>' +
       'To set or change the shared access code, edit the <b>accessCode</b> row on the <b>Settings</b> tab of the Sheet. Blank means no code is asked for — and the Web App link alone then grants read and write to anyone who has it.</div>' +
       '<div class="field-hint" style="margin-top:12px;">Business Groups, Business Units, Order Types and loss reasons are edited directly in the <b>RefData</b> tab of the Sheet — add a row, set <b>active</b> to TRUE, then reload Vantage.</div>' +
+    '</div>' +
+
+    '<div class="section-title"><h2>Bulk imports</h2>' +
+      '<span class="hint">Undo an import that grouped wrongly</span></div>' +
+    '<div class="card">' +
+      (STATE.importBatches === null
+        ? '<div class="card-pad field-hint"><span class="spinner spinner-dark"></span> Loading recent imports…</div>'
+        : (!STATE.importBatches.length
+            ? '<div class="card-pad field-hint">No bulk imports found.</div>'
+            : '<div class="table-wrap"><table><thead><tr><th>Imported</th><th>By</th>' +
+              '<th class="num-cell">Records</th><th>Customers</th><th>Can be removed</th><th></th></tr></thead><tbody>' +
+              STATE.importBatches.map(function(b){
+                return '<tr>' +
+                  '<td>' + fmtDateTime(b.importedAt) + '</td>' +
+                  '<td>' + escapeHtml(b.importedBy || '—') + '</td>' +
+                  '<td class="num-cell">' + b.total + '</td>' +
+                  '<td>' + escapeHtml(b.customers.join(', ')) +
+                    (b.customerCount > b.customers.length ? ' +' + (b.customerCount - b.customers.length) + ' more' : '') + '</td>' +
+                  '<td>' + b.removable + ' of ' + b.total +
+                    (b.blocked ? '<div class="field-hint">' + b.blocked + ' progressed to D365 or too old</div>' : '') + '</td>' +
+                  '<td>' + (b.removable
+                    ? '<button class="btn btn-danger-ghost btn-sm" data-undo-import="' + escapeHtml(b.key) + '">Undo import</button>'
+                    : '<span class="field-hint">Nothing removable</span>') + '</td>' +
+                '</tr>';
+              }).join('') + '</tbody></table></div>')) +
+      '<div class="card-pad field-hint">Undoing an import removes only records that never progressed — anything with a ' +
+      'Sales Order or invoice against it stays. Records older than ' +
+      (Number(STATE.settings.mistakeWindowDays) || 30) + ' days count as real pipeline and are kept too. ' +
+      'Every removal is recorded in the Activity Log.</div>' +
     '</div>' +
 
     '<div class="section-title"><h2>Known limits of this build</h2></div>' +
@@ -2799,6 +3052,7 @@ function renderModal(){
     case 'so':        return renderSoModal();
     case 'invoice':   return renderInvoiceModal();
     case 'reopen':    return renderReopenModal();
+    case 'validity':  return renderValidityModal();
     case 'member':    return renderMemberModal();
     default:          return '';
   }
@@ -2905,7 +3159,7 @@ function collectLineItems(){
 function lineItemsBlock(scrollClass){
   return '<div class="field">' +
       '<label>Quote line items</label>' +
-      '<div class="field-hint" style="margin-bottom:8px;">The total is calculated from these lines — nothing is pasted in from an outside document. Leave the price at 0 for a no-charge line such as a bundled accessory. Rows with no description are ignored.</div>' +
+      '<div class="field-hint" style="margin-bottom:8px;">Every line below belongs to this one quote — add as many as it needs. The total is calculated from them; nothing is pasted in from an outside document. Leave the price at 0 for a no-charge line such as a bundled accessory. Rows with no description are ignored.</div>' +
       /* Same classes as the row itself, so the two stay aligned by construction. */
       '<div class="li-head">' +
         '<div class="li-sn">S/N</div>' +
@@ -2940,7 +3194,7 @@ function renderOpportunityForm(mode){
 
   const bgLocked = s.role !== 'admin';
   const currentBg = isEdit ? o.businessGroup : (bgLocked ? s.businessGroup : (STATE.refData.businessGroups[0] || ''));
-  const units = STATE.refData.businessUnitMap[currentBg] || [];
+  const units = businessUnitsAvailable(currentBg);
   const noQuote = isEdit ? (o.quoteSent === false) : false;
   const today = todayStr();
 
@@ -2972,9 +3226,12 @@ function renderOpportunityForm(mode){
           (isEdit ? '<div class="field-hint">A quote cannot change Business Group — raise it under the correct group instead.</div>' : '') +
         '</div>' +
         '<div class="field"><label>Business Unit</label>' +
-          '<select id="f-bu" required>' +
-            units.map(function(bu){ return opt(bu, bu, isEdit && bu === o.businessUnit); }).join('') +
-          '</select></div>' +
+          '<select id="f-bu"' + ((s.role === 'rep' && s.businessUnit) ? ' disabled' : '') + ' required>' +
+            units.map(function(bu){ return opt(bu, bu, isEdit ? bu === o.businessUnit : bu === (s.businessUnit || '')); }).join('') +
+          '</select>' +
+          ((s.role === 'rep' && s.businessUnit)
+            ? '<div class="field-hint">You raise quotes inside ' + escapeHtml(s.businessUnit) + '.</div>' : '') +
+        '</div>' +
       '</div>' +
 
       '<div class="field-row">' +
@@ -3148,7 +3405,8 @@ function renderDetailModal(){
 
           (linked.length
             ? '<div class="detail-block"><h4>Linked quotes on this deal</h4>' +
-              '<div class="field-hint" style="margin-bottom:8px;">Same underlying deal, quoted to a different partner. Reporting counts the highest-value quote once.</div>' +
+              '<div class="field-hint" style="margin-bottom:8px;">Same underlying deal, quoted to a different partner — they share Deal ID <span class="mono">' +
+              escapeHtml(o.opportunityId) + '</span>. Reporting counts the highest-value quote once.</div>' +
               linked.map(function(x){
                 return '<div class="kv"><span>' + escapeHtml(x.partnerName || 'No partner') +
                   ' <span class="mono" style="color:var(--text-faint);">· ' + escapeHtml(displayRef(x)) + '</span></span>' +
@@ -3234,7 +3492,7 @@ function detailActions(o, openActive){
   const out = [];
 
   if(!sent && o.status === 'open') out.push('<button class="btn btn-gold btn-sm" data-send-quote="' + id + '">Send Quote Now</button>');
-  if(sent) out.push('<button class="btn btn-gold btn-sm" data-gen-quote="' + id + '">Generate Quote Document</button>');
+  if(sent) out.push('<button class="btn btn-gold btn-sm" data-open-validity="' + id + '">Generate Quote Document</button>');
   if(sent) out.push('<button class="btn btn-primary btn-sm" data-email-quote="' + id + '">Email Quote</button>');
   if(o.status !== 'invoiced') out.push('<button class="btn btn-ghost btn-sm" data-edit-opp="' + id + '">Edit</button>');
   if(sent) out.push('<button class="btn btn-ghost btn-sm" data-duplicate-quote="' + id + '">Duplicate for Another Partner</button>');
@@ -3253,6 +3511,9 @@ function detailActions(o, openActive){
   if(openActive) out.push('<button class="btn btn-danger-ghost btn-sm" data-open-lost="' + id + '">Mark Closed Lost</button>');
   if(o.status === 'lost' || o.status === 'invoiced'){
     out.push('<button class="btn btn-ghost btn-sm" data-open-reopen="' + id + '">Reopen</button>');
+  }
+  if(canDelete(o)){
+    out.push('<button class="btn btn-danger-ghost btn-sm" data-delete-opp="' + id + '">Delete</button>');
   }
   return out.join('');
 }
@@ -3291,12 +3552,12 @@ function renderSendQuoteModal(){
 function renderDuplicateModal(){
   const src = currentOpp();
   if(!src) return '';
-  const units = STATE.refData.businessUnitMap[src.businessGroup] || [];
+  const units = businessUnitsAvailable(src.businessGroup);
   return overlay(
     modalHead('Duplicate for another partner — ' + escapeHtml(src.customerName), 'Source: ' + escapeHtml(displayRef(src))) +
     '<form id="duplicate-form"><div class="modal-body">' +
       modalErrorBlock() +
-      '<div class="field-hint" style="margin-bottom:14px;">Creates a brand new quote with its own TDQ number for the same customer, but its own partner, pricing and terms. Both share one Opportunity ID (' +
+      '<div class="field-hint" style="margin-bottom:14px;">Creates a brand new quote with its own TDQ number for the same customer, but its own partner, pricing and terms. Both share one <b>Deal ID</b> (' +
         escapeHtml(src.opportunityId || 'assigned on save') + ') so reporting counts the deal once, at the higher quote.</div>' +
       '<div class="field-row">' +
         '<div class="field"><label>Customer / End User name</label>' +
@@ -3490,6 +3751,40 @@ function renderInvoiceModal(){
   );
 }
 
+/* Validity has to be chosen deliberately: it is printed in the terms the
+   customer reads, and it drives when Vantage marks the quote expired. It used to
+   be a fixed 30 days in the document's small print regardless of the record. */
+function renderValidityModal(){
+  const o = currentOpp();
+  if(!o) return '';
+  const options = STATE.refData.quoteValidityOptions || [7, 14, 30, 45, 60, 90];
+  const current = Number(o.validityDays) || 0;
+  return overlay(
+    modalHead('Quote validity — ' + escapeHtml(o.customerName), escapeHtml(displayRef(o))) +
+    '<form id="validity-form"><div class="modal-body">' +
+      modalErrorBlock() +
+      '<div class="field-hint" style="margin-bottom:14px;">The document states how long the prices hold. ' +
+        'Whatever you choose is printed in the terms and recorded against the quote, so Vantage flags it as ' +
+        'expired on the same date the customer sees.</div>' +
+      '<div class="field"><label>Prices valid for</label>' +
+        '<select id="qv-days" required autofocus>' +
+          '<option value="">Select a validity period…</option>' +
+          options.map(function(d){
+            return '<option value="' + d + '"' + (d === current ? ' selected' : '') + '>' + d + ' days' +
+              (d === current ? ' (currently recorded)' : '') + '</option>';
+          }).join('') +
+        '</select>' +
+        '<div class="field-hint">Valid until ' +
+          '<span id="qv-until" class="mono">' + (current ? fmtDate(expiryDateOf(o)) : '—') + '</span>' +
+          ', counted from the date raised (' + fmtDate(o.dateRaised) + ').</div>' +
+      '</div>' +
+    '</div><div class="modal-foot">' +
+      '<button type="button" class="btn btn-ghost" data-close-modal="1">Cancel</button>' +
+      submitBtn('Generate quote document', 'Preparing…') +
+    '</div></form>', 'modal'
+  );
+}
+
 function renderReopenModal(){
   const o = currentOpp();
   if(!o) return '';
@@ -3540,6 +3835,12 @@ function renderMemberModal(){
             return '<option value="' + escapeHtml(bg) + '"' + (bg === m.businessGroup ? ' selected' : '') + '>' + escapeHtml(bg) + '</option>';
           }).join('') + '</select></div>' +
       '</div>' +
+      '<div class="field"><label>Business Unit</label><select id="mem-bu">' +
+        '<option value="">— Whole group (Heads and Admins) —</option>' +
+        (STATE.refData.businessUnitMap[m.businessGroup] || []).map(function(bu){
+          return '<option value="' + escapeHtml(bu) + '"' + (bu === m.businessUnit ? ' selected' : '') + '>' + escapeHtml(bu) + '</option>';
+        }).join('') + '</select>' +
+        '<div class="field-hint">Required for a Sales Rep — it decides which records they can see.</div></div>' +
     '</div><div class="modal-foot">' +
       '<button type="button" class="btn btn-ghost" data-close-modal="1">Cancel</button>' +
       submitBtn('Save changes', 'Saving…') +
@@ -3561,7 +3862,13 @@ function renderBulkModal(){
     modalHead('Bulk upload quotes', 'CSV or Excel') +
     '<div class="modal-body">' +
       modalErrorBlock() +
-      '<div class="field-hint" style="margin-bottom:12px;">Import a backlog in one go. Each row becomes a line item; give several rows the same <b>Quote Group</b> value to combine them into one multi-line quote. Every quote gets its own TDQ number. ' + scopeNote + '</div>' +
+      '<div class="field-hint" style="margin-bottom:12px;">Import a backlog in one go. Each row is <b>one line item</b>.<br>' +
+        '<b>Rows sharing an Opportunity Ref become one quote with several line items.</b> ' +
+        'A row with the Opportunity Ref left blank becomes a quote of its own. Every quote gets its own TDQ number.<br>' +
+        'The ref is only used to group the rows in your file — it is not a field on the quote, which is why ' +
+        'the Raise New Quote form has no equivalent: every line you add there already belongs to that one quote. ' +
+        'It is recorded in the quote\'s history so you can trace it back to your spreadsheet. ' +
+        scopeNote + '</div>' +
       '<div class="action-row" style="margin-bottom:16px;">' +
         '<button type="button" class="btn btn-ghost btn-sm" id="bulk-template-btn">Download CSV template</button>' +
         '<label class="btn btn-gold btn-sm" style="margin:0;">Choose file (.csv or .xlsx)' +
@@ -3636,7 +3943,7 @@ function stamp(){
 const EXPORT_COLUMNS = [
   ['Reference', function(o){ return displayRef(o); }],
   ['Quote sent', function(o){ return o.quoteSent === false ? 'No' : 'Yes'; }],
-  ['Opportunity ID', function(o){ return o.opportunityId; }],
+  ['Deal ID', function(o){ return o.opportunityId; }],
   ['Customer', function(o){ return o.customerName; }],
   ['Partner', function(o){ return o.partnerName; }],
   ['Contact person', function(o){ return o.contactPerson; }],
@@ -3786,7 +4093,13 @@ const HEADER_ALIASES = {
   orderType:        ['order type', 'type'],
   contactPerson:    ['contact person', 'contact', 'contact name'],
   contactEmail:     ['contact email', 'email'],
-  quoteGroup:       ['quote group', 'quote ref', 'quote reference', 'group id', 'line group'],
+  /* The column that says which lines belong to the same quote. Named
+     "Quote Group" originally, which nobody read as "the opportunity these lines
+     belong to" — so the preferred name is now Opportunity Ref, and every
+     earlier spelling still works so existing files keep importing. */
+  quoteGroup:       ['opportunity ref', 'opportunity reference', 'opportunity', 'opportunity id',
+                     'opp ref', 'deal', 'deal ref', 'quote group', 'quote ref', 'quote reference',
+                     'group id', 'line group'],
   itemDescription:  ['item description', 'description', 'product', 'product line', 'solution', 'item'],
   sku:              ['sku', 'product code', 'code', 'part number', 'part no'],
   quantity:         ['quantity', 'qty'],
@@ -3970,6 +4283,7 @@ function validateBulkGroup(group){
     ok: errors.length === 0 && lineItems.length > 0,
     errors: errors,
     rowLabel: rowLabel,
+    opportunityRef: first.quoteGroup || '',
     importNote: rows.map(function(r){ return r.importNote; }).filter(Boolean).join(' / '),
     data: {
       customerName: first.customerName, partnerName: first.partnerName,
@@ -4017,20 +4331,55 @@ function processBulkRows(rows){
   const valid = results.filter(function(r){ return r.ok; });
   const invalid = results.filter(function(r){ return !r.ok; });
   BULK_READY = valid.map(function(r){
-    return {rowLabel: r.rowLabel, importNote: r.importNote, data: r.data};
+    return {rowLabel: r.rowLabel, importNote: r.importNote, opportunityRef: r.opportunityRef, data: r.data};
   });
+
+  /* The commonest and most expensive mistake is leaving Opportunity Ref blank on
+     rows that belong to one quote: every line then imports as its own quote, and
+     there is no obvious sign anything is wrong. Spot the rows that look like they
+     belong together and say so before anything is written. */
+  const ungrouped = {};
+  parsedRows.forEach(function(r){
+    if(r.quoteGroup) return;
+    const key = String(r.customerName || '').toLowerCase() + '|' + String(r.businessGroup || '');
+    if(!ungrouped[key]) ungrouped[key] = [];
+    ungrouped[key].push(r.rowIndex);
+  });
+  const looksSplit = Object.keys(ungrouped)
+    .filter(function(k){ return ungrouped[k].length > 1; })
+    .map(function(k){ return {customer: k.split('|')[0], rows: ungrouped[k]}; });
 
   statusEl.innerHTML = '<b>' + rows.length + '</b> ' + pluralize(rows.length, 'row') + ' across <b>' +
     results.length + '</b> ' + pluralize(results.length, 'quote') +
     ' — <span style="color:var(--p1);font-weight:700;">' + valid.length + ' ready to import</span>' +
-    (invalid.length ? ', <span style="color:var(--danger);font-weight:700;">' + invalid.length + ' need fixing</span>' : '') + '.';
+    (invalid.length ? ', <span style="color:var(--danger);font-weight:700;">' + invalid.length + ' need fixing</span>' : '') + '.' +
+    (looksSplit.length
+      ? '<div style="margin-top:10px;padding:10px 12px;background:var(--p3-soft);border:1px solid var(--p3-line);' +
+        'border-radius:8px;color:#6B430A;line-height:1.55;">' +
+        '<b>Check the Opportunity Ref column.</b> ' +
+        looksSplit.length + ' ' + pluralize(looksSplit.length, 'customer') + ' ' +
+        (looksSplit.length === 1 ? 'has' : 'have') + ' several rows with no Opportunity Ref, so each row ' +
+        'will import as a <b>separate quote</b> rather than as line items on one:' +
+        '<ul style="margin:6px 0 0 18px;padding:0;">' +
+        looksSplit.slice(0, 5).map(function(g){
+          return '<li>rows ' + g.rows.join(', ') + ' — ' + escapeHtml(g.customer) + '</li>';
+        }).join('') +
+        (looksSplit.length > 5 ? '<li>and ' + (looksSplit.length - 5) + ' more</li>' : '') +
+        '</ul>' +
+        '<div style="margin-top:6px;">If they belong together, give those rows the same Opportunity Ref ' +
+        '(any text you like, e.g. <span class="mono">Q-NORTHGATE-01</span>) and upload again.</div>' +
+        '</div>'
+      : '');
 
-  previewEl.innerHTML = '<table><thead><tr><th>Row(s)</th><th>Customer</th><th>Partner</th>' +
+  previewEl.innerHTML = '<table><thead><tr><th>Row(s)</th><th>Opportunity Ref</th><th>Customer</th><th>Partner</th>' +
       '<th>Business Group</th><th>Business Unit</th><th>Rep</th><th>Line items</th>' +
       '<th class="num-cell">Total</th><th>P</th><th>Status</th></tr></thead><tbody>' +
     results.slice(0, 200).map(function(r){
       return '<tr>' +
         '<td>' + r.rowLabel + '</td>' +
+        '<td>' + (r.opportunityRef
+          ? '<span class="mono" style="font-size:11px;">' + escapeHtml(r.opportunityRef) + '</span>'
+          : '<span style="color:var(--text-faint);">— own quote</span>') + '</td>' +
         '<td>' + escapeHtml(r.data.customerName || '') + '</td>' +
         '<td>' + escapeHtml(r.data.partnerName || '—') + '</td>' +
         '<td>' + escapeHtml(r.data.businessGroup || '') + '</td>' +
@@ -4095,7 +4444,7 @@ function handleBulkFile(file){
 
 function downloadBulkTemplate(){
   const headers = ['Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
-    'Contact Person', 'Contact Email', 'Quote Group', 'Item Description', 'SKU', 'Quantity',
+    'Contact Person', 'Contact Email', 'Opportunity Ref', 'Item Description', 'SKU', 'Quantity',
     'Unit Price', 'Currency', 'Date Raised', 'Expected Close Date', 'Sales Rep', 'Probability',
     'Pipeline', 'Validity', 'Notes'];
   const today = todayStr();
@@ -4123,7 +4472,14 @@ function generateQuoteDocument(id){
   const lines = (d.lineItems && d.lineItems.length)
     ? d.lineItems
     : [{description: o.productLine || 'Quoted solution', sku: '', qty: 1, unitPrice: o.value, subtotal: o.value}];
-  const validity = Number(o.validityDays) || 30;
+  /* No fallback: the validity is chosen before this runs and stored on the
+     record, so a missing value is a bug worth surfacing rather than papering
+     over with a number the customer never agreed to. */
+  const validity = Number(o.validityDays);
+  if(!validity){
+    toast('This quote has no validity recorded — choose one before generating the document.', true);
+    return;
+  }
   const expiry = expiryDateOf(o);
 
   const win = window.open('', '_blank', 'width=880,height=1000');
@@ -4200,6 +4556,7 @@ function attr(el, name){ return el.getAttribute(name); }
 
 function upsertOpportunity(o){
   if(!o) return;
+  resetRenderMemo();
   const i = STATE.opportunities.findIndex(function(x){ return x.id === o.id; });
   if(i >= 0){
     STATE.opportunities[i] = Object.assign({}, STATE.opportunities[i], o);
@@ -4221,6 +4578,7 @@ function upsertLeak(l){
    missing `settings` or `refData` used to take the whole app down with a message
    that named neither — so every field falls back to something renderable. */
 function applyBootstrap(data){
+  resetRenderMemo();
   const d = data || {};
   const ref = d.refData || {};
   STATE.refData = {
@@ -4228,6 +4586,8 @@ function applyBootstrap(data){
     businessUnitMap: ref.businessUnitMap || {},
     orderTypes: ref.orderTypes || [],
     lossReasons: ref.lossReasons || [],
+    quoteValidityOptions: (ref.quoteValidityOptions && ref.quoteValidityOptions.length)
+      ? ref.quoteValidityOptions : [7, 14, 30, 45, 60, 90],
     roles: ref.roles || [
       {id: 'rep', label: 'Sales Representative'},
       {id: 'head', label: 'Business Group Head'},
@@ -4238,7 +4598,9 @@ function applyBootstrap(data){
   STATE.settings = {
     fxRate: Number(set.fxRate) || 1650,
     agingThresholdDays: Number(set.agingThresholdDays) || 30,
-    lostDeleteAfterDays: Number(set.lostDeleteAfterDays) || 90
+    lostDeleteAfterDays: Number(set.lostDeleteAfterDays) || 90,
+    mistakeWindowDays: Number(set.mistakeWindowDays) || 30,
+    repScope: set.repScope === 'own' ? 'own' : 'unit'
   };
   STATE.directory = d.directory || [];
   STATE.opportunities = d.opportunities || [];
@@ -4297,6 +4659,19 @@ async function ensureDetail(id){
     toast(String(err.message || err), true);
   }
 }
+async function loadImportBatches(){
+  STATE.importBatches = null;
+  render();
+  try{
+    const res = await rpc('listImportBatches', {});
+    STATE.importBatches = res.batches || [];
+  }catch(err){
+    STATE.importBatches = [];
+    toast(String(err.message || err), true);
+  }
+  render();
+}
+
 async function loadActivity(){
   STATE.activity = null;
   render();
@@ -4328,22 +4703,24 @@ function wireAll(){
   on('[data-nav]', 'click', function(e){
     STATE.view = attr(e.currentTarget, 'data-nav');
     STATE.filters.flag = null;
-    STATE.page = 1;
+    resetPages();
     document.body.classList.remove('nav-open');
     if(STATE.view === 'activity' && !STATE.activity){ loadActivity(); return; }
+    if(STATE.view === 'settings' && STATE.importBatches === null){ loadImportBatches(); return; }
     render();
   });
   on('[data-nav-filter]', 'click', function(e){
     STATE.view = 'list';
     STATE.filters.flag = attr(e.currentTarget, 'data-nav-filter');
     STATE.filters.status = 'open';
-    STATE.page = 1;
+    resetPages();
     render();
   });
-  on('[data-clear-flag]', 'click', function(){ STATE.filters.flag = null; STATE.page = 1; render(); });
+  on('[data-clear-flag]', 'click', function(){ STATE.filters.flag = null; resetPages(); render(); });
   on('[data-clear-filters]', 'click', function(){
-    STATE.filters = {bg: 'all', rep: 'all', status: 'open', q: '', flag: null};
-    STATE.page = 1;
+    STATE.filters = {bg: 'all', unit: 'all', rep: 'all', status: 'open', q: '',
+      flag: null, from: '', to: '', dateField: 'dateRaised'};
+    resetPages();
     render();
   });
 
@@ -4394,6 +4771,22 @@ function wireAll(){
     render();
   });
   on('[data-reload-activity]', 'click', function(){ loadActivity(); });
+  on('[data-undo-import]', 'click', async function(e){
+    const key = attr(e.currentTarget, 'data-undo-import');
+    const batch = (STATE.importBatches || []).filter(function(b){ return b.key === key; })[0];
+    if(!batch) return;
+    if(!confirm('Remove ' + batch.removable + ' of the ' + batch.total + ' records from this import?\n\n' +
+      (batch.blocked ? batch.blocked + ' will be kept because they have progressed or are too old.\n\n' : '') +
+      'This cannot be undone.')) return;
+    try{
+      const res = await mutate('Undoing import…', 'undoImportBatch', {key: key}, {});
+      await reloadAll(true);
+      STATE.importBatches = null;
+      loadImportBatches();
+      toast(res.removed + ' ' + pluralize(res.removed, 'record') + ' removed' +
+        (res.kept && res.kept.length ? ', ' + res.kept.length + ' kept' : ''));
+    }catch(err){ render(); }
+  });
 
   /* Openers */
   on('[data-open-new]', 'click', function(){
@@ -4443,7 +4836,13 @@ function wireAll(){
     STATE.modal = {type: 'member', userId: attr(e.currentTarget, 'data-edit-member')};
     STATE.modalError = null; render();
   });
-  on('[data-gen-quote]', 'click', function(e){ generateQuoteDocument(attr(e.currentTarget, 'data-gen-quote')); });
+  on('[data-open-validity]', 'click', async function(e){
+    const id = attr(e.currentTarget, 'data-open-validity');
+    await ensureDetail(id);
+    STATE.modal = {type: 'validity', id: id};
+    STATE.modalError = null;
+    render();
+  });
   on('[data-export-csv]', 'click', function(){ document.body.classList.remove('nav-open'); exportOpportunitiesCsv(); });
   on('[data-export-lines]', 'click', function(){ document.body.classList.remove('nav-open'); exportWithLineItemsCsv(); });
 
@@ -4456,15 +4855,22 @@ function wireAll(){
   const q = document.getElementById('filter-q');
   if(q) q.addEventListener('input', function(){
     STATE.filters.q = q.value;
-    STATE.page = 1;
+    resetPages();
     scheduleRender();
   });
-  const fbg = document.getElementById('filter-bg');
-  if(fbg) fbg.addEventListener('change', function(){ STATE.filters.bg = fbg.value; STATE.page = 1; render(); });
-  const frep = document.getElementById('filter-rep');
-  if(frep) frep.addEventListener('change', function(){ STATE.filters.rep = frep.value; STATE.page = 1; render(); });
-  const fstatus = document.getElementById('filter-status');
-  if(fstatus) fstatus.addEventListener('change', function(){ STATE.filters.status = fstatus.value; STATE.page = 1; render(); });
+  /* Every filter resets paging: staying on page 6 of a list that just shrank to
+     one page shows an empty table for no visible reason. */
+  [['filter-bg', 'bg'], ['filter-unit', 'unit'], ['filter-rep', 'rep'], ['filter-status', 'status'],
+   ['filter-date-field', 'dateField'], ['filter-from', 'from'], ['filter-to', 'to']]
+    .forEach(function(pair){
+      const el = document.getElementById(pair[0]);
+      if(!el) return;
+      el.addEventListener('change', function(){
+        STATE.filters[pair[1]] = el.value;
+        resetPages();
+        render();
+      });
+    });
 
   /* Sorting & paging */
   on('[data-sort]', 'click', function(e){
@@ -4474,17 +4880,19 @@ function wireAll(){
     }else{
       STATE.sort = {key: key, dir: 'asc'};
     }
+    resetPages();
     render();
   });
-  on('[data-page]', 'click', function(e){
-    STATE.page += (attr(e.currentTarget, 'data-page') === 'next' ? 1 : -1);
-    if(STATE.page < 1) STATE.page = 1;
+  on('[data-page-view]', 'click', function(e){
+    const view = attr(e.currentTarget, 'data-page-view');
+    const step = Number(attr(e.currentTarget, 'data-page-step')) || 0;
+    STATE.pages[view] = Math.max(1, pageOf(view) + step);
     render();
   });
   const pageSize = document.getElementById('page-size');
   if(pageSize) pageSize.addEventListener('change', function(){
     STATE.pageSize = Number(pageSize.value) || 25;
-    STATE.page = 1;
+    resetPages();
     render();
   });
 
@@ -4529,7 +4937,7 @@ function wireOpportunityForm(){
   const bg = document.getElementById('f-bg');
   const bu = document.getElementById('f-bu');
   if(bg && bu) bg.addEventListener('change', function(){
-    const units = STATE.refData.businessUnitMap[bg.value] || [];
+    const units = businessUnitsAvailable(bg.value);
     bu.innerHTML = units.map(function(u){
       return '<option value="' + escapeHtml(u) + '">' + escapeHtml(u) + '</option>';
     }).join('');
@@ -4775,6 +5183,41 @@ function wireSecondaryForms(){
     }catch(err){ render(); }
   });
 
+  const validityForm = document.getElementById('validity-form');
+  if(validityForm){
+    const daysSel = document.getElementById('qv-days');
+    const until = document.getElementById('qv-until');
+    const o = currentOpp();
+    /* Show the date the customer will read, as it is chosen. */
+    if(daysSel && until && o) daysSel.addEventListener('change', function(){
+      const days = Number(daysSel.value);
+      until.textContent = days
+        ? fmtDate(expiryDateOf(Object.assign({}, o, {validityDays: days})))
+        : '—';
+    });
+    validityForm.addEventListener('submit', async function(e){
+      e.preventDefault();
+      const id = modalId();
+      const days = Number(document.getElementById('qv-days').value);
+      if(!days){
+        STATE.modalError = 'Choose how long the prices are valid before generating the document.';
+        render();
+        return;
+      }
+      try{
+        const res = await mutate('Recording validity…', 'setQuoteValidity',
+          {id: id, validityDays: days}, {inModal: true});
+        upsertOpportunity(res.opportunity);
+        STATE.modal = {type: 'detail', id: id};
+        STATE.modalError = null;
+        render();
+        /* Print from the saved record, so document and Vantage cannot disagree. */
+        generateQuoteDocument(id);
+        toast('Quote document generated, valid ' + days + ' days');
+      }catch(err){ render(); }
+    });
+  }
+
   const reopenForm = document.getElementById('reopen-form');
   if(reopenForm) reopenForm.addEventListener('submit', async function(e){
     e.preventDefault();
@@ -4799,7 +5242,8 @@ function wireSecondaryForms(){
           name: document.getElementById('mem-name').value,
           email: document.getElementById('mem-email').value,
           role: document.getElementById('mem-role').value,
-          businessGroup: document.getElementById('mem-bg').value
+          businessGroup: document.getElementById('mem-bg').value,
+          businessUnit: document.getElementById('mem-bu').value
         }
       }, {inModal: true});
       upsertMember(res.member);
@@ -4827,7 +5271,8 @@ function wireSecondaryForms(){
                 data: {
           fxRate: document.getElementById('set-fx').value,
           agingThresholdDays: document.getElementById('set-aging').value,
-          lostDeleteAfterDays: document.getElementById('set-delete').value
+          lostDeleteAfterDays: document.getElementById('set-delete').value,
+          repScope: document.getElementById('set-rep-scope').value
         }
       }, {});
       STATE.settings = res.settings;
@@ -4865,6 +5310,22 @@ function wireRecordActions(){
     }catch(err){ render(); }
   });
 
+  on('[data-delete-opp]', 'click', async function(e){
+    const id = attr(e.currentTarget, 'data-delete-opp');
+    const o = STATE.opportunities.filter(function(x){ return x.id === id; })[0];
+    if(!o) return;
+    if(!confirm('Permanently delete ' + displayRef(o) + ' — ' + o.customerName + ', ' +
+      fmtMoney(o.value, o.currency) + '?\n\nIts line items, notes and history go with it. ' +
+      'A record of the deletion stays in the Activity Log. This cannot be undone.')) return;
+    try{
+      await mutate('Deleting…', 'deleteOpportunity', {id: id}, {});
+      STATE.opportunities = STATE.opportunities.filter(function(x){ return x.id !== id; });
+      STATE.activity = null;
+      closeModal();
+      toast(displayRef(o) + ' deleted');
+    }catch(err){ render(); }
+  });
+
   on('[data-delete-lost]', 'click', async function(e){
     const id = attr(e.currentTarget, 'data-delete-lost');
     const o = STATE.opportunities.filter(function(x){ return x.id === id; })[0];
@@ -4894,6 +5355,39 @@ async function doReprofile(id, pipeline){
 /* ---------------- Directory & compliance ---------------- */
 
 function wireDirectoryAndCompliance(){
+  const atmBg = document.getElementById('atm-bg');
+  const atmBu = document.getElementById('atm-bu');
+  const atmRole = document.getElementById('atm-role');
+  if(atmBg && atmBu) atmBg.addEventListener('change', function(){
+    const units = STATE.refData.businessUnitMap[atmBg.value] || [];
+    atmBu.innerHTML = units.map(function(bu){
+      return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>';
+    }).join('');
+  });
+  /* Only a rep is pinned to a unit, so grey it out for the others rather than
+     letting someone set a value that will be ignored. */
+  if(atmRole && atmBu){
+    const syncUnitEnabled = function(){
+      atmBu.disabled = atmRole.value !== 'rep';
+    };
+    atmRole.addEventListener('change', syncUnitEnabled);
+    syncUnitEnabled();
+  }
+
+  const memBg = document.getElementById('mem-bg');
+  const memBu = document.getElementById('mem-bu');
+  const memRole = document.getElementById('mem-role');
+  if(memBg && memBu) memBg.addEventListener('change', function(){
+    const units = STATE.refData.businessUnitMap[memBg.value] || [];
+    memBu.innerHTML = '<option value="">— Whole group (Heads and Admins) —</option>' +
+      units.map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('');
+  });
+  if(memRole && memBu){
+    const syncMemUnit = function(){ memBu.disabled = memRole.value !== 'rep'; };
+    memRole.addEventListener('change', syncMemUnit);
+    syncMemUnit();
+  }
+
   const addMember = document.getElementById('add-member-form');
   if(addMember) addMember.addEventListener('submit', async function(e){
     e.preventDefault();
@@ -4904,7 +5398,8 @@ function wireDirectoryAndCompliance(){
           name: nameEl.value,
           email: document.getElementById('atm-email').value,
           role: document.getElementById('atm-role').value,
-          businessGroup: document.getElementById('atm-bg').value
+          businessGroup: document.getElementById('atm-bg').value,
+          businessUnit: document.getElementById('atm-bu').value
         }
       }, {});
       upsertMember(res.member);
