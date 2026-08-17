@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PaySync | Payroll Platform</title>
+<title>PaySync | Payroll Platform | TD Africa</title>
 <style>
 /* ============================================================
    PaySync — the prototype's palette and type scale, unchanged.
@@ -12,36 +12,69 @@
    .role-badge, .rb-*, .form-panel, .btn-sm and .btn-r, which existed nowhere
    at all. Three whole screens rendered unstyled because of it.
    ============================================================ */
+/* ══════════════════════ BRAND — TD AFRICA ══════════════════════
+   Everything that differs between one company's PaySync and another's lives
+   between this marker and END BRAND, and in the BRAND object in the script
+   below. Nothing outside those two blocks carries a brand colour or name.
+
+   To brand a new deployment: copy this file, replace these two blocks, and
+   clear PAYSYNC_BACKEND_URL. `diff` the two files afterwards — anything
+   outside the brand blocks that differs is drift, and should be reconciled.
+   ═══════════════════════════════════════════════════════════════ */
 :root{
+  /* Accent — primary actions, active nav, links */
   --w:#6B1F2A;--wd:#4A1320;--wm:#8B2636;--wl:#F4ECED;
+  --accent-ink:#6B1F2A;         /* accent as TEXT on a light surface */
+  --on-accent:#FFFFFF;          /* text ON the accent colour */
+  --logo-bg:#F4ECED;--logo-fg:#4A1320;
+  --on-tint:#4A1320;              /* text on a --wl tinted panel */
+  --login-logo-bg:#4A1320;--login-logo-fg:#FFFFFF;
+  --login-grad:linear-gradient(160deg,#4A1320,#6B1F2A 55%,#8B2636);
+  --focus-ring:0 0 0 3px rgba(107,31,42,.09);
+  /* Surfaces */
   --bg:#EEEAE6;--sf:#FFFFFF;--bdr:#DDD8D3;--lt:#F6F4F1;
-  --t1:#181818;--t2:#545250;--t3:#9A9794;
+  --row-hover:#EEF2FF;
+  --input-bg:#FFFFFF;
+  --closed-bg:#EFEBE9;--closed-bdr:#BCAAA4;
+  --mon-closed:#3A2F2C;           /* period chip when the month is closed */
+  --toast-ok:#1B5E20;--toast-err:#B71C1C;
+  /* Text */
+  --t1:#181818;--t2:#545250;--t3:#767270;
+  /* Semantic — a dark brand needs darker tints, which is why they are here */
   --grn:#1B5E20;--gnl:#EAF3DE;--gnm:#2E7D32;
   --red:#B71C1C;--rdl:#FFEBEE;
   --amb:#BF360C;--aml:#FBE9E7;
   --blu:#0D47A1;--bll:#E3F2FD;
   --pur:#4527A0;--pul:#EDE7F6;
   --tl:#37474F;--tll:#ECEFF1;
-  --gld:#F57F17;--gdl:#FFF8E1;
+  --gld:#9A530B;--gdl:#FFF8E1;
+  --neutral-bg:#EEECEA;--neutral-fg:#3A3835;
+  /* Payslip column headers */
+  --ps-pay:#1B5E20;--ps-ded:#9C1B1B;--ps-sec:#185FA5;--ps-sded:#1B3A6B;
+  /* Charts */
+  --chart-prior-pay:#B5D4F4;--chart-this-pay:#6B1F2A;
+  --chart-prior-sec:#CE93D8;--chart-this-sec:#4527A0;
+  /* Shape */
   --r:9px;--r2:5px;--sh:0 1px 3px rgba(0,0,0,.07);
 }
+/* ════════════════════════ END BRAND ════════════════════════ */
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',system-ui,Arial,sans-serif;font-size:13px;color:var(--t1);background:var(--bg)}
 .top{background:var(--wd);color:#fff;min-height:54px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:400;box-shadow:0 2px 12px rgba(0,0,0,.3);gap:12px;flex-wrap:wrap}
 .top-l{display:flex;align-items:center;gap:14px}
-.logo{width:38px;height:38px;background:var(--wl);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:var(--wd);flex-shrink:0}
+.logo{width:38px;height:38px;background:var(--logo-bg);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:var(--logo-fg);flex-shrink:0}
 .top-h1{font-size:14.5px;font-weight:700}.top-sub{font-size:10px;opacity:.55;margin-top:1px}
 .top-r{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .top-mon{background:var(--wm);border-radius:var(--r2);padding:5px 12px;font-size:12px;font-weight:700;border:none;color:#fff;cursor:pointer;font-family:inherit}
-.top-mon:hover{background:var(--w)}
-.top-mon.closed{background:#3A2F2C}
+.top-mon:hover{background:var(--w);color:var(--on-accent)}
+.top-mon.closed{background:var(--mon-closed)}
 .top-user{display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.12);border-radius:20px;padding:4px 12px 4px 8px;cursor:pointer;border:none;color:#fff;font-family:inherit}
 .top-user:hover{background:rgba(255,255,255,.22)}
-.top-av{width:26px;height:26px;background:var(--wl);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--wd)}
+.top-av{width:26px;height:26px;background:var(--logo-bg);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--logo-fg)}
 .top-un{font-size:11.5px;font-weight:600}
 .nav{background:var(--sf);border-bottom:2px solid var(--bdr);display:flex;padding:0 22px;position:sticky;top:54px;z-index:300;overflow-x:auto}
 .nb{padding:13px 15px;border:none;background:transparent;cursor:pointer;font-size:12.5px;color:var(--t2);border-bottom:3px solid transparent;font-weight:500;white-space:nowrap;transition:all .13s;position:relative;font-family:inherit}
-.nb:hover{background:var(--lt);color:var(--t1)}.nb.on{color:var(--w);border-bottom-color:var(--w);font-weight:700}
+.nb:hover{background:var(--lt);color:var(--t1)}.nb.on{color:var(--accent-ink);border-bottom-color:var(--w);font-weight:700}
 .nb-dot{position:absolute;top:9px;right:8px;min-width:7px;height:7px;padding:0 3px;background:var(--red);border-radius:6px;color:#fff;font-size:8px;line-height:7px;font-weight:700}
 .content{padding:20px 22px;max-width:1600px;margin:0 auto}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
@@ -50,21 +83,21 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;font-size:13px;color:var(
 .kpi-l{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
 .kpi-v{font-size:20px;font-weight:700;line-height:1.1;word-break:break-word}
 .kpi-s{font-size:10px;color:var(--t3);margin-top:4px}
-.kpi.wn .kpi-v{color:var(--w)}.kpi.gn .kpi-v{color:var(--grn)}.kpi.bl .kpi-v{color:var(--blu)}
+.kpi.wn .kpi-v{color:var(--accent-ink)}.kpi.gn .kpi-v{color:var(--grn)}.kpi.bl .kpi-v{color:var(--blu)}
 .kpi.rd .kpi-v{color:var(--red)}.kpi.am .kpi-v{color:var(--amb)}.kpi.pr .kpi-v{color:var(--pur)}
 .card{background:var(--sf);border:1px solid var(--bdr);border-radius:var(--r);padding:15px 16px;box-shadow:var(--sh)}
 .card-h{font-size:13px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bdr)}
 .ctrls{display:flex;gap:7px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
-.ctrls input[type=text],.ctrls input[type=date],.ctrls input[type=number]{padding:7px 11px;border:1px solid var(--bdr);border-radius:var(--r2);font-size:12px;background:var(--sf);color:var(--t1);outline:none;font-family:inherit}
+.ctrls input[type=text],.ctrls input[type=date],.ctrls input[type=number]{padding:7px 11px;border:1px solid var(--bdr);border-radius:var(--r2);font-size:12px;background:var(--input-bg);color:var(--t1);outline:none;font-family:inherit}
 .ctrls input[type=text]{width:210px}
 .ctrls input:focus,.ctrls select:focus{border-color:var(--w)}
-.ctrls select{padding:7px 11px;border:1px solid var(--bdr);border-radius:var(--r2);font-size:12px;background:var(--sf);color:var(--t1);cursor:pointer;outline:none;font-family:inherit}
+.ctrls select{padding:7px 11px;border:1px solid var(--bdr);border-radius:var(--r2);font-size:12px;background:var(--input-bg);color:var(--t1);cursor:pointer;outline:none;font-family:inherit}
 .ctrls label{font-size:11px;color:var(--t3)}
 .chip{font-size:11px;padding:4px 10px;border-radius:20px;border:1px solid var(--bdr);color:var(--t3);background:var(--lt);white-space:nowrap}
 .btn{padding:7px 14px;border-radius:var(--r2);font-size:12px;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap;font-family:inherit}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-w{background:var(--sf);color:var(--w);border:1.5px solid var(--w)}.btn-w:hover:not(:disabled){background:var(--w);color:#fff}
-.btn-f{background:var(--w);color:#fff;border:1.5px solid var(--w)}.btn-f:hover:not(:disabled){background:var(--wd)}
+.btn-w{background:var(--sf);color:var(--accent-ink);border:1.5px solid var(--w)}.btn-w:hover:not(:disabled){background:var(--w);color:var(--on-accent)}
+.btn-f{background:var(--w);color:var(--on-accent);border:1.5px solid var(--w)}.btn-f:hover:not(:disabled){background:var(--wd)}
 .btn-g{background:var(--sf);color:var(--grn);border:1.5px solid var(--grn)}.btn-g:hover:not(:disabled){background:var(--grn);color:#fff}
 /* D16: .btn-sm and .btn-r were used on every Delete / Apply / Payslip button and defined nowhere. */
 .btn-sm{padding:3px 9px;font-size:10px;border-radius:4px;font-weight:600}
@@ -77,16 +110,16 @@ thead{position:sticky;top:0;z-index:5}
 .hg{background:var(--wm);color:#fff;padding:5px 9px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;text-align:center;border-right:1px solid rgba(255,255,255,.1)}
 .hc{background:var(--wd);color:#fff;padding:7px 9px;white-space:nowrap;font-weight:500;font-size:11px;border-right:1px solid rgba(255,255,255,.06);text-align:left}
 .hc.r{text-align:right}.hc.c{text-align:center}
-.hc.sortable{cursor:pointer;user-select:none}.hc.sortable:hover{background:var(--w)}
+.hc.sortable{cursor:pointer;user-select:none}.hc.sortable:hover{background:var(--w);color:var(--on-accent)}
 .hc .sort-ind{opacity:.5;font-size:9px;margin-left:3px}
 tbody tr:nth-child(even){background:var(--lt)}
-tbody tr:hover{background:#EEF2FF!important}
+tbody tr:hover{background:var(--row-hover)!important}
 td{padding:6px 9px;border-bottom:1px solid #EDEBE8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 td.r{text-align:right;font-variant-numeric:tabular-nums}
 td.c{text-align:center}
 td.earn{background:var(--gnl);color:var(--grn);text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
 td.ded{background:var(--rdl);color:var(--red);text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
-td.net{background:var(--wl);color:var(--wd);text-align:right;font-weight:800;font-size:12px;font-variant-numeric:tabular-nums}
+td.net{background:var(--wl);color:var(--on-tint);text-align:right;font-weight:800;font-size:12px;font-variant-numeric:tabular-nums}
 td.emp-acct{background:var(--gdl);color:var(--gld);text-align:right;font-weight:700;font-size:11px;font-variant-numeric:tabular-nums}
 td.nm{font-weight:600;max-width:190px}
 td.nm.exited{text-decoration:line-through;color:var(--red)}
@@ -95,16 +128,16 @@ td.nm.newhire{color:var(--grn)}
 td.muted{font-size:10px;color:var(--t3)}
 .tf{padding:9px 13px;background:var(--wd);color:#fff;font-weight:700;font-size:11.5px;display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
 .bdg{display:inline-flex;align-items:center;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:700;white-space:nowrap}
-.bACT{background:#EEECEA;color:#3A3835}.bNEW{background:var(--gnl);color:var(--grn)}
+.bACT{background:var(--neutral-bg);color:var(--neutral-fg)}.bNEW{background:var(--gnl);color:var(--grn)}
 .bEXI{background:var(--rdl);color:var(--red)}.bSUS{background:var(--aml);color:var(--amb)}
 .bSAL{background:var(--pul);color:var(--pur)}.bSUP{background:var(--tll);color:var(--tl)}
 .bTDS{background:var(--gdl);color:var(--gld)}.bINF{background:var(--bll);color:var(--blu)}
 .fp,.form-panel{background:var(--sf);border:1px solid var(--bdr);border-radius:var(--r);padding:18px 20px;margin-bottom:16px;box-shadow:var(--sh)}
-.fp h3,.form-panel h3{font-size:13.5px;font-weight:700;margin-bottom:14px;color:var(--w)}
+.fp h3,.form-panel h3{font-size:13.5px;font-weight:700;margin-bottom:14px;color:var(--accent-ink)}
 .form-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:10px}
 .fld{display:flex;flex-direction:column;gap:4px;min-width:0}
 .fld label{font-size:11px;font-weight:600;color:var(--t2)}
-.fld input,.fld select,.fld textarea{padding:8px 10px;border:1px solid var(--bdr);border-radius:var(--r2);font-size:12px;color:var(--t1);background:var(--sf);outline:none;font-family:inherit;min-width:0}
+.fld input,.fld select,.fld textarea{padding:8px 10px;border:1px solid var(--bdr);border-radius:var(--r2);font-size:12px;color:var(--t1);background:var(--input-bg);outline:none;font-family:inherit;min-width:0}
 .fld input:focus,.fld select:focus,.fld textarea:focus{border-color:var(--w)}
 .fld .hint{font-size:10px;color:var(--t3)}
 .fld.wide{grid-column:1/-1}
@@ -115,7 +148,7 @@ td.muted{font-size:10px;color:var(--t3)}
 .rb-ADMIN{background:var(--rdl);color:var(--red)}
 .rb-HR{background:var(--tll);color:var(--tl)}
 .rb-FINANCE{background:var(--pul);color:var(--pur)}
-.rb-VIEW{background:#EEECEA;color:#3A3835}
+.rb-VIEW{background:var(--neutral-bg);color:var(--neutral-fg)}
 .bu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:16px}
 .buc{background:var(--sf);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;border-left:5px solid var(--w);box-shadow:var(--sh)}
 .buc-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px}
@@ -131,14 +164,14 @@ td.muted{font-size:10px;color:var(--t3)}
 .rr:last-child{border:none}.rr.calc{background:var(--wl)}.rr.var{background:var(--aml);font-weight:700}.rr.sub-t{background:var(--lt);font-weight:700}
 .rref{font-size:10px;color:var(--t3);width:26px;flex-shrink:0}.rlbl{flex:1;min-width:0}
 .rval{font-weight:700;min-width:150px;text-align:right;font-variant-numeric:tabular-nums}
-.rval.calc{color:var(--w)}.rval.var{color:var(--amb)}
-.sec-title{font-size:15px;font-weight:700;margin-bottom:14px;color:var(--wd);padding-bottom:8px;border-bottom:2px solid var(--wl);display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap}
+.rval.calc{color:var(--accent-ink)}.rval.var{color:var(--amb)}
+.sec-title{font-size:15px;font-weight:700;margin-bottom:14px;color:var(--on-tint);padding-bottom:8px;border-bottom:2px solid var(--wl);display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap}
 .sec-title .sub{font-size:11px;font-weight:400;color:var(--t3)}
 /* Period bar — on EVERY screen now, not three of twelve (defect D20). */
-.month-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 14px;background:var(--wl);border:1px solid var(--bdr);border-radius:8px;font-size:12px;color:var(--wd);flex-wrap:wrap}
+.month-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 14px;background:var(--wl);border:1px solid var(--bdr);border-radius:8px;font-size:12px;color:var(--on-tint);flex-wrap:wrap}
 .month-bar .sep{color:var(--t3)}
 .month-bar .spacer{margin-left:auto}
-.month-bar.closed{background:#EFEBE9;border-color:#BCAAA4}
+.month-bar.closed{background:var(--closed-bg);border-color:var(--closed-bdr)}
 .assert{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:20px;font-size:10.5px;font-weight:700}
 .assert.ok{background:var(--gnl);color:var(--grn)}
 .assert.bad{background:var(--rdl);color:var(--red)}
@@ -159,7 +192,7 @@ td.muted{font-size:10px;color:var(--t3)}
 .alert.warn{background:var(--gdl);border:1px solid var(--gld);color:var(--amb)}
 .alert .acts{display:flex;gap:6px;flex-shrink:0}
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:900;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto}
-.mdl{background:#fff;border-radius:12px;width:min(720px,100%);box-shadow:0 24px 80px rgba(0,0,0,.35);overflow:hidden;margin:auto}
+.mdl{background:var(--sf);border-radius:12px;width:min(720px,100%);box-shadow:0 24px 80px rgba(0,0,0,.35);overflow:hidden;margin:auto}
 .mdl.wide{width:min(980px,100%)}
 .mdl.narrow{width:min(460px,100%)}
 .mdl-h{background:var(--wd);color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;gap:10px}
@@ -170,23 +203,23 @@ td.muted{font-size:10px;color:var(--t3)}
 .mdl-b{padding:18px 20px;max-height:70vh;overflow-y:auto}
 .mdl-f{padding:12px 20px;background:var(--lt);border-top:1px solid var(--bdr);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;align-items:center}
 .mdl-f .left{margin-right:auto;font-size:11px;color:var(--t3)}
-.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid currentColor;opacity:.55;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .busy{position:fixed;bottom:18px;right:18px;background:var(--wd);color:#fff;padding:9px 16px;border-radius:22px;font-size:12px;z-index:950;box-shadow:0 6px 24px rgba(0,0,0,.28);display:flex;gap:8px;align-items:center}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);padding:10px 18px;border-radius:8px;font-size:12.5px;z-index:960;box-shadow:0 6px 24px rgba(0,0,0,.28);max-width:min(640px,92vw)}
-.toast.ok{background:var(--grn);color:#fff}.toast.err{background:var(--red);color:#fff}
+.toast.ok{background:var(--toast-ok);color:#fff}.toast.err{background:var(--toast-err);color:#fff}
 /* Sign-in */
-.login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(160deg,#4A1320,#6B1F2A 55%,#8B2636)}
-.login-card{background:#fff;border-radius:14px;width:min(430px,100%);padding:30px 30px 26px;box-shadow:0 30px 90px rgba(0,0,0,.4)}
-.login-logo{width:52px;height:52px;background:var(--wd);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px;color:#fff;margin-bottom:16px}
-.login-card h1{font-size:19px;font-weight:800;color:var(--wd)}
+.login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--login-grad)}
+.login-card{background:var(--sf);border-radius:14px;width:min(430px,100%);padding:30px 30px 26px;box-shadow:0 30px 90px rgba(0,0,0,.4)}
+.login-logo{width:52px;height:52px;background:var(--login-logo-bg);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px;color:var(--login-logo-fg);margin-bottom:16px}
+.login-card h1{font-size:19px;font-weight:800;color:var(--t1)}
 .login-card .lede{font-size:12.5px;color:var(--t2);margin:6px 0 20px;line-height:1.6}
-.login-card input{width:100%;padding:11px 13px;border:1px solid var(--bdr);border-radius:7px;font-size:14px;outline:none;font-family:inherit}
-.login-card input:focus{border-color:var(--w);box-shadow:0 0 0 3px rgba(107,31,42,.09)}
+.login-card input{width:100%;padding:11px 13px;border:1px solid var(--bdr);border-radius:7px;font-size:14px;outline:none;font-family:inherit;background:var(--input-bg);color:var(--t1)}
+.login-card input:focus{border-color:var(--w);box-shadow:var(--focus-ring)}
 .login-card input.code{letter-spacing:9px;text-align:center;font-size:22px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
 .login-card .btn{width:100%;justify-content:center;padding:11px;font-size:13.5px;margin-top:14px}
 .login-meta{font-size:11px;color:var(--t3);margin-top:14px;line-height:1.6;text-align:center}
-.login-link{background:none;border:none;color:var(--w);cursor:pointer;font-size:11.5px;text-decoration:underline;font-family:inherit;padding:0}
+.login-link{background:none;border:none;color:var(--accent-ink);cursor:pointer;font-size:11.5px;text-decoration:underline;font-family:inherit;padding:0}
 .login-err{background:var(--rdl);border:1px solid var(--red);color:var(--red);border-radius:7px;padding:10px 12px;font-size:12px;margin-top:14px;line-height:1.55}
 .diag{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.55;background:#1D1B1A;color:#E8E4E0;padding:14px;border-radius:8px;overflow-x:auto;max-height:340px;overflow-y:auto}
 /* Charts drawn as inline SVG — the prototype pulled Chart.js from a CDN, so a
@@ -203,12 +236,12 @@ td.muted{font-size:10px;color:var(--t3)}
    so the payslip modal rendered completely unstyled inside the app. */
 .ps-emp{background:var(--wl);padding:12px 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;border-bottom:2px solid var(--w)}
 .ps-emp-f{font-size:10px;color:var(--t3);margin-bottom:2px}
-.ps-emp-v{font-size:12px;font-weight:700;color:var(--wd);word-break:break-word}
+.ps-emp-v{font-size:12px;font-weight:700;color:var(--on-tint);word-break:break-word}
 .ps-body{display:grid;grid-template-columns:1fr 1fr}
 .ps-col{border-right:1px solid var(--bdr)}.ps-col:last-child{border-right:none}
 .ps-col-h{padding:9px 16px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#fff}
-.ps-col-h.pay{background:#1B5E20}.ps-col-h.ded{background:#9C1B1B}
-.ps-col-h.sec{background:#185FA5}.ps-col-h.sded{background:#1B3A6B}
+.ps-col-h.pay{background:var(--ps-pay)}.ps-col-h.ded{background:var(--ps-ded)}
+.ps-col-h.sec{background:var(--ps-sec)}.ps-col-h.sded{background:var(--ps-sded)}
 .ps-col-h.adj{background:var(--amb)}
 .ps-line{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 16px;border-bottom:1px solid var(--lt);font-size:11.5px}
 .ps-line:nth-child(even){background:var(--lt)}
@@ -217,8 +250,8 @@ td.muted{font-size:10px;color:var(--t3)}
 .ps-line span:last-child{font-variant-numeric:tabular-nums;white-space:nowrap}
 .ps-line small{font-size:9px;opacity:.6}
 .ps-net{background:var(--wd);color:#fff;padding:10px 16px;font-size:13px;font-weight:800;display:flex;justify-content:space-between;gap:10px}
-.ps-net.sec{background:#0D47A1}
-.ps-grand{background:var(--grn);color:#fff;padding:13px 20px;font-size:15px;font-weight:800;display:flex;justify-content:space-between;gap:10px}
+.ps-net.sec{background:var(--blu)}
+.ps-grand{background:var(--gnm);color:#fff;padding:13px 20px;font-size:15px;font-weight:800;display:flex;justify-content:space-between;gap:10px}
 .ps-foot{padding:10px 20px;font-size:11px;color:var(--t2);background:var(--lt);line-height:1.6}
 @media(max-width:900px){.g2,.bu-grid{grid-template-columns:1fr}}
 @media(max-width:680px){.ps-body{grid-template-columns:1fr}.ps-emp{grid-template-columns:1fr 1fr}}
@@ -254,6 +287,29 @@ const PAYSYNC_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzoKwYMSNdQ
 /* ============================================================
    ▲▲▲  NOTHING BELOW HERE NEEDS EDITING  ▲▲▲
    ============================================================ */
+
+/* ══════════════════════ BRAND — TD AFRICA ══════════════════════
+   The second half of the brand block. Colours live in :root above; the words
+   and the chart palette live here. Nothing else in this file names a company.
+   ═══════════════════════════════════════════════════════════════ */
+const BRAND = {
+  org: 'TD Africa',
+  app: 'PaySync',
+  tagline: 'Payroll Platform',
+  logo: 'PS',
+  /* Shown on the payslip. The server sends its own copy on emailed payslips —
+     set orgName and orgAddress on the Settings tab so the two agree. */
+  address: 'No.5 Bourdillon Road, Ikoyi, Lagos',
+  /* Business Group identity colours. Keys must match the businessGroup rows on
+     the RefData tab; anything unmatched falls back to --t3. */
+  bgColours: {
+    'MOBILE':'#6B1F2A','ENTERPRISE SOLUTIONS ALPHA':'#185FA5',
+    'MAINSTREAM':'#1D9E75','ENTERPRISE SOLUTIONS BETA':'#BA7517',
+    'MODERN LIFESTYLE SOLUTIONS':'#534AB7','SOFTWARES':'#C55200',
+    'ALT COMPUTING':'#1B5E20','TD SERVICES':'#888780'
+  }
+};
+/* ════════════════════════ END BRAND ════════════════════════ */
 
 function backendUrl(){ return String(PAYSYNC_BACKEND_URL || '').trim(); }
 
@@ -833,6 +889,21 @@ function renderAlerts(){
       (STATE.saveError.retry ? '<button class="btn btn-sm btn-r" data-act="retry-save">Try again</button>' : '') +
       '<button class="btn btn-sm btn-ghost" data-act="dismiss-save">Dismiss</button></div></div>';
   }
+  /* A branded copy pointed at another company's Sheet is the worst outcome
+     available here, and the easiest to cause with a copy-paste: Task Systems
+     staff would be looking at TD Africa's payroll under a Task Systems
+     header. The server reports whose Sheet this is; if it disagrees with this
+     file's BRAND block, say so loudly rather than rendering it. */
+  if(STATE.settings && STATE.settings.orgName &&
+     STATE.settings.orgName.trim().toLowerCase() !== BRAND.org.trim().toLowerCase()){
+    html += '<div class="alert err"><div><strong>This page is branded for ' +
+      esc(BRAND.org) + ', but the Google Sheet behind it belongs to ' +
+      esc(STATE.settings.orgName) + '.</strong><br>' +
+      'One of the two is wrong, and the figures below are ' +
+      esc(STATE.settings.orgName) + '\u2019s. Either this copy is pointed at the wrong ' +
+      'backend — check PAYSYNC_BACKEND_URL near the top of the file — or the ' +
+      'organisation name on the Sheet\u2019s Settings tab needs correcting.</div></div>';
+  }
   if(STATE.staleRevision){
     /* The poll never re-renders over an open form. It sets this instead, and
        the user reloads when they are ready. Vantage lost a half-typed quote to
@@ -848,7 +919,7 @@ function renderAlerts(){
 /* ---------------- Fatal / unlock ---------------- */
 function renderFatal(){
   return '<div class="login"><div class="login-card">' +
-    '<div class="login-logo">PS</div>' +
+    '<div class="login-logo">' + esc(BRAND.logo) + '</div>' +
     '<h1>PaySync cannot start</h1>' +
     '<div class="login-err">' + esc(STATE.fatalError) + '</div>' +
     '<button class="btn btn-w" data-act="conn-check" style="width:100%;margin-top:14px">Run connection check</button>' +
@@ -859,7 +930,7 @@ function renderFatal(){
 
 function renderUnlock(){
   return '<div class="login"><div class="login-card">' +
-    '<div class="login-logo">PS</div>' +
+    '<div class="login-logo">' + esc(BRAND.logo) + '</div>' +
     '<h1>Access code</h1>' +
     '<p class="lede">This PaySync Sheet is behind a shared access code. Enter it once and this ' +
       'browser will remember it.</p>' +
@@ -916,10 +987,10 @@ function renderLogin(){
   }
 
   return '<div class="login"><div class="login-card">' +
-    '<div class="login-logo">PS</div>' + body +
+    '<div class="login-logo">' + esc(BRAND.logo) + '</div>' + body +
     (L.error ? '<div class="login-err">' + esc(L.error) + '</div>' : '') +
     '<div class="login-meta" style="margin-top:18px;border-top:1px solid var(--bdr);padding-top:12px">' +
-      'TD Africa · PaySync &nbsp;·&nbsp; ' +
+      esc(BRAND.org) + ' · ' + esc(BRAND.app) + ' &nbsp;·&nbsp; ' +
       '<button class="login-link" data-act="conn-check">Connection check</button></div>' +
     (STATE.diagnostics ? '<div class="diag" style="margin-top:12px">' + esc(STATE.diagnostics.join('\n')) + '</div>' : '') +
     '</div></div>';
@@ -933,8 +1004,8 @@ function renderTopBar(){
   const closed = STATE.periodRow && STATE.periodRow.status === 'CLOSED';
   const counts = staffCounts();
   return '<div class="top">' +
-    '<div class="top-l"><div class="logo">PS</div><div>' +
-      '<div class="top-h1">PaySync &mdash; Payroll Platform</div>' +
+    '<div class="top-l"><div class="logo">' + esc(BRAND.logo) + '</div><div>' +
+      '<div class="top-h1">' + esc(BRAND.app) + ' &mdash; ' + esc(BRAND.tagline) + '</div>' +
       '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' + counts.sales + ' sales &nbsp;|&nbsp; ' +
         counts.support + ' support &nbsp;|&nbsp; ' + counts.tds + ' TD Services &nbsp;|&nbsp; ' +
         'all figures in naira (' + NAIRA + ')</div>' +
@@ -1159,20 +1230,14 @@ function stackedBarChart(rows, opts){
           '" fill="' + attr(r.colour) + '" opacity="0.38"/>';
     }).join('') +
     '</svg>' +
-    '<div class="legend"><span><i style="background:var(--wd)"></i>Direct</span>' +
-      '<span><i style="background:var(--wd);opacity:.38"></i>Indirect (allocated)</span></div>' +
+    '<div class="legend"><span><i style="background:var(--w)"></i>Direct</span>' +
+      '<span><i style="background:var(--w);opacity:.38"></i>Indirect (allocated)</span></div>' +
     '<div class="legend">' + rows.map(function(r){
       return '<span><i style="background:' + attr(r.colour) + '"></i>' + esc(r.label) + '</span>';
     }).join('') + '</div>';
 }
 
-const BG_COLOURS = {
-  'MOBILE':'#6B1F2A','ENTERPRISE SOLUTIONS ALPHA':'#185FA5',
-  'MAINSTREAM':'#1D9E75','ENTERPRISE SOLUTIONS BETA':'#BA7517',
-  'MODERN LIFESTYLE SOLUTIONS':'#534AB7','SOFTWARES':'#C55200',
-  'ALT COMPUTING':'#1B5E20','TD SERVICES':'#888780'
-};
-function bgColour(bg){ return BG_COLOURS[bg] || '#888780'; }
+function bgColour(bg){ return BRAND.bgColours[bg] || 'var(--t3)'; }
 
 function viewDashboard(){
   const r = STATE.reconciliation;
@@ -1194,10 +1259,10 @@ function viewDashboard(){
   ];
 
   const priorSeries = [
-    {label:'Prior pay', value:r.payroll.prior, colour:'#B5D4F4'},
-    {label:'This pay', value:r.payroll.computed, colour:'#6B1F2A'},
-    {label:'Prior sec', value:r.security.prior, colour:'#CE93D8'},
-    {label:'This sec', value:r.security.computed, colour:'#4527A0'}
+    {label:'Prior pay', value:r.payroll.prior, colour:'var(--chart-prior-pay)'},
+    {label:'This pay', value:r.payroll.computed, colour:'var(--chart-this-pay)'},
+    {label:'Prior sec', value:r.security.prior, colour:'var(--chart-prior-sec)'},
+    {label:'This sec', value:r.security.computed, colour:'var(--chart-this-sec)'}
   ];
 
   return '<div class="sec-title">Dashboard <span class="sub">' + esc(periodLabel(STATE.period)) + '</span></div>' +
@@ -2160,7 +2225,7 @@ function viewReconciliation(){
   const j = STATE.journalSummary;
 
   const section = function(title, rows){
-    return '<div><h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--wd);' +
+    return '<div><h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--on-tint);' +
       'padding-bottom:6px;border-bottom:2px solid var(--wl)">' + esc(title) + '</h4>' +
       '<div class="rec">' + rows.map(function(row){
         const cls = row[3] || '';
@@ -2373,6 +2438,8 @@ function viewAdmin(){
           '<td class="muted">' + esc(p.openedBy) + '<br>' + esc(shortDate(p.openedAt)) + '</td>' +
           '<td class="muted">' + (closed ? esc(p.closedBy) + '<br>' + esc(shortDate(p.closedAt)) : '—') + '</td>' +
           '<td class="c">' +
+            '<button class="btn btn-sm btn-ghost" data-act="edit-controls:' + attr(p.period) +
+              '">Rename</button> ' +
             (p.period !== STATE.period
               ? '<button class="btn btn-sm btn-ghost" data-act="switch-period:' + attr(p.period) + '">Open</button> '
               : '') +
@@ -2519,7 +2586,7 @@ function modalPayslip(m){
   return modalShell({
     cls:'wide',
     title:'Payslip — ' + p.name,
-    sub:'No.5 Bourdillon Road, Ikoyi, Lagos · ' + p.label,
+    sub:BRAND.address + ' · ' + p.label,
     body:
       '<div class="ps-emp">' +
         psField('Employee no', p.emp_no) + psField('Name', p.name) +
@@ -2871,9 +2938,17 @@ function modalPeriod(){
     cls:'narrow',
     title:'Create a payroll period',
     body:
-      '<div class="fld" style="margin-bottom:10px"><label>Period *</label>' +
-        '<input type="text" id="pd-period" value="' + attr(next) + '" placeholder="2026-08">' +
-        '<span class="hint">Year and month, like 2026-08.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Period code *</label>' +
+        '<input type="text" id="pd-period" value="' + attr(next) + '" placeholder="2026-08" ' +
+        'data-act="period-code">' +
+        '<span class="hint">Year and month, like 2026-08. Fixed once created — every staff record ' +
+        'and journal line for the month is filed under it.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Name</label>' +
+        '<input type="text" id="pd-label" maxlength="60" placeholder="' +
+        attr(next ? periodLabel(next) : 'August 2026') + '">' +
+        '<span class="hint">What everyone sees on screen and on payslips. Leave it blank for ' +
+        '“' + esc(next ? periodLabel(next) : 'August 2026') + '”, or type your own — ' +
+        '“August 2026 — mid-month run”, say. Changeable later either way.</span></div>' +
       '<div class="fld" style="margin-bottom:10px"><label>Working days</label>' +
         '<input type="number" id="pd-wdays" min="1" max="31" value="' +
         attr((STATE.settings && STATE.settings.defaultWorkingDays) || 23) + '"></div>' +
@@ -2892,30 +2967,52 @@ function nextPeriodOf(p){
   return y + '-' + String(m).padStart(2, '0');
 }
 
-function modalControls(){
-  const p = STATE.periodRow || {};
-  const r = STATE.reconciliation;
+function modalControls(m){
+  /* Openable for any period, not only the one being worked on — a name usually
+     needs correcting from the period list rather than from Reconciliation. */
+  const target = (m && m.period) || STATE.period;
+  const p = STATE.periods.filter(function(x){ return x.period === target; })[0] ||
+    STATE.periodRow || {};
+  const isCurrent = target === STATE.period;
+  const r = isCurrent ? STATE.reconciliation : null;
   return modalShell({
     cls:'narrow',
-    title:'Control totals — ' + (p.label || ''),
-    sub:'What Reconciliation measures the computed figures against',
+    title:'Period details — ' + (p.label || target),
+    sub:'What this month is called, how long it is, and what it reconciles to',
     body:
-      '<div class="note grey">Enter the figures from the payroll file you are reconciling to. Leave ' +
-        'them blank and Reconciliation will say no control total is recorded, rather than showing a ' +
-        'variance against zero.</div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Name</label>' +
+        '<input type="text" id="ct-label" maxlength="60" value="' + attr(p.label || '') + '" ' +
+        'placeholder="' + attr(periodLabel(target)) + '">' +
+        '<span class="hint">What everyone sees on screen and on payslips. Safe to change at ' +
+        'any time, including after the month is closed.</span></div>' +
+      /* The code is the natural key on every staff row, movement, proration
+         entry and posted journal line for this month. Changing it would leave
+         all of them pointing at a month that no longer exists, so it is shown
+         and locked rather than quietly editable. */
+      '<div class="fld" style="margin-bottom:10px"><label>Period code</label>' +
+        '<input type="text" value="' + attr(target) + '" readonly ' +
+        'style="background:var(--lt);color:var(--t2)">' +
+        '<span class="hint">Fixed. Every staff record, movement and journal line for this month ' +
+        'is filed under this code — renaming it would orphan them. Change the name above ' +
+        'instead.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Working days</label>' +
+        '<input type="number" id="ct-wdays" min="1" max="31" value="' + attr(p.workingDays) + '">' +
+        '<span class="hint">Used by proration.</span></div>' +
+      '<div class="note grey">Control totals are what Reconciliation measures the computed figures ' +
+        'against. Leave them blank and it will say none is recorded, rather than showing a variance ' +
+        'against zero.</div>' +
       '<div class="fld" style="margin-bottom:10px"><label>Control net payroll (' + NAIRA + ')</label>' +
         '<input type="number" id="ct-pay" step="0.01" value="' +
         attr(p.controlPay === null || p.controlPay === '' ? '' : p.controlPay) + '">' +
         (r ? '<span class="hint">Computed right now: ' + esc(money(r.payroll.computed)) + '</span>' : '') +
       '</div>' +
-      '<div class="fld" style="margin-bottom:10px"><label>Control net security (' + NAIRA + ')</label>' +
+      '<div class="fld"><label>Control net security (' + NAIRA + ')</label>' +
         '<input type="number" id="ct-sec" step="0.01" value="' +
         attr(p.controlSec === null || p.controlSec === '' ? '' : p.controlSec) + '">' +
         (r ? '<span class="hint">Computed right now: ' + esc(money(r.security.computed)) + '</span>' : '') +
-      '</div>' +
-      '<div class="fld"><label>Working days</label>' +
-        '<input type="number" id="ct-wdays" min="1" max="31" value="' + attr(p.workingDays) + '"></div>',
-    footer: busyBtn('Save', 'save-controls') +
+      '</div>',
+    footer: '<span class="left">' + esc(target) + '</span>' +
+      busyBtn('Save', 'save-controls') +
       '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
   });
 }
@@ -3370,6 +3467,11 @@ document.addEventListener('change', function(ev){
     }
     return;
   }
+  if(act === 'period-code'){
+    /* Re-render so the Name placeholder follows the code being typed. */
+    render();
+    return;
+  }
   if(act === 'movement-emp'){
     STATE.modal.emp_no = ev.target.value;
     render();
@@ -3768,25 +3870,31 @@ async function handleAction(act, arg, ev, el){
       case 'save-period': {
         try{
           const res = await mutate('Creating the period', 'createPeriod', {
-            period: val('pd-period'), workingDays: numVal('pd-wdays'),
-            rollForward: checked('pd-roll')
+            period: val('pd-period'), label: val('pd-label'),
+            workingDays: numVal('pd-wdays'), rollForward: checked('pd-roll')
           }, {inModal:true});
           closeModal();
-          toast(res.rolledForward + ' staff rolled forward, ' + res.schemesAdvanced +
-            ' scheme instalment(s) applied.');
+          toast(res.label + ' created — ' + res.rolledForward + ' staff rolled forward, ' +
+            res.schemesAdvanced + ' scheme instalment(s) applied.');
           await loadPeriod(res.period);
         }catch(e){ render(); }
         return;
       }
-      case 'edit-controls': STATE.modal = {kind:'controls'}; return render();
+      case 'edit-controls':
+        STATE.modal = {kind:'controls', period: arg || STATE.period};
+        return render();
       case 'save-controls': {
+        const target = STATE.modal.period || STATE.period;
         try{
-          await mutate('Saving the control totals', 'savePeriodControls', {
-            period: STATE.period, controlPay: numVal('ct-pay'), controlSec: numVal('ct-sec'),
+          const res = await mutate('Saving the period', 'savePeriodControls', {
+            period: target, label: val('ct-label'),
+            controlPay: numVal('ct-pay'), controlSec: numVal('ct-sec'),
             workingDays: numVal('ct-wdays')
           }, {inModal:true});
           closeModal();
-          toast('Control totals saved.');
+          toast(res.periodRow && res.periodRow.label
+            ? 'Saved — this month is now called “' + res.periodRow.label + '”.'
+            : 'Period saved.');
           await loadPeriod(STATE.period, true);
         }catch(e){ render(); }
         return;
