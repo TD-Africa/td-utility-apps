@@ -4339,7 +4339,7 @@ function processBulkRows(rows){
      there is no obvious sign anything is wrong. Spot the rows that look like they
      belong together and say so before anything is written. */
   const ungrouped = {};
-  parsedRows.forEach(function(r){
+  parsed.forEach(function(r){
     if(r.quoteGroup) return;
     const key = String(r.customerName || '').toLowerCase() + '|' + String(r.businessGroup || '');
     if(!ungrouped[key]) ungrouped[key] = [];
@@ -4414,7 +4414,14 @@ function handleBulkFile(file){
     reader.onload = function(e){
       try{ processBulkRows(parseCsvText(e.target.result)); }
       catch(err){
-        statusEl.textContent = 'Could not read that CSV. Check it is a plain CSV export and try again.';
+        /* A malformed file and a fault in Vantage are different problems, and
+           blaming the file for a bug in here sends people looking in the wrong
+           place. A ReferenceError or TypeError is ours, not theirs. */
+        const ours = (err instanceof ReferenceError) || (err instanceof TypeError);
+        statusEl.textContent = ours
+          ? 'Vantage hit an internal error reading that file — this is a fault in the app, not in your CSV. ' +
+            'Please report it: ' + String(err.message || err)
+          : 'Could not read that CSV. Check it is a plain CSV export and try again.';
         console.error(err);
       }
     };
@@ -4434,7 +4441,11 @@ function handleBulkFile(file){
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       processBulkRows(XLSX.utils.sheet_to_json(sheet, {defval: '', raw: true}));
     }catch(err){
-      statusEl.textContent = 'Could not read that file. Upload a .csv or .xlsx matching the template, or save it as CSV.';
+      const ours = (err instanceof ReferenceError) || (err instanceof TypeError);
+      statusEl.textContent = ours
+        ? 'Vantage hit an internal error reading that file — this is a fault in the app, not in your spreadsheet. ' +
+          'Please report it: ' + String(err.message || err)
+        : 'Could not read that file. Upload a .csv or .xlsx matching the template, or save it as CSV.';
       console.error(err);
     }
   };
