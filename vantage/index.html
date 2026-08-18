@@ -1313,6 +1313,11 @@ function captureUiState(){
   if(snap.modalKey){
     document.querySelectorAll('.overlay input[id], .overlay select[id], .overlay textarea[id]')
       .forEach(function(field){
+        /* A file input reads back as "C:\fakepath\name.csv" but may only ever be
+           *set* to an empty string — assigning it back throws InvalidStateError,
+           which used to take the whole render down with it. The browser keeps the
+           chosen file across a redraw anyway, so there is nothing to preserve. */
+        if(field.type === 'file') return;
         snap.values[field.id] = (field.type === 'checkbox') ? field.checked : field.value;
       });
     snap.lineItems = snapshotLineItemRows();
@@ -1351,9 +1356,14 @@ function restoreUiState(snap){
     }
     Object.keys(snap.values).forEach(function(id){
       const field = document.getElementById(id);
-      if(!field) return;
-      if(field.type === 'checkbox') field.checked = snap.values[id];
-      else field.value = snap.values[id];
+      if(!field || field.type === 'file') return;
+      try{
+        if(field.type === 'checkbox') field.checked = snap.values[id];
+        else field.value = snap.values[id];
+      }catch(e){
+        /* Some inputs refuse a programmatic value. Losing one field is a small
+           annoyance; letting it throw would abandon the render half-done. */
+      }
     });
     if(document.getElementById('quote-total-display')) recalcQuoteTotal();
   }
@@ -1417,7 +1427,11 @@ function render(){
     (STATE.busy ? '<div class="busy-pill"><span class="spinner"></span>' + escapeHtml(STATE.busy) + '</div>' : '');
 
   wireAll();
-  restoreUiState(snap);
+  /* The screen is already drawn by this point. If putting the caret and the
+     typed values back fails, that is worth a console entry — never a dead app
+     with a spinner that spins for ever. */
+  try{ restoreUiState(snap); }
+  catch(err){ console.error('restoreUiState failed', err); }
 }
 
 function renderLoading(){
