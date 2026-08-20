@@ -1371,25 +1371,37 @@ function viewChanges(){
     const q = f.q.toUpperCase();
     rows = rows.filter(function(m){
       const emp = staffById[m.emp_no];
+      const name = m.name || (emp && emp.name) || '';
       return (m.emp_no || '').toUpperCase().indexOf(q) >= 0 ||
-        ((emp && emp.name) || '').toUpperCase().indexOf(q) >= 0 ||
+        name.toUpperCase().indexOf(q) >= 0 ||
         (m.reason || '').toUpperCase().indexOf(q) >= 0 ||
         (m.createdBy || '').toUpperCase().indexOf(q) >= 0;
     });
   }
-  rows.sort(function(a, b){ return Number(b.seq) - Number(a.seq); });
+  /* New hires first — they are the entries still awaiting a status change —
+     then recorded movements newest first. */
+  rows.sort(function(a, b){
+    if(!!a.derived !== !!b.derived) return a.derived ? -1 : 1;
+    return Number(b.seq || 0) - Number(a.seq || 0);
+  });
   const p = paginate(rows, f);
 
   const live = STATE.movements.filter(function(m){ return !m.reversedAt; });
+  /* A new hire's whole salary is new cost this month, but it is not an
+     adjustment anyone typed — so it is counted separately rather than mixed in
+     with the uplifts and penalties. */
+  const hires = live.filter(function(m){ return m.derived; });
+  const recorded = live.filter(function(m){ return !m.derived; });
+  const sum = function(list, field){
+    return list.reduce(function(a, m){ return a + Number(m[field] || 0); }, 0);
+  };
   const totals = {
-    addPay: live.filter(function(m){ return ADDITION_TYPES[m.type]; })
-      .reduce(function(a, m){ return a + Number(m.pay || 0); }, 0),
-    addSec: live.filter(function(m){ return ADDITION_TYPES[m.type]; })
-      .reduce(function(a, m){ return a + Number(m.sec || 0); }, 0),
-    dedPay: live.filter(function(m){ return m.type === 'C' || m.type === 'D'; })
-      .reduce(function(a, m){ return a + Number(m.pay || 0); }, 0),
-    dedSec: live.filter(function(m){ return m.type === 'C' || m.type === 'D'; })
-      .reduce(function(a, m){ return a + Number(m.sec || 0); }, 0)
+    hirePay: sum(hires, 'pay'),
+    hireSec: sum(hires, 'sec'),
+    addPay: sum(recorded.filter(function(m){ return ADDITION_TYPES[m.type]; }), 'pay'),
+    addSec: sum(recorded.filter(function(m){ return ADDITION_TYPES[m.type]; }), 'sec'),
+    dedPay: sum(recorded.filter(function(m){ return m.type === 'C' || m.type === 'D'; }), 'pay'),
+    dedSec: sum(recorded.filter(function(m){ return m.type === 'C' || m.type === 'D'; }), 'sec')
   };
 
   return '<div class="sec-title">Movements &amp; changes <span class="sub">' +
@@ -1400,7 +1412,11 @@ function viewChanges(){
     userBar() +
 
     '<div class="krow">' +
-      kpi(live.length, 'Live movements', 'wn', 'This period') +
+      kpi(hires.length, 'New hires', 'gn',
+        hires.length ? 'Still to be set active' : 'None outstanding') +
+      kpi(money(totals.hirePay), 'New hire payroll', 'gn', 'Their grade pay') +
+      kpi(money(totals.hireSec), 'New hire security', 'gn', 'Their grade pay') +
+      kpi(recorded.length, 'Recorded movements', 'wn', 'Typed in this period') +
       kpi(money(totals.addPay), 'Payroll additions', 'gn', 'A and B types') +
       kpi(money(totals.dedPay), 'Payroll deductions', 'rd', 'C and D types') +
       kpi(money(totals.addSec), 'Security additions', 'gn', 'A and B types') +
@@ -1408,6 +1424,12 @@ function viewChanges(){
       kpi(STATE.movements.filter(function(m){ return m.reversedAt; }).length, 'Reversed', 'am',
         'Kept for audit, not deleted') +
     '</div>' +
+    (hires.length
+      ? '<div class="note green">' + hires.length + ' member' + (hires.length === 1 ? '' : 's') +
+        ' of staff are still marked <strong>New Hire</strong>, so their full grade pay is counted ' +
+        'here as an addition. Set someone\u2019s status to <strong>Active</strong> on their staff ' +
+        'record and they drop off this list.</div>'
+      : '') +
 
     '<div class="ctrls">' +
       '<input type="text" id="chg-q" placeholder="Search name, employee no, reason, author…" ' +
@@ -1435,23 +1457,36 @@ function viewChanges(){
           const emp = staffById[m.emp_no] || {name:m.emp_no};
           const isAdd = !!ADDITION_TYPES[m.type];
           const cls = m.reversedAt ? 'ded' : (isAdd ? 'earn' : 'ded');
-          return '<tr' + (m.reversedAt ? ' style="opacity:.55"' : '') + '>' +
-            '<td class="muted">' + esc(m.seq) + '</td>' +
+          return '<tr' + (m.reversedAt ? ' style="opacity:.55"' : '') +
+              (m.derived ? ' style="background:var(--gnl)"' : '') + '>' +
+            '<td class="muted">' + esc(m.derived ? '—' : m.seq) + '</td>' +
             '<td class="muted">' + esc(m.emp_no) + '</td>' +
-            '<td class="nm" title="' + attr(emp.name) + '">' + esc(emp.name) + '</td>' +
+            '<td class="nm" title="' + attr(m.name || emp.name) + '">' +
+              esc(m.name || emp.name) + '</td>' +
             '<td class="c"><span class="bdg ' + (isAdd ? 'bNEW' : 'bEXI') + '">' + esc(m.type) + '</span></td>' +
             '<td class="' + cls + '">' + esc(m.pay ? (isAdd ? '+' : '−') + money(m.pay) : '') + '</td>' +
             '<td class="' + cls + '">' + esc(m.sec ? (isAdd ? '+' : '−') + money(m.sec) : '') + '</td>' +
             '<td title="' + attr(m.reason) + '" style="max-width:260px">' + esc(m.reason) + '</td>' +
             '<td class="muted">' + esc(m.createdBy) + '</td>' +
             '<td class="muted">' + esc(shortDate(m.createdAt)) + '</td>' +
-            '<td class="c">' + (m.reversedAt
+            '<td class="c">' + (m.derived
+              ? '<span class="bdg bNEW" title="Derived from their New Hire status — not a typed ' +
+                'movement. Set them Active and this drops off.">NEW HIRE</span>'
+              : m.reversedAt
               ? '<span class="bdg bEXI" title="Reversed by ' + attr(m.reversedBy) + ' — ' +
                 attr(m.reversalNote) + '">REVERSED</span>'
               : '<span class="bdg bNEW">LIVE</span>') + '</td>' +
-            '<td class="c">' + (!m.reversedAt && canEditNow('editMovement')
-              ? '<button class="btn btn-sm btn-r" data-act="reverse-movement:' + attr(m.id) + '">Reverse</button>'
-              : '') + '</td>' +
+            '<td class="c">' + (m.derived
+              /* Not reversible — it is resolved by changing the person's
+                 status, so the button goes where that is done. */
+              ? (canEditNow('editStaff')
+                  ? '<button class="btn btn-sm btn-w" data-act="edit-staff:' + attr(m.emp_no) +
+                    '">Set active</button>'
+                  : '')
+              : (!m.reversedAt && canEditNow('editMovement')
+                  ? '<button class="btn btn-sm btn-r" data-act="reverse-movement:' + attr(m.id) +
+                    '">Reverse</button>'
+                  : '')) + '</td>' +
           '</tr>';
         }).join('') +
         '</tbody></table></div>' +
@@ -1558,8 +1593,14 @@ function selectHeader(mode, pageRows){
     (all ? ' checked' : '') + ' aria-label="Select everyone on this page"></th>';
 }
 
-function rowActions(e){
+function rowActions(e, mode){
   return '<td class="c">' +
+    /* Only the two registers that carry pay elements — there is nothing to
+       adjust field by field on the consolidated view. */
+    ((mode === 'payroll' || mode === 'security') && canEditNow('editMovement')
+      ? '<button class="btn btn-sm btn-f" data-act="field-change:' + attr(mode) + ':' +
+        attr(e.emp_no) + '" title="Adjust individual pay elements">Change</button> '
+      : '') +
     (e.payslipSentAt
       ? '<span class="bdg bNEW" title="Payslip emailed to ' + attr(e.payslipSentTo) + ' on ' +
         attr(shortDate(e.payslipSentAt)) + '">sent</span> '
@@ -1624,7 +1665,7 @@ function viewRegister(mode){
         ['pension','paye','welfare','nhf','total_ded'].map(function(k){
           return '<td class="ded">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
         '<td class="net">' + esc(money(e.netPay)) + '</td>' +
-        '<td class="c">' + statusBadge(e.status) + '</td>' + rowActions(e) + '</tr>';
+        '<td class="c">' + statusBadge(e.status) + '</td>' + rowActions(e, 'payroll') + '</tr>';
     }).join('');
   }else if(mode === 'security'){
     head = '<tr>' +
@@ -1678,7 +1719,7 @@ function viewRegister(mode){
         '<td class="muted">' + esc(e.emp_account || '—') + '</td>' +
         '<td class="ded">' + esc(moneyOrBlank(e.sec_total_ded)) + '</td>' +
         '<td class="net">' + esc(money(e.netSecurity)) + '</td>' +
-        '<td class="c">' + statusBadge(e.status) + '</td>' + rowActions(e) + '</tr>';
+        '<td class="c">' + statusBadge(e.status) + '</td>' + rowActions(e, 'security') + '</tr>';
     }).join('');
   }else{
     head = '<tr>' +
@@ -1715,7 +1756,7 @@ function viewRegister(mode){
         '<td class="net">' + esc(money(e.netSecurity)) + '</td>' +
         '<td class="net">' + esc(money(e.netTotal)) + '</td>' +
         '<td class="c">' + statusBadge(e.status) + '</td>' +
-        '<td class="c">' + typeBadge(e.staff_type) + '</td>' + rowActions(e) + '</tr>';
+        '<td class="c">' + typeBadge(e.staff_type) + '</td>' + rowActions(e, 'consolidated') + '</tr>';
     }).join('');
   }
 
@@ -2606,6 +2647,7 @@ function renderOverlay(){
     user: modalUser, period: modalPeriod, controls: modalControls,
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
     bulkPayslip: modalBulkPayslip, renumber: modalRenumber,
+    fieldChange: modalFieldChange,
     diagnostics: modalDiagnostics
   }[m.kind];
   box.innerHTML = body ? body(m) : '';
@@ -2805,6 +2847,49 @@ function modalMovement(m){
 }
 
 /* ---------------- Staff ---------------- */
+/* Which elements each register lets you adjust, and how each one moves the net.
+   'earn' adds to it, 'ded' subtracts, 'cost' is an employer cost that reaches
+   the journal but never the employee's pay.
+
+   Held here rather than fetched, because it describes a form, not data.
+   Fetching it meant a page running against an older script rendered the change
+   dialog with no fields at all and nothing to explain why. Code.gs keeps its
+   own copy to validate against, and a test asserts the two are identical
+   character for character — so the drift this duplication risks is caught
+   there rather than in front of a payroll officer. */
+const REGISTER_FIELDS = {
+  payroll: [
+    { field: 'basic', label: 'Basic salary', effect: 'earn' },
+    { field: 'housing', label: 'Housing allowance', effect: 'earn' },
+    { field: 'transport', label: 'Transport allowance', effect: 'earn' },
+    { field: 'domestic', label: 'Domestic allowance / arrears', effect: 'earn' },
+    { field: 'emp_pension', label: "Employer's pension contribution", effect: 'cost' },
+    { field: 'pension', label: 'Pension', code: '230111', effect: 'ded' },
+    { field: 'paye', label: 'PAYE', code: '230112', effect: 'ded' },
+    { field: 'welfare', label: 'Welfare', code: '230102', effect: 'ded' },
+    { field: 'nhf', label: 'National Housing Fund', code: '230113', effect: 'ded' }
+  ],
+  security: [
+    { field: 'sec_allow', label: 'Security allowance', effect: 'earn' },
+    { field: 'resp_allow', label: 'Responsibility allowance', effect: 'earn' },
+    { field: 'sec_arrears', label: 'Security arrears', effect: 'earn' },
+    { field: 'special_sec', label: 'Special security', effect: 'earn' },
+    { field: 'commission', label: 'Commission', effect: 'earn' },
+    { field: 'contract_sec', label: 'Contract staff security', effect: 'earn' },
+    { field: 'other_allow', label: 'Other security allowance', effect: 'earn' },
+    { field: 'vol_pension', label: 'Voluntary pension', code: '230111', effect: 'ded' },
+    { field: 'staff_purchase', label: 'Staff purchase', code: '230115', effect: 'ded' },
+    { field: 'contract_welfare', label: 'Contract welfare', code: '230102', effect: 'ded' },
+    { field: 'device_financing', label: 'Device financing', code: '230115', effect: 'ded' },
+    { field: 'sec_tax', label: 'Security tax', code: '230103', effect: 'ded' },
+    { field: 'sec_penalties', label: 'Security penalties', code: 'EMP account', effect: 'ded' },
+    { field: 'laptop_scheme', label: 'Laptop ownership scheme', code: 'EMP account', effect: 'ded' },
+    { field: 'simba_loan', label: 'Simba fund loan', code: 'EMP account', effect: 'ded' },
+    { field: 'car_scheme1', label: 'Car scheme', code: 'EMP account', effect: 'ded' },
+    { field: 'car_scheme2', label: 'Car scheme (2)', code: 'EMP account', effect: 'ded' }
+  ]
+};
+
 const STAFF_EDIT_GROUPS = [
   ['Payroll earnings', ['basic','housing','transport','domestic']],
   ['Employer cost (not part of net pay)', ['emp_pension']],
@@ -3221,6 +3306,83 @@ function modalRenumber(m){
   });
 }
 
+/* ---------------- Field-level change from a register ----------------
+   The Changes form asks for an amount on the NET, which cannot express "add
+   ₦5,000 to housing". Entering every element there would be unusable, so this
+   opens on the register row where the elements already are. Type against the
+   ones that moved; the rest are left alone. */
+function modalFieldChange(m){
+  const e = staffIndex()[m.emp_no];
+  if(!e) return modalShell({title:'Change', body:'<div class="empty">Staff record not found.</div>'});
+  const spec = REGISTER_FIELDS[m.register] || [];
+  const isPay = m.register === 'payroll';
+
+  const group = function(title, effect, note){
+    const rows = spec.filter(function(f){ return f.effect === effect; });
+    if(!rows.length) return '';
+    return '<div class="form-row"><div class="fld-head">' + esc(title) +
+      (note ? ' <span style="font-weight:400;color:var(--t3);font-size:11px">' + esc(note) +
+        '</span>' : '') + '</div>' +
+      rows.map(function(f){
+        const current = Number(e[f.field]) || 0;
+        return '<div class="fld"><label>' + esc(f.label) +
+          (f.code ? ' <span style="color:var(--t3);font-weight:400">[' + esc(f.code) + ']</span>' : '') +
+          '</label>' +
+          '<input type="number" step="0.01" id="fc-' + attr(f.field) + '" ' +
+          'data-fc="' + attr(f.field) + ':' + attr(f.effect) + '" placeholder="0.00">' +
+          '<span class="hint">now ' + esc(money(current)) + '</span></div>';
+      }).join('') + '</div>';
+  };
+
+  return modalShell({
+    cls:'wide',
+    title:(isPay ? 'Payroll' : 'Security') + ' change — ' + e.name,
+    sub:e.emp_no + ' · ' + periodLabel(STATE.period) +
+      ' · currently ' + money(isPay ? e.netPay : e.netSecurity) + ' net',
+    body:
+      '<div class="note grey">Enter what to <strong>add</strong> to each element — leave the rest ' +
+        'blank. A negative figure takes an amount off. The element itself changes, so the journal ' +
+        'posts the new figure, and the net effect is recorded on the Changes tab as a movement you ' +
+        'can reverse.</div>' +
+      (spec.length ? '' : '<div class="note red">This form has no fields to show, which ' +
+        'means the page could not work out what belongs on the ' + esc(m.register) + ' register. ' +
+        'Reload; if it persists the published page is damaged and needs republishing.</div>') +
+      group('Earnings', 'earn') +
+      group('Employer cost', 'cost', 'paid by the company — does not change their net pay') +
+      group('Deductions', 'ded') +
+      '<div id="fc-preview" class="note blue" style="margin-top:4px">' + fieldChangePreview(m) + '</div>' +
+      '<div class="form-row"><div class="fld wide"><label>Reason *</label>' +
+        '<input type="text" id="fc-reason" placeholder="e.g. Housing allowance review"></div></div>',
+    footer:'<span class="left">Recorded against your name and reversible</span>' +
+      busyBtn('Apply change', 'field-change-save') +
+      '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
+  });
+}
+
+/* Recomputed as you type, from the same effect flags the server uses, so the
+   figure on screen is the figure that will be applied. */
+function fieldChangePreview(m){
+  const e = staffIndex()[m.emp_no] || {};
+  const spec = REGISTER_FIELDS[m.register] || [];
+  const isPay = m.register === 'payroll';
+  let net = 0;
+  let touched = 0;
+  spec.forEach(function(f){
+    const el = document.getElementById('fc-' + f.field);
+    const v = el && el.value !== '' ? Number(el.value) : 0;
+    if(!v || isNaN(v)) return;
+    touched++;
+    if(f.effect === 'earn') net += v;
+    else if(f.effect === 'ded') net -= v;
+  });
+  if(!touched) return 'Nothing entered yet.';
+  const before = Number(isPay ? e.netPay : e.netSecurity) || 0;
+  return '<strong>' + touched + ' element' + (touched === 1 ? '' : 's') + ' changed.</strong> ' +
+    'Net ' + (isPay ? 'payroll' : 'security') + ' ' +
+    (net >= 0 ? 'rises' : 'falls') + ' by <strong>' + esc(money(Math.abs(net))) + '</strong> — ' +
+    esc(money(before)) + ' → <strong>' + esc(money(before + net)) + '</strong>.';
+}
+
 /* ---------------- User / period / controls / confirm ---------------- */
 function modalUser(m){
   const u = m.userId ? STATE.directory.filter(function(x){ return x.userId === m.userId; })[0] : null;
@@ -3556,17 +3718,21 @@ function exportChanges(){
     rows = rows.filter(function(m){
       const e = idx[m.emp_no] || {};
       return (m.emp_no || '').toUpperCase().indexOf(q) >= 0 ||
-        ((e.name) || '').toUpperCase().indexOf(q) >= 0 ||
+        ((m.name || e.name) || '').toUpperCase().indexOf(q) >= 0 ||
         (m.reason || '').toUpperCase().indexOf(q) >= 0;
     });
   }
   const out = [['PaySync movements', periodLabel(STATE.period), 'Exported ' + new Date().toISOString(),
       rows.length + ' rows'],
-    ['#','Period','Emp no','Name','Business unit','Org','Type','Payroll','Security','Reason',
+    ['#','Source','Period','Emp no','Name','Business unit','Org','Type','Payroll','Security','Reason',
       'Staff status set','Recorded by','Recorded at','Reversed by','Reversed at','Reversal reason']];
-  rows.sort(function(a, b){ return Number(a.seq) - Number(b.seq); }).forEach(function(m){
+  rows.sort(function(a, b){
+    if(!!a.derived !== !!b.derived) return a.derived ? -1 : 1;
+    return Number(a.seq || 0) - Number(b.seq || 0);
+  }).forEach(function(m){
     const e = idx[m.emp_no] || {};
-    out.push([m.seq, m.period, m.emp_no, e.name || '', e.bus_unit || '', e.org || '', m.type,
+    out.push([m.derived ? '' : m.seq, m.derived ? 'New hire' : 'Recorded',
+      m.period, m.emp_no, m.name || e.name || '', e.bus_unit || '', e.org || '', m.type,
       Number(m.pay || 0).toFixed(2), Number(m.sec || 0).toFixed(2), m.reason, m.staffStatus || '',
       m.createdBy, m.createdAt, m.reversedBy || '', m.reversedAt || '', m.reversalNote || '']);
   });
@@ -3766,6 +3932,16 @@ document.addEventListener('keydown', function(ev){
 /* Filter inputs are debounced so a 317-row re-render does not fight the
    keyboard, and the value lives in STATE rather than the DOM so a redraw
    never loses it. */
+/* The preview updates the one element that changed rather than re-rendering
+   the page, so a form of eighteen number inputs stays responsive. */
+document.addEventListener('input', function(ev){
+  if(!ev.target.getAttribute || !ev.target.getAttribute('data-fc')) return;
+  const box = document.getElementById('fc-preview');
+  if(box && STATE.modal && STATE.modal.kind === 'fieldChange'){
+    box.innerHTML = fieldChangePreview(STATE.modal);
+  }
+});
+
 let filterTimer = null;
 document.addEventListener('input', function(ev){
   const f = ev.target.getAttribute && ev.target.getAttribute('data-filter');
@@ -4090,6 +4266,30 @@ async function handleAction(act, arg, ev, el){
           const tabs = Object.keys(res.moved).length;
           toast(res.name + ' is now ' + res.to + ' — updated across ' + tabs +
             ' record type' + (tabs === 1 ? '' : 's') + '.');
+          await loadPeriod(STATE.period, true);
+        }catch(e){ render(); }
+        return;
+      }
+      case 'field-change': {
+        const parts = arg.split(':');
+        STATE.modal = {kind:'fieldChange', register:parts[0], emp_no:parts[1]};
+        return render();
+      }
+      case 'field-change-save': {
+        const m = STATE.modal;
+        const spec = REGISTER_FIELDS[m.register] || [];
+        const deltas = {};
+        spec.forEach(function(f){
+          const v = numVal('fc-' + f.field);
+          if(v !== '' && Number(v)) deltas[f.field] = Number(v);
+        });
+        try{
+          const res = await mutate('Applying the change', 'applyFieldChange', {
+            period: STATE.period, register: m.register, emp_no: m.emp_no,
+            reason: val('fc-reason'), deltas: deltas
+          }, {inModal:true});
+          closeModal();
+          toast(res.detail + ' — net ' + (res.net >= 0 ? '+' : '−') + money(Math.abs(res.net)) + '.');
           await loadPeriod(STATE.period, true);
         }catch(e){ render(); }
         return;
