@@ -2605,7 +2605,7 @@ function renderOverlay(){
     scheme: modalScheme, proration: modalProration, structure: modalStructure,
     user: modalUser, period: modalPeriod, controls: modalControls,
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
-    bulkPayslip: modalBulkPayslip,
+    bulkPayslip: modalBulkPayslip, renumber: modalRenumber,
     diagnostics: modalDiagnostics
   }[m.kind];
   box.innerHTML = body ? body(m) : '';
@@ -2753,6 +2753,11 @@ function modalMovement(m){
         esc(money(emp.netSecurity)) + '</strong></div>' : '') +
 
       (isNew ? '<div class="form-row">' +
+        '<div class="fld"><label>Employee number *</label>' +
+          '<input type="text" id="mv-nh-empno" placeholder="e.g. TD1234 or TDCS0987">' +
+          '<span class="hint">Type the number this person already has. Nothing is generated — ' +
+          'employee numbers follow several patterns here and an invented one would only have to ' +
+          'be reconciled away later.</span></div>' +
         '<div class="fld"><label>Full name *</label>' +
           '<input type="text" id="mv-nh-name" placeholder="SURNAME, FIRSTNAME"></div>' +
         '<div class="fld"><label>Grade</label>' +
@@ -2832,8 +2837,25 @@ function modalStaff(m){
     sub:periodLabel(STATE.period) + ' · totals are recalculated from these figures on save',
     body:
       '<div class="form-row">' +
-        '<div class="fld"><label>Employee no *</label><input type="text" id="st-emp_no" value="' +
-          attr(e ? e.emp_no : '') + '"' + (e ? ' readonly' : '') + '></div>' +
+        '<div class="fld"><label>Employee number *</label>' +
+          (e
+            /* Editable, but through its own step. Typing over it here would
+               either create a second person with no history, or silently
+               rewrite eight tabs while someone was really only fixing a
+               salary. The button is the affordance; the field shows what it
+               is now. */
+            ? '<div style="display:flex;gap:7px;align-items:center">' +
+                '<input type="text" id="st-emp_no" value="' + attr(e.emp_no) + '" readonly ' +
+                'style="flex:1;min-width:0;background:var(--lt);color:var(--t2)">' +
+                '<button class="btn btn-sm btn-w" data-act="renumber:' + attr(e.emp_no) +
+                  '" style="flex-shrink:0">Change number</button>' +
+              '</div>' +
+              '<span class="hint">Their movements, schemes, proration, journal lines and payslip ' +
+              'history move with it.</span>'
+            : '<input type="text" id="st-emp_no" value="" ' +
+              'placeholder="e.g. TD1234 or TDCS0987">' +
+              '<span class="hint">Type the number this person already has — nothing is generated.</span>') +
+          '</div>' +
         '<div class="fld"><label>Full name *</label><input type="text" id="st-name" value="' +
           attr(e ? e.name : '') + '" placeholder="SURNAME, FIRSTNAME"></div>' +
         '<div class="fld"><label>Email</label><input type="email" id="st-email" value="' +
@@ -3150,6 +3172,53 @@ async function runBulkPayslipSend(){
   render();
   /* Refresh so the register shows who now has a payslip. */
   await loadPeriod(STATE.period, true);
+}
+
+/* Renumbering is separated from the ordinary edit on purpose. It touches eight
+   tabs, and a field that quietly rewrote a person's history when you tabbed
+   past it would be the wrong shape of control entirely. */
+function modalRenumber(m){
+  const e = staffIndex()[m.emp_no] || {};
+  const counts = {
+    movements: STATE.movements.filter(function(x){ return x.emp_no === m.emp_no; }).length,
+    schemes: STATE.schemes.filter(function(x){ return x.emp_no === m.emp_no; }).length,
+    proration: STATE.proration.filter(function(x){ return x.emp_no === m.emp_no; }).length
+  };
+  const attached = [];
+  if(counts.movements) attached.push(counts.movements + ' movement' + (counts.movements === 1 ? '' : 's'));
+  if(counts.schemes) attached.push(counts.schemes + ' deduction scheme' + (counts.schemes === 1 ? '' : 's'));
+  if(counts.proration) attached.push(counts.proration + ' proration entr' + (counts.proration === 1 ? 'y' : 'ies'));
+  if(e.payslipSentAt) attached.push('a sent payslip');
+
+  return modalShell({
+    cls:'narrow',
+    title:'Change employee number',
+    sub:e.name,
+    body:
+      '<div class="rec" style="margin:0 0 12px">' +
+        '<div class="rr"><span class="rlbl">Current number</span>' +
+          '<span class="rval">' + esc(m.emp_no) + '</span></div>' +
+      '</div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>New employee number *</label>' +
+        '<input type="text" id="rn-new" placeholder="e.g. TD1234" maxlength="40">' +
+        '<span class="hint">Must not already be in use on this period\u2019s register.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Reason *</label>' +
+        '<input type="text" id="rn-reason" placeholder="e.g. entered with the wrong prefix">' +
+        '<span class="hint">Recorded in the audit trail against your name.</span></div>' +
+      (attached.length
+        ? '<div class="note amber">The new number will be applied to <strong>' +
+          esc(attached.join(', ')) + '</strong> as well as the staff record, so nothing is left ' +
+          'pointing at the old one.</div>'
+        : '<div class="note grey">This person has no movements, schemes or proration yet, so only ' +
+          'their staff record changes.</div>') +
+      (!periodIsOpen()
+        ? '<div class="note red">' + esc(periodLabel(STATE.period)) + ' is closed. Its journal has ' +
+          'been posted to the ledger under the current number, so this cannot be changed until an ' +
+          'Administrator reopens the period.</div>'
+        : ''),
+    footer: busyBtn('Change number', 'renumber-save') +
+      '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
+  });
 }
 
 /* ---------------- User / period / controls / confirm ---------------- */
@@ -3954,6 +4023,7 @@ async function handleAction(act, arg, ev, el){
         }
         if(movement.emp_no === '__new__'){
           movement.newHire = {
+            emp_no: val('mv-nh-empno'),
             name: val('mv-nh-name'), grade: val('mv-nh-grade'),
             staff_type: val('mv-nh-type'), bus_unit: val('mv-nh-bu'), email: val('mv-nh-email')
           };
@@ -4001,6 +4071,25 @@ async function handleAction(act, arg, ev, el){
             {period:STATE.period, mode: existing ? 'edit' : 'create', staff:staff}, {inModal:true});
           closeModal();
           toast('Staff record saved.');
+          await loadPeriod(STATE.period, true);
+        }catch(e){ render(); }
+        return;
+      }
+      case 'renumber':
+        STATE.modal = {kind:'renumber', emp_no:arg};
+        return render();
+      case 'renumber-save': {
+        const from = STATE.modal.emp_no;
+        try{
+          const res = await mutate('Changing the employee number', 'changeEmployeeNumber', {
+            emp_no: from, newEmpNo: val('rn-new'), reason: val('rn-reason')
+          }, {inModal:true});
+          closeModal();
+          /* A stale selection would still hold the old number. */
+          if(STATE.sel[from]){ delete STATE.sel[from]; STATE.sel[res.to] = true; }
+          const tabs = Object.keys(res.moved).length;
+          toast(res.name + ' is now ' + res.to + ' — updated across ' + tabs +
+            ' record type' + (tabs === 1 ? '' : 's') + '.');
           await loadPeriod(STATE.period, true);
         }catch(e){ render(); }
         return;
