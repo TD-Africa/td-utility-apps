@@ -1,0 +1,3545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stockflow — TD Africa Group</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!--
+  TD AFRICA · STOCKFLOW — the entire application, one static file.
+
+  PUBLISHING THIS FILE
+  --------------------
+  Search for STOCKFLOW_BACKEND_URL below and paste the Apps Script Web App
+  /exec URL between the quotes. That is the only thing anyone ever has to
+  configure, and it is done once by whoever publishes the page — never by
+  a user.
+
+  WHAT THIS FILE DOES AND DOES NOT DO
+  -----------------------------------
+  It renders. Every figure it shows was computed by the server, including
+  the date every age is measured against: there is no `new Date()` here
+  driving anything a person reads. It holds one thing in local storage —
+  a signed session token — and nothing else.
+
+  It has no external dependencies at all. The charts are inline SVG and
+  the CSV parser is thirty lines below, so a blocked CDN cannot take out
+  the bulk-upload path or leave a screen half-drawn.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0C1319;
+  --panel:#121B23;
+  --panel-2:#0E161D;
+  --border:#22303B;
+  --border-soft:#1A2530;
+  --text:#E7EDF2;
+  --text-dim:#8CA0AC;
+  --text-faint:#5C6C77;
+  --flow:#2FBEB0;
+  --flow-dim:#1D5C56;
+  --amber:#E3A23D;
+  --amber-dim:#5A4321;
+  --red:#E0654F;
+  --red-dim:#4A2620;
+  --green:#5FBE7C;
+  --font-display:'Space Grotesk','Segoe UI',sans-serif;
+  --font-body:'Inter','Segoe UI',Arial,sans-serif;
+  --font-mono:'IBM Plex Mono','SF Mono',Menlo,monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font-body);font-size:14px;-webkit-font-smoothing:antialiased;}
+::selection{background:var(--flow-dim);color:#fff;}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-track{background:var(--bg);}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px;}
+
+.app{display:flex;min-height:100vh;}
+
+/* ---------- Sidebar ---------- */
+.sidebar{
+  width:230px;flex-shrink:0;background:var(--panel-2);border-right:1px solid var(--border-soft);
+  display:flex;flex-direction:column;padding:20px 0;position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+.brand{padding:0 20px 18px 20px;border-bottom:1px solid var(--border-soft);margin-bottom:14px;}
+.brand-mark{display:flex;align-items:center;gap:9px;}
+.brand-dot{width:9px;height:9px;border-radius:2px;background:var(--flow);position:relative;flex-shrink:0;}
+.brand-dot::after{content:'';position:absolute;inset:-4px;border:1px solid var(--flow-dim);border-radius:4px;}
+.brand-name{font-family:var(--font-display);font-weight:700;font-size:16.5px;letter-spacing:0.2px;}
+.brand-name b{color:var(--flow);font-weight:700;}
+.brand-sub{font-size:10.5px;color:var(--text-faint);margin-top:5px;letter-spacing:0.4px;text-transform:uppercase;}
+
+.nav-group{margin-bottom:4px;}
+.nav-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);padding:14px 20px 6px 20px;}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-dim);
+  font-size:13px;font-weight:500;border-left:2px solid transparent;transition:all .12s ease;
+}
+.nav-item:hover{color:var(--text);background:rgba(255,255,255,0.02);}
+.nav-item.active{color:var(--text);background:rgba(47,190,176,0.08);border-left:2px solid var(--flow);}
+.nav-item .nav-badge{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--text-faint);background:var(--panel);padding:1px 6px;border-radius:8px;border:1px solid var(--border-soft);}
+
+/* ---------- Main ---------- */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;padding:14px 28px;
+  border-bottom:1px solid var(--border-soft);background:rgba(12,19,25,0.85);backdrop-filter:blur(6px);
+  position:sticky;top:0;z-index:20;
+}
+.topbar-title{font-family:var(--font-display);font-size:15px;font-weight:600;}
+.topbar-sub{font-size:11.5px;color:var(--text-faint);margin-top:2px;}
+.topbar-right{display:flex;align-items:center;gap:14px;}
+
+.whoami{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:5px 10px 5px 8px;}
+.whoami-avatar{width:26px;height:26px;border-radius:6px;background:var(--flow-dim);color:#EAFBF8;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
+.whoami-name{font-size:12px;font-weight:600;line-height:1.25;}
+.whoami-role{font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;}
+.link-btn{background:none;border:none;color:var(--text-faint);font-family:var(--font-body);font-size:11.5px;cursor:pointer;padding:0;text-decoration:underline;}
+.link-btn:hover{color:var(--text);}
+
+.serverdate{font-family:var(--font-mono);font-size:11px;color:var(--text-faint);border:1px solid var(--border-soft);border-radius:6px;padding:5px 9px;}
+.serverdate b{color:var(--text-dim);font-weight:500;}
+
+.content{padding:26px 28px 60px 28px;max-width:1400px;}
+
+h1.page-h{font-family:var(--font-display);font-size:22px;font-weight:600;margin:0 0 4px 0;}
+p.page-sub{color:var(--text-dim);font-size:13px;margin:0 0 22px 0;max-width:760px;line-height:1.5;}
+
+.banner{
+  display:flex;gap:10px;align-items:flex-start;background:var(--panel);border:1px solid var(--border);
+  border-left:3px solid var(--amber);border-radius:8px;padding:12px 14px;margin-bottom:20px;font-size:12.5px;color:var(--text-dim);
+}
+.banner b{color:var(--text);}
+.banner.info{border-left-color:var(--flow);}
+.banner.bad{border-left-color:var(--red);}
+.banner.good{border-left-color:var(--green);}
+
+/* ---------- Cards / KPIs ---------- */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px;}
+.kpi-card{background:var(--panel);border:1px solid var(--border-soft);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;width:2px;height:100%;background:var(--kpi-accent,var(--flow));}
+.kpi-label{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;}
+.kpi-value{font-family:var(--font-mono);font-size:24px;font-weight:600;color:var(--text);}
+.kpi-value small{font-size:13px;color:var(--text-dim);font-weight:400;}
+.kpi-delta{font-size:11px;color:var(--text-faint);margin-top:6px;}
+
+.panel{background:var(--panel);border:1px solid var(--border-soft);border-radius:10px;padding:20px;margin-bottom:20px;}
+.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:14px;flex-wrap:wrap;}
+.panel-title{font-family:var(--font-display);font-size:14.5px;font-weight:600;}
+.panel-title span{color:var(--text-faint);font-weight:400;font-size:12px;margin-left:8px;}
+
+.grid-2{display:grid;grid-template-columns:1.3fr 1fr;gap:18px;}
+
+/* ---------- Flow diagram ---------- */
+.flow-wrap{display:flex;align-items:stretch;gap:0;margin:6px 0 4px 0;}
+.flow-node{
+  flex:1;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:16px;
+  text-align:center;position:relative;
+}
+.flow-node .fn-label{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;}
+.flow-node .fn-value{font-family:var(--font-mono);font-size:22px;font-weight:600;}
+.flow-node .fn-sub{font-size:11px;color:var(--text-dim);margin-top:4px;}
+.flow-arrow{width:46px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--text-faint);}
+.flow-node.backlog{border-color:var(--border);}
+.flow-node.backlog .fn-value{color:var(--text-dim);}
+.flow-node.git{border-color:var(--amber-dim);}
+.flow-node.git .fn-value{color:var(--amber);}
+.flow-node.mw{border-color:var(--flow-dim);}
+.flow-node.mw .fn-value{color:var(--flow);}
+.flow-node.sold{border-color:#2B3B34;}
+.flow-node.sold .fn-value{color:var(--green);}
+
+/* ---------- Table ---------- */
+.table-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border-soft);}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+thead th{
+  background:var(--panel-2);color:var(--text-faint);text-transform:uppercase;font-size:10px;letter-spacing:.5px;
+  text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;
+}
+thead th.sortable{cursor:pointer;user-select:none;}
+thead th.sortable:hover{color:var(--text-dim);}
+thead th .sort-caret{color:var(--flow);margin-left:4px;}
+tbody td{padding:9px 12px;border-bottom:1px solid var(--border-soft);color:var(--text);white-space:nowrap;}
+tbody tr:hover{background:rgba(255,255,255,0.015);}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr.voided td{opacity:.45;text-decoration:line-through;}
+td.num,th.num{text-align:right;font-family:var(--font-mono);}
+/* The description is the only column that can shrink, so in a wide table
+   it gets squeezed to a sliver and wraps to six lines. Give it a floor
+   and let the wrapper scroll horizontally instead. */
+td.wrap{white-space:normal;min-width:170px;max-width:300px;color:var(--text-dim);line-height:1.4;}
+.tag{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:20px;border:1px solid var(--border);color:var(--text-dim);}
+.tag.cat-Laptops{border-color:#2A4A6B;color:#7EB3E8;}
+.tag.cat-Desktops{border-color:#5A3F1F;color:#E3A23D;}
+.tag.cat-All-in-One{border-color:#3F2A5A;color:#B18CE8;}
+.tag.cat-Monitors{border-color:#1F5A4A;color:#5FE0BE;}
+.tag.cat-Accessories{border-color:#4A2A3F;color:#E88CAF;}
+.flag-icon{color:var(--red);font-weight:700;cursor:help;}
+.flag-icon.resolved{color:var(--green);}
+.type-pill{font-size:10.5px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap;}
+.type-Purchase{background:var(--panel-2);color:var(--text-dim);border:1px solid var(--border);}
+.type-Opening{background:var(--panel-2);color:var(--text-dim);border:1px solid var(--border);}
+.type-Ship{background:var(--amber-dim);color:#F5C778;}
+.type-Receive{background:var(--flow-dim);color:#8DEBE0;}
+.type-Sale{background:#2B3B22;color:#A6D97E;}
+.type-Transfer{background:#23324A;color:#9EC1F0;}
+.type-Reversal{background:#3B2222;color:#E89C9C;}
+.unknown{color:var(--text-faint);font-style:italic;}
+
+/* ---------- Forms ---------- */
+.form-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:end;margin-bottom:16px;}
+.field{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.field label{font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;}
+select,input[type=text],input[type=number],input[type=date],input[type=email],textarea{
+  background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;
+  padding:8px 10px;font-size:12.5px;font-family:var(--font-body);outline:none;width:100%;
+}
+textarea{font-family:var(--font-mono);font-size:12px;resize:vertical;}
+select:focus,input:focus,textarea:focus{border-color:var(--flow);}
+input::placeholder,textarea::placeholder{color:var(--text-faint);}
+input:disabled,select:disabled,textarea:disabled{opacity:.5;cursor:not-allowed;}
+.btn{
+  font-family:var(--font-body);font-weight:600;font-size:12.5px;padding:9px 16px;border-radius:7px;
+  border:1px solid var(--flow-dim);background:var(--flow-dim);color:#EAFBF8;cursor:pointer;transition:all .12s ease;
+}
+.btn:hover:not(:disabled){background:#236B63;}
+.btn.secondary{background:transparent;border-color:var(--border);color:var(--text-dim);}
+.btn.secondary:hover:not(:disabled){color:var(--text);border-color:var(--text-faint);}
+.btn.danger{background:var(--red-dim);border-color:var(--red-dim);color:#FFD9D2;}
+.btn.danger:hover:not(:disabled){background:#6A362C;}
+.btn.sm{padding:5px 10px;font-size:11.5px;}
+.btn:disabled{opacity:.35;cursor:not-allowed;}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+
+.locked-note{
+  display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px dashed var(--border);
+  border-radius:8px;padding:14px 16px;color:var(--text-faint);font-size:12px;margin-bottom:16px;
+}
+
+/* ---------- Filters & pagination ---------- */
+.filter-bar{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:end;background:var(--panel-2);
+  border:1px solid var(--border-soft);border-radius:8px;padding:12px 14px;margin-bottom:14px;
+}
+.filter-bar .field{flex:1 1 150px;}
+.filter-bar .field.narrow{flex:0 0 130px;}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;flex-wrap:wrap;}
+.pager-info{font-size:11.5px;color:var(--text-faint);font-family:var(--font-mono);}
+.pager-btns{display:flex;gap:6px;align-items:center;}
+
+/* ---------- Simulator ---------- */
+.sim-row{display:flex;align-items:center;gap:14px;margin-bottom:10px;}
+.sim-row label{width:150px;font-size:12px;color:var(--text-dim);flex-shrink:0;}
+input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:4px;background:var(--border);border-radius:2px;outline:none;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;background:var(--flow);cursor:pointer;border:2px solid #0C1319;}
+.sim-val{font-family:var(--font-mono);font-weight:600;color:var(--flow);width:60px;text-align:right;flex-shrink:0;}
+.sim-val.inherit{color:var(--text-faint);font-weight:400;}
+
+.chart-box{position:relative;}
+.split-2{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+.footer-note{color:var(--text-faint);font-size:11px;text-align:center;padding:30px 0 10px 0;}
+
+/* ---------- Brand switcher ---------- */
+.brand-switch{
+  margin:0 20px 16px 20px;padding:10px 12px;background:var(--panel);border:1px solid var(--border);
+  border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;
+  gap:8px;transition:border-color .12s ease;
+}
+.brand-switch:hover{border-color:var(--flow-dim);}
+.brand-switch-label{font-size:9.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;}
+.brand-switch-value{font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.brand-switch-value small{color:var(--text-faint);font-weight:400;}
+.brand-switch-chevron{color:var(--text-faint);font-size:11px;flex-shrink:0;}
+.bu-group{margin-bottom:16px;}
+.bu-group-name{font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;}
+.brand-chip-row{display:flex;flex-wrap:wrap;gap:8px;}
+.brand-chip{
+  display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);
+  background:var(--panel-2);font-size:12.5px;color:var(--text-dim);cursor:pointer;transition:all .12s ease;
+}
+.brand-chip.locked{opacity:0.55;cursor:not-allowed;}
+.brand-chip.locked:hover{border-color:var(--border);}
+.brand-chip.active{background:var(--flow-dim);border-color:var(--flow);color:#EAFBF8;font-weight:600;cursor:default;}
+.brand-chip:not(.locked):not(.active):hover{border-color:var(--text-faint);color:var(--text);}
+.chip-tag{font-size:9px;padding:1px 6px;border-radius:10px;background:var(--panel);color:var(--text-faint);border:1px solid var(--border);}
+.chip-tag.live{background:var(--flow-dim);color:#EAFBF8;border-color:var(--flow-dim);}
+
+/* ---------- Modal ---------- */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(5,9,12,0.7);backdrop-filter:blur(2px);z-index:200;
+  display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .15s ease;
+}
+.modal-overlay.show{opacity:1;pointer-events:auto;}
+.modal-box{
+  background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px;width:640px;max-width:92vw;
+  max-height:84vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.5);
+}
+.modal-box.wide{width:900px;}
+.modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:12px;}
+.modal-title{font-family:var(--font-display);font-size:16px;font-weight:600;}
+.modal-close{color:var(--text-faint);cursor:pointer;font-size:20px;line-height:1;background:none;border:none;}
+.modal-sub{font-size:12px;color:var(--text-dim);margin-bottom:18px;line-height:1.5;}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px;}
+
+.toast{
+  position:fixed;bottom:24px;right:24px;background:var(--panel);border:1px solid var(--flow-dim);border-left:3px solid var(--flow);
+  padding:12px 16px;border-radius:8px;font-size:12.5px;color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.4);
+  opacity:0;transform:translateY(8px);transition:all .25s ease;pointer-events:none;z-index:300;max-width:380px;
+}
+.toast.show{opacity:1;transform:translateY(0);}
+.toast.err{border-color:var(--red-dim);border-left-color:var(--red);}
+
+.empty-state{padding:40px 20px;text-align:center;color:var(--text-faint);font-size:12.5px;}
+.badge-count{font-family:var(--font-mono);font-size:11px;color:var(--text-faint);}
+
+/* ---------- Sign-in ---------- */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+.auth-card{width:420px;max-width:100%;background:var(--panel);border:1px solid var(--border-soft);border-radius:14px;padding:30px;}
+.auth-brand{display:flex;align-items:center;gap:9px;margin-bottom:6px;}
+.auth-sub{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.5px;margin-bottom:22px;}
+.auth-field{margin-bottom:14px;}
+.auth-field label{display:block;font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;}
+.auth-code{font-family:var(--font-mono);font-size:24px;letter-spacing:10px;text-align:center;padding:12px;}
+.auth-msg{font-size:12px;padding:10px 12px;border-radius:7px;margin-bottom:14px;line-height:1.5;}
+.auth-msg.err{background:rgba(224,101,79,.10);border:1px solid var(--red-dim);color:#F0AFA2;}
+.auth-msg.info{background:rgba(47,190,176,.08);border:1px solid var(--flow-dim);color:#9FE3DA;}
+.auth-foot{margin-top:16px;font-size:11.5px;color:var(--text-faint);display:flex;justify-content:space-between;gap:10px;}
+
+.diag{
+  font-family:var(--font-mono);font-size:11px;white-space:pre-wrap;background:var(--panel-2);
+  border:1px solid var(--border-soft);border-radius:8px;padding:12px;max-height:340px;overflow:auto;color:var(--text-dim);
+}
+.stale-strip{
+  background:var(--amber-dim);color:#F5C778;padding:8px 28px;font-size:12px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+}
+
+@media (max-width:980px){
+  .app{flex-direction:column;}
+  .sidebar{width:100%;height:auto;position:relative;flex-direction:row;flex-wrap:wrap;padding:12px;gap:8px;align-items:center;}
+  .brand{border-bottom:none;margin-bottom:0;padding:0 8px 0 8px;}
+  .nav-group{display:flex;flex-wrap:wrap;align-items:center;}
+  .nav-label{display:none;}
+  .nav-item{border-left:none;border-bottom:2px solid transparent;padding:7px 11px;}
+  .nav-item.active{border-left:none;border-bottom:2px solid var(--flow);}
+  .content{padding:18px 14px 50px 14px;}
+  .kpi-grid,.grid-2,.split-2{grid-template-columns:1fr;}
+  .form-grid{grid-template-columns:1fr 1fr;}
+  .topbar{padding:12px 14px;flex-wrap:wrap;gap:10px;}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   CONFIGURATION — the only thing anyone ever sets
+   ============================================================ */
+
+/* Paste the Apps Script Web App /exec URL here when you publish this
+   file. Deploy → Manage deployments → copy the Web app URL.
+   Nothing else in Stockflow is configurable, by design: a user should
+   never be asked to point the app at anything. */
+const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQuJsynAJ4RexjNaPymlL6E8GMgBA-kc5Jx6P_6yWVQb3zOm4uhohRB06AFo/exec';
+
+const SESSION_KEY = 'stockflow_session';
+const EMAIL_KEY = 'stockflow_last_email';
+
+function backendUrl(){ return String(STOCKFLOW_BACKEND_URL || '').trim(); }
+
+/* ============================================================
+   TRANSPORT
+   ------------------------------------------------------------
+   An /exec POST is two hops. The script runs at script.google.com,
+   which 302-redirects to script.googleusercontent.com carrying a
+   SINGLE-USE content key, and the reply is served from there.
+   fetch follows the redirect by itself, but the two hops fail
+   differently and it matters a great deal which one did:
+
+     · fetch throws  → the host was never reached. Nothing ran.
+     · a 404 comes back → something answered and rejected the key.
+       Anything that pre-fetches or follows redirects — a proxy, a
+       web filter, a security scanner — spends that one-use key
+       first, so the browser then finds it already used.
+       THE SCRIPT ALREADY RAN.
+
+   So: reads retry automatically, writes never do, and a write whose
+   reply was lost is reported as "this probably succeeded" rather
+   than as a failure. For a stock ledger that distinction is the
+   difference between a shipment recorded once and recorded twice.
+   ============================================================ */
+
+const RETRYABLE_ACTIONS = {
+  getBootstrap: true, getRevision: true, getLoginContext: true,
+  getLedger: true, getAudit: true, getItemDetail: true
+};
+
+/* Set once any call has succeeded. After that we know the deployment
+   exists, so a later 404 is a transport failure rather than a wrong
+   URL — and the two need very different advice. */
+let backendProvenAlive = false;
+
+function sessionToken(){
+  try{ return localStorage.getItem(SESSION_KEY) || ''; }catch(e){ return ''; }
+}
+function setSessionToken(token){
+  try{
+    if(token) localStorage.setItem(SESSION_KEY, token);
+    else localStorage.removeItem(SESSION_KEY);
+  }catch(e){ /* private browsing; the session lasts this tab only */ }
+}
+
+async function rpc(action, payload){
+  const url = backendUrl();
+  if(!url){
+    throw new Error('This copy of Stockflow has not been pointed at a Google Sheet yet. ' +
+      'Whoever published it needs to set STOCKFLOW_BACKEND_URL near the top of stockflow.html.');
+  }
+  const attempts = RETRYABLE_ACTIONS[action] ? 2 : 1;
+  let lastError = null;
+  for(let attempt = 1; attempt <= attempts; attempt++){
+    try{
+      return await rpcOnce(action, payload, url);
+    }catch(err){
+      lastError = err;
+      /* Only a transport failure is worth repeating; an application
+         error would come back the same way every time. And a WRITE is
+         never repeated, whatever went wrong — see the header above. */
+      if(!err.transport || attempt === attempts) throw err;
+      await new Promise(function(resolve){ setTimeout(resolve, 700 * attempt); });
+    }
+  }
+  throw lastError;
+}
+
+async function rpcOnce(action, payload, url){
+  let res;
+  try{
+    res = await fetch(url, {
+      method: 'POST',
+      /* text/plain, not application/json. An application/json
+         cross-origin POST triggers a CORS preflight, and an Apps Script
+         Web App cannot answer one. The server parses the body itself. */
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({action: action, payload: payload, sessionToken: sessionToken()}),
+      redirect: 'follow'
+    });
+  }catch(err){
+    const e = new Error('Could not reach the Stockflow backend. Check your internet connection, ' +
+      'and that the Web App is deployed with "Who has access" set to Anyone.');
+    e.transport = true;
+    e.neverRan = true;   /* fetch threw: the request did not arrive */
+    throw e;
+  }
+
+  if(!res.ok){
+    if(res.status === 404 && backendProvenAlive){
+      const e = new Error('Google did not return the reply, though the request itself went through.');
+      e.transport = true;
+      e.replyLost = true;   /* the script ran; the reply was not delivered */
+      throw e;
+    }
+    if(res.status === 404){
+      const e = new Error('Nothing is deployed at the address this page is pointed at, so the Google ' +
+        'Sheet backend cannot be reached. Copy the current Web app URL from the Apps Script editor ' +
+        '(Deploy → Manage deployments) and set STOCKFLOW_BACKEND_URL in stockflow.html to match.');
+      e.transport = true;
+      e.neverRan = true;
+      throw e;
+    }
+    const e = new Error('The backend returned HTTP ' + res.status + '. Re-deploy the Web App and try again.');
+    if(res.status >= 500){ e.transport = true; e.replyLost = true; }
+    throw e;
+  }
+
+  const text = await res.text();
+  let data;
+  try{
+    data = JSON.parse(text);
+  }catch(err){
+    throw new Error('The backend replied with a sign-in page instead of data. ' +
+      'Re-deploy the Web App with "Execute as: Me" and "Who has access: Anyone".');
+  }
+
+  backendProvenAlive = true;
+
+  if(data.error){
+    if(data.error === 'SESSION_REQUIRED' || data.error === 'SESSION_INVALID' || data.error === 'SESSION_EXPIRED'){
+      const message = data.error === 'SESSION_EXPIRED'
+        ? 'Your session has expired. Sign in again to carry on.'
+        : 'Please sign in again.';
+      onSessionLost(message);
+      const e = new Error(message);
+      e.sessionInvalid = true;
+      throw e;
+    }
+    /* An internal fault is labelled by the server so it is never
+       reported to the user as though their file was malformed. */
+    if(String(data.error).indexOf('STOCKFLOW_INTERNAL') === 0){
+      const e = new Error(String(data.error).replace('STOCKFLOW_INTERNAL: ', ''));
+      e.internal = true;
+      throw e;
+    }
+    throw new Error(data.error);
+  }
+  return data.result;
+}
+
+/* Wraps a write. The rule is in the message it produces: if the reply
+   was lost, the work probably SUCCEEDED, and saying otherwise invites
+   someone to post the same shipment twice. */
+async function mutate(action, payload){
+  try{
+    const result = await rpc(action, payload);
+    return result;
+  }catch(err){
+    if(err.replyLost){
+      const e = new Error('Stockflow did not get a reply, but the request did reach the server, ' +
+        'so this change has PROBABLY been saved. Do not post it again — reload and check the ' +
+        'ledger first. Posting a shipment twice double-counts the stock.');
+      e.probablySucceeded = true;
+      throw e;
+    }
+    throw err;
+  }
+}
+
+/* ---------------- Connection check ----------------
+   Probes both hops and interprets the result, so a network team is
+   handed evidence rather than a guess. */
+async function connectionCheck(){
+  const url = backendUrl();
+  const lines = [
+    'Stockflow connection check',
+    'When    : ' + new Date().toISOString(),
+    'Page    : ' + (typeof location !== 'undefined' ? location.origin : '(unknown)'),
+    'Backend : ' + (url || '(not set)'),
+    ''
+  ];
+  if(!url){
+    lines.push('No backend URL is configured, so there is nothing to test.');
+    lines.push('Whoever published this page needs to set STOCKFLOW_BACKEND_URL in stockflow.html.');
+    return lines;
+  }
+
+  const probe = async function(label, init){
+    const started = Date.now();
+    try{
+      const res = await fetch(url, init);
+      const took = Date.now() - started;
+      const body = await res.text();
+      let shape;
+      try{
+        const parsed = JSON.parse(body);
+        shape = (parsed.result && parsed.result.app === 'stockflow') ? 'Stockflow JSON'
+          : (parsed.error ? 'JSON error: ' + parsed.error : 'JSON, unrecognised');
+      }catch(e){
+        shape = /<html|<!doctype/i.test(body) ? 'an HTML page (usually a Google sign-in)' : 'not JSON';
+      }
+      lines.push(label + ': HTTP ' + res.status + ' in ' + took + 'ms');
+      lines.push('        replied from : ' + (res.url || '(not reported)'));
+      lines.push('        body         : ' + shape);
+      return {status: res.status, finalUrl: res.url || '', shape: shape};
+    }catch(err){
+      lines.push(label + ': could not connect (' + (Date.now() - started) + 'ms)');
+      lines.push('        ' + String(err.message || err));
+      return {status: 0, finalUrl: '', shape: 'no reply'};
+    }
+  };
+
+  const get = await probe('GET   ', {method: 'GET', redirect: 'follow'});
+  lines.push('');
+  const post = await probe('POST  ', {
+    method: 'POST',
+    headers: {'Content-Type': 'text/plain;charset=utf-8'},
+    body: JSON.stringify({action: 'getLoginContext'}),
+    redirect: 'follow'
+  });
+
+  lines.push('');
+  lines.push('What this means:');
+  const reachedContentHost = (get.finalUrl + post.finalUrl).indexOf('googleusercontent') >= 0;
+
+  if(post.shape.indexOf('JSON') >= 0){
+    lines.push('  The backend is reachable from this device and answering normally.');
+  }else if(post.status === 0 && get.status === 0){
+    lines.push('  Nothing answered at all — this device is offline, or script.google.com is blocked.');
+  }else if(post.status === 404 || get.status === 404){
+    lines.push('  Something answered but rejected the one-time key in Google\'s redirect.');
+    lines.push('  That key is good for a single request. Anything on this network that follows or');
+    lines.push('  pre-fetches redirects — a proxy, web filter, or security scanner — spends it first,');
+    lines.push('  so the browser then finds it used. Note this also means the script DID run.');
+    lines.push('  Decisive test: load this page on a phone hotspot. If it works there, it is the network.');
+  }else if(post.shape.indexOf('HTML') >= 0){
+    lines.push('  A Google sign-in page came back instead of data. Re-deploy the Web App with');
+    lines.push('  "Execute as: Me" and "Who has access: Anyone".');
+  }else{
+    lines.push('  Unexpected reply — the HTTP status above is the thing to look into.');
+  }
+  if(!reachedContentHost && post.status !== 0){
+    lines.push('  Note: nothing replied from script.googleusercontent.com. Apps Script always serves');
+    lines.push('  replies from there, so it looks like that host was never reached.');
+  }
+
+  lines.push('');
+  lines.push('Both hosts must be reachable AND exempt from redirect pre-fetching / inspection:');
+  lines.push('  script.google.com');
+  lines.push('  script.googleusercontent.com');
+  return lines;
+}
+
+/* Turns a failure into the specific thing that is wrong and the
+   specific thing that fixes it. A generic "something went wrong" costs
+   a support call every time. */
+function diagnose(err){
+  const text = String((err && err.message) || err);
+  if(err && err.internal){
+    return {title: 'Stockflow hit an internal error', detail: text +
+      '\n\nThis is a fault in Stockflow, not a problem with anything you did or any file you uploaded.'};
+  }
+  if(err && err.probablySucceeded){
+    return {title: 'The reply was lost — but the change probably went through', detail: text};
+  }
+  if(/has not been pointed at a Google Sheet/.test(text)){
+    return {title: 'This page has no backend configured', detail: text};
+  }
+  if(/Nothing is deployed at the address/.test(text)){
+    return {title: 'The deployment address is wrong or the deployment was replaced', detail: text +
+      '\n\nA NEW deployment gets a NEW URL. If someone chose "New deployment" instead of ' +
+      '"Manage deployments → edit → New version", this page is pointing at the old one.'};
+  }
+  if(/sign-in page instead of data/.test(text)){
+    return {title: 'The Web App is not open to anonymous callers', detail: text};
+  }
+  if(/Could not reach the Stockflow backend/.test(text)){
+    return {title: 'The backend could not be reached', detail: text +
+      '\n\nRun the connection check to find out which of the two hops failed.'};
+  }
+  if(/Missing tab:/.test(text)){
+    return {title: 'The Google Sheet is missing a tab', detail: text +
+      '\n\nOpen the Apps Script editor and run setupStockflow() once.'};
+  }
+  if(/is busy saving someone/.test(text)){
+    return {title: 'Someone else is saving right now', detail: text};
+  }
+  return {title: 'That did not work', detail: text};
+}
+</script>
+
+<script>
+/* ============================================================
+   STATE
+   ------------------------------------------------------------
+   One object. `data` is whatever the last bootstrap returned and
+   is never edited in place by a screen — a change goes to the
+   server and the reply refreshes it.
+   ============================================================ */
+const STATE = {
+  phase: 'loading',          // loading | auth | app | fatal
+  auth: {step: 'email', email: '', message: null, messageKind: 'info', busy: false, needsBootstrap: false},
+  data: null,
+  today: null,               // ALWAYS the server's date. Never new Date().
+  session: null,
+  perms: {ledger: false, pricing: false, category: false, b2b: false, directory: false},
+  tab: 'overview',
+  activeBrand: null,          // null = every brand; set by the switcher
+  busy: null,
+  modal: null,               // {kind, ...} — while set, background polling never re-renders
+  stale: false,              // the shared data moved while a form was open
+  revision: 0,
+  fatal: null,
+
+  /* Every record view keeps its own page and its own filters, and any
+     change to a filter or a sort returns to page one. */
+  views: {
+    ledger: {page: 1, dateFrom: '', dateTo: '', item: '', type: '', search: '', sortBy: 'date', sortDir: 'desc', data: null, loading: false},
+    audit:  {page: 1, dateFrom: '', dateTo: '', entity: '', search: '', data: null, loading: false},
+    git:      {page: 1, search: '', category: '', sortBy: 'gitOldestAge', sortDir: 'desc'},
+    mainwh:   {page: 1, search: '', category: '', location: '', sortBy: 'mwOldestAge', sortDir: 'desc'},
+    consolidated: {page: 1, search: '', category: '', sortBy: 'consolidatedValue', sortDir: 'desc'},
+    itemmaster:   {page: 1, search: '', category: '', flagged: false, sortBy: 'item', sortDir: 'asc'},
+    simulator:    {page: 1, search: '', category: '', sortBy: 'item', sortDir: 'asc'}
+  },
+  bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null}
+};
+
+const PAGE_SIZE = 25;
+
+/* ============================================================
+   FORMATTING
+   ------------------------------------------------------------
+   The prototype rendered NaN as "$0.00", "0" and "0.0%", so a
+   broken cost looked like free stock and a broken date looked
+   like the newest stock in the building. Nothing here invents a
+   number it does not have — it says so instead.
+   ============================================================ */
+function isNum(n){ return n !== null && n !== undefined && n !== '' && isFinite(Number(n)); }
+
+function fmtMoney(n){
+  if(!isNum(n)) return '<span class="unknown">—</span>';
+  return '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtMoney0(n){
+  if(!isNum(n)) return '<span class="unknown">—</span>';
+  return '$' + Math.round(Number(n)).toLocaleString('en-US');
+}
+function fmtNum(n){
+  if(!isNum(n)) return '<span class="unknown">—</span>';
+  const v = Number(n);
+  return (Math.abs(v - Math.round(v)) < 0.0001 ? Math.round(v) : Math.round(v * 100) / 100)
+    .toLocaleString('en-US');
+}
+function fmtPct(n){
+  if(!isNum(n)) return '<span class="unknown">—</span>';
+  return (Number(n) * 100).toFixed(1) + '%';
+}
+/* Chart labels have to fit above a bar, so thousands are abbreviated. */
+function money0k(n){
+  const v = Math.round(Number(n) || 0);
+  if(Math.abs(v) >= 1000000) return '$' + (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'm';
+  if(Math.abs(v) >= 1000) return '$' + Math.round(v / 1000) + 'k';
+  return '$' + v;
+}
+
+function fmtDays(n){
+  if(!isNum(n)) return '<span class="unknown">—</span>';
+  return String(Math.round(Number(n)));
+}
+function fmtDateTime(iso){
+  if(!iso) return '';
+  const s = String(iso);
+  return s.slice(0, 10) + ' ' + s.slice(11, 16);
+}
+function initials(name){
+  return String(name || '?').trim().split(/\s+/).slice(0, 2)
+    .map(function(p){ return p.charAt(0).toUpperCase(); }).join('') || '?';
+}
+
+/* Everything that reaches innerHTML goes through this. The prototype
+   interpolated item names, references and notes raw; harmless with
+   static embedded data, but the moment those strings come from a shared
+   Sheet that other people write to, a stray angle bracket reparents the
+   table and a deliberate one is worse. */
+function esc(str){
+  return String(str === null || str === undefined ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function attr(str){ return esc(str); }
+
+function catTag(cat){
+  return '<span class="tag cat-' + esc(String(cat || '').replace(/\s+/g, '-')) + '">' + esc(cat) + '</span>';
+}
+function typePill(type){
+  const cls = {
+    'Opening Balance-MainWH': 'type-Opening', 'Purchase-Backlog': 'type-Purchase',
+    'Ship-to-GIT': 'type-Ship', 'Receive-to-MainWH': 'type-Receive',
+    'Sale-from-GIT': 'type-Sale', 'Sale-from-MainWH': 'type-Sale',
+    'Transfer-MainWH': 'type-Transfer', 'Reversal': 'type-Reversal'
+  }[type] || '';
+  return '<span class="type-pill ' + cls + '">' + esc(type) + '</span>';
+}
+
+/* Buckets come from the server so the charts and the status columns can
+   never drift apart again — the prototype bucketed at 30/60/90 and then
+   coloured the GIT status column at 45/90. */
+function ageBucketLabels(){
+  const b = (STATE.data && STATE.data.ageBuckets) || [30, 60, 90];
+  return ['0–' + b[0] + ' days', (b[0] + 1) + '–' + b[1] + ' days', (b[1] + 1) + '–' + b[2] + ' days', b[2] + '+ days'];
+}
+function ageBucket(days){
+  const b = (STATE.data && STATE.data.ageBuckets) || [30, 60, 90];
+  const labels = ageBucketLabels();
+  if(!isNum(days)) return null;
+  if(days <= b[0]) return labels[0];
+  if(days <= b[1]) return labels[1];
+  if(days <= b[2]) return labels[2];
+  return labels[3];
+}
+function ageColour(days){
+  const b = (STATE.data && STATE.data.ageBuckets) || [30, 60, 90];
+  if(!isNum(days)) return 'var(--text-faint)';
+  if(days > b[2]) return 'var(--red)';
+  if(days > b[1]) return 'var(--amber)';
+  return 'var(--text)';
+}
+
+/* ============================================================
+   CSV — thirty lines instead of a CDN
+   ------------------------------------------------------------
+   Handles quoted fields, embedded commas, embedded newlines and
+   doubled quotes. Written out rather than pulled from a CDN so a
+   blocked script cannot take out the entire bulk-upload path, and
+   so a malformed file produces our error rather than a library's.
+   ============================================================ */
+function parseCsv(text){
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  const src = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  for(let i = 0; i < src.length; i++){
+    const ch = src[i];
+    if(inQuotes){
+      if(ch === '"'){
+        if(src[i + 1] === '"'){ field += '"'; i++; }
+        else inQuotes = false;
+      }else field += ch;
+    }else if(ch === '"'){
+      inQuotes = true;
+    }else if(ch === ','){
+      row.push(field); field = '';
+    }else if(ch === '\n'){
+      row.push(field); field = '';
+      rows.push(row); row = [];
+    }else field += ch;
+  }
+  row.push(field);
+  rows.push(row);
+  /* Drop trailing blank lines, but never a row that merely has empty
+     cells — that is a data error the preview should show, not hide. */
+  while(rows.length && rows[rows.length - 1].every(function(c){ return String(c).trim() === ''; })) rows.pop();
+  return rows;
+}
+
+/* Header spellings people actually type, mapped to the field names the
+   server reads.
+
+   This map is not decoration. A header is normalised by lower-casing it
+   and dropping everything that is not a letter or a digit, which turns
+   "toLocation" into "tolocation" and "sellPrice" into "sellprice" — and
+   the server reads `toLocation` and `sellPrice`. Without the mapping
+   back, a bulk upload silently dropped the destination warehouse and
+   the selling price on every row, and nothing anywhere said so. */
+const CSV_FIELD_ALIASES = {
+  date: 'date', txndate: 'date', transactiondate: 'date', movementdate: 'date',
+  item: 'item', itemnumber: 'item', partnumber: 'item', partno: 'item', sku: 'item', part: 'item',
+  type: 'type', txntype: 'type', transactiontype: 'type', movement: 'type', movementtype: 'type',
+  qty: 'qty', quantity: 'qty', units: 'qty',
+  fob: 'fob', fobprice: 'fob', unitfob: 'fob', unitfobprice: 'fob', costprice: 'fob',
+  location: 'location', warehouse: 'location', wh: 'location',
+  fromlocation: 'location', fromwarehouse: 'location', from: 'location',
+  tolocation: 'toLocation', towarehouse: 'toLocation', destination: 'toLocation',
+  moveto: 'toLocation', to: 'toLocation',
+  ref: 'ref', reference: 'ref', po: 'ref', ponumber: 'ref', invoice: 'ref', invoiceno: 'ref',
+  sellprice: 'sellPrice', sellingprice: 'sellPrice', unitsellingprice: 'sellPrice',
+  saleprice: 'sellPrice', unitprice: 'sellPrice',
+  notes: 'notes', note: 'notes', comment: 'notes', comments: 'notes'
+};
+
+function normaliseHeader(h){
+  return String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/* Turns parsed rows into objects keyed by the field names the server
+   reads, so "Date", "date", " DATE " and "Transaction Date" all work —
+   and so do "toLocation", "To Location" and "Destination". */
+function csvToObjects(text){
+  const rows = parseCsv(text);
+  if(!rows.length) return {headers: [], rows: [], error: 'The file is empty.'};
+
+  const raw = rows[0].map(normaliseHeader);
+  const fields = raw.map(function(h){ return CSV_FIELD_ALIASES[h] || h; });
+  const required = ['date', 'item', 'type', 'qty'];
+  const missing = required.filter(function(r){ return fields.indexOf(r) < 0; });
+  if(missing.length){
+    return {headers: fields, rows: [], error: 'The first line must be a header row. ' +
+      'These required columns are missing: ' + missing.join(', ') + '. Found: ' +
+      (rows[0].map(function(h){ return String(h).trim(); }).filter(Boolean).join(', ') || '(nothing)') +
+      '. Use "Copy CSV template" to get the right shape.'};
+  }
+  const unknown = fields.filter(function(f, i){
+    return raw[i] && ['date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes']
+      .indexOf(f) < 0;
+  });
+
+  const out = rows.slice(1)
+    .filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); })
+    .map(function(r){
+      const obj = {};
+      fields.forEach(function(f, i){ obj[f] = (r[i] === undefined ? '' : String(r[i]).trim()); });
+      return obj;
+    });
+  return {headers: fields, rows: out, error: null,
+    ignoredColumns: unknown.length ? unknown : null};
+}
+
+function toCsv(rows){
+  return rows.map(function(row){
+    return row.map(function(cell){
+      const s = String(cell === null || cell === undefined ? '' : cell);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',');
+  }).join('\n');
+}
+
+/* ============================================================
+   CHARTS — no library, and no stretched text
+   ------------------------------------------------------------
+   The bars are HTML, not SVG. An SVG scaled to an unknown width
+   with preserveAspectRatio="none" stretches its own labels
+   horizontally, which is exactly what a chart must not do to the
+   words on its axis. Divs size themselves and their text stays
+   the size it was asked to be. The donut stays SVG because a
+   circle has to keep its aspect ratio anyway.
+   ============================================================ */
+const CHART_COLOURS = ['#7EB3E8', '#E3A23D', '#B18CE8', '#5FE0BE', '#E88CAF', '#8CA0AC'];
+
+function chartBar(labels, values, colours, opts){
+  const o = opts || {};
+  const fmt = o.fmt || function(v){ return String(v); };
+  const max = Math.max.apply(null, values.map(Number).concat([0])) || 1;
+  const h = o.px || 210;
+
+  const bars = labels.map(function(label, i){
+    const v = Number(values[i]) || 0;
+    const pct = max > 0 ? (v / max) * 100 : 0;
+    const colour = (colours && colours[i]) || CHART_COLOURS[i % CHART_COLOURS.length];
+    return '<div style="flex:1 1 0;min-width:0;display:flex;flex-direction:column;' +
+        'align-items:center;justify-content:flex-end;gap:6px;height:100%;" title="' +
+        attr(label + ': ' + fmt(v)) + '">' +
+      '<div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim);' +
+        'white-space:nowrap;">' + esc(v > 0 ? fmt(v) : '') + '</div>' +
+      '<div style="width:min(70%,46px);background:' + colour + ';border-radius:3px 3px 0 0;' +
+        'height:' + Math.max(pct, v > 0 ? 1.5 : 0).toFixed(2) + '%;min-height:' + (v > 0 ? '2px' : '0') + ';"></div>' +
+    '</div>';
+  }).join('');
+
+  const axis = labels.map(function(label){
+    return '<div style="flex:1 1 0;min-width:0;text-align:center;font-size:11px;color:var(--text-dim);' +
+      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;" title="' +
+      attr(label) + '">' + esc(label) + '</div>';
+  }).join('');
+
+  return '<div style="height:' + h + 'px;display:flex;flex-direction:column;gap:8px;">' +
+    '<div style="flex:1;display:flex;align-items:flex-end;gap:8px;' +
+      'border-bottom:1px solid var(--border-soft);padding-bottom:2px;min-height:0;">' + bars + '</div>' +
+    '<div style="display:flex;gap:8px;">' + axis + '</div>' +
+  '</div>';
+}
+
+function chartDonut(labels, values, colours, opts){
+  const o = opts || {};
+  const fmt = o.fmt || function(v){ return String(v); };
+  const total = values.reduce(function(s, v){ return s + (Number(v) || 0); }, 0);
+  const r = 34, cx = 50, cy = 50, stroke = 15;
+  const circ = 2 * Math.PI * r;
+  let offset = 0, arcs = '';
+
+  values.forEach(function(v, i){
+    const frac = total > 0 ? (Number(v) || 0) / total : 0;
+    const len = frac * circ;
+    const colour = (colours && colours[i]) || CHART_COLOURS[i % CHART_COLOURS.length];
+    if(len > 0){
+      arcs += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + colour +
+        '" stroke-width="' + stroke + '" stroke-dasharray="' + len.toFixed(3) + ' ' + (circ - len).toFixed(3) +
+        '" stroke-dashoffset="' + (-offset).toFixed(3) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')">' +
+        '<title>' + esc(labels[i] + ': ' + fmt(Number(v) || 0) + ' (' + (frac * 100).toFixed(1) + '%)') +
+        '</title></circle>';
+    }
+    offset += len;
+  });
+  if(total <= 0){
+    arcs = '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="#1A2530" stroke-width="' + stroke + '"/>';
+  }
+
+  const legend = labels.map(function(label, i){
+    const colour = (colours && colours[i]) || CHART_COLOURS[i % CHART_COLOURS.length];
+    const v = Number(values[i]) || 0;
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--text-dim);">' +
+      '<span style="width:9px;height:9px;border-radius:2px;background:' + colour + ';flex-shrink:0;"></span>' +
+      '<span>' + esc(label) + '</span>' +
+      '<span style="font-family:var(--font-mono);color:var(--text);margin-left:auto;">' + esc(fmt(v)) + '</span>' +
+    '</div>';
+  }).join('');
+
+  const size = (o.px || 210) - 62;
+  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;">' +
+    '<svg viewBox="0 0 100 100" role="img" style="width:' + size + 'px;height:' + size + 'px;max-width:100%;">' +
+      arcs +
+      '<text x="50" y="48" text-anchor="middle" font-size="7" fill="#8CA0AC">total</text>' +
+      '<text x="50" y="58" text-anchor="middle" font-size="8" font-weight="600" fill="#E7EDF2">' +
+        esc(o.centre || fmt(total)) + '</text>' +
+    '</svg>' +
+    '<div style="width:100%;max-width:280px;display:flex;flex-direction:column;gap:6px;">' + legend + '</div>' +
+  '</div>';
+}
+
+</script>
+
+<script>
+/* ============================================================
+   RENDER CORE
+   ------------------------------------------------------------
+   innerHTML re-render, same as the prototype. What is added is
+   the thing the prototype had none of: UI state survives a
+   redraw. This app has editable cells scattered through long
+   tables — FOB override, HP support, category percentage, B2B
+   fields — so losing the caret and the scroll position on every
+   keystroke would make it unusable.
+   ============================================================ */
+
+function modalKey(){ return STATE.modal ? JSON.stringify(STATE.modal) : ''; }
+
+function captureUiState(){
+  const snap = {
+    scrollY: (typeof window !== 'undefined') ? window.scrollY : 0,
+    focusId: null, start: null, end: null,
+    scrolls: {}, values: {}, modalKey: modalKey()
+  };
+  const el = document.activeElement;
+  if(el && el.id){
+    snap.focusId = el.id;
+    try{ snap.start = el.selectionStart; snap.end = el.selectionEnd; }catch(e){ /* not a text field */ }
+  }
+  document.querySelectorAll('input[id], select[id], textarea[id]').forEach(function(field){
+    /* NEVER a file input. It reads back as "C:\fakepath\name.csv" but may
+       only ever be *set* to an empty string, so assigning it back throws
+       InvalidStateError — which once killed a render half-way through and
+       left an import button spinning for ever with no request sent. The
+       browser keeps the chosen file across a redraw anyway. */
+    if(field.type === 'file') return;
+    snap.values[field.id] = (field.type === 'checkbox') ? field.checked : field.value;
+  });
+  document.querySelectorAll('[data-keep-scroll]').forEach(function(node){
+    snap.scrolls[node.getAttribute('data-keep-scroll')] = node.scrollTop;
+  });
+  return snap;
+}
+
+function restoreUiState(snap){
+  if(!snap) return;
+  Object.keys(snap.values).forEach(function(id){
+    const field = document.getElementById(id);
+    if(!field || field.type === 'file') return;
+    /* Only restore a field the new markup left empty — otherwise a value
+       the server just corrected would be overwritten by the stale one
+       the user was looking at. */
+    if(field.type === 'checkbox'){
+      if(field.dataset.keepValue === '1') field.checked = snap.values[id];
+    }else if(field.dataset.keepValue === '1' || field.value === ''){
+      field.value = snap.values[id];
+    }
+  });
+  Object.keys(snap.scrolls).forEach(function(key){
+    const node = document.querySelector('[data-keep-scroll="' + key + '"]');
+    if(node) node.scrollTop = snap.scrolls[key];
+  });
+  if(snap.focusId){
+    const field = document.getElementById(snap.focusId);
+    if(field && field.type !== 'file'){
+      field.focus();
+      if(snap.start !== null && snap.start !== undefined){
+        try{ field.setSelectionRange(snap.start, snap.end); }catch(e){ /* not a text field */ }
+      }
+    }
+  }
+  if(typeof window !== 'undefined' && snap.scrollY) window.scrollTo(0, snap.scrollY);
+}
+
+let renderDepth = 0;
+
+function render(){
+  if(typeof document === 'undefined') return;
+  if(renderDepth > 0) return;          // a handler that renders during a render
+  renderDepth++;
+  let snap = null;
+  try{ snap = captureUiState(); }catch(e){ console.warn('could not capture UI state', e); }
+
+  const root = document.getElementById('root');
+  try{
+    if(STATE.phase === 'loading') root.innerHTML = viewLoading();
+    else if(STATE.phase === 'fatal') root.innerHTML = viewFatal();
+    else if(STATE.phase === 'auth') root.innerHTML = viewAuth();
+    else root.innerHTML = viewApp();
+  }finally{
+    renderDepth--;
+  }
+
+  try{ bindHandlers(); }catch(e){ console.error('handler binding failed', e); }
+  /* The screen is already drawn by this point. Failing to put the caret
+     back is worth a console entry, never a dead app. */
+  try{ restoreUiState(snap); }catch(e){ console.warn('could not restore UI state', e); }
+}
+
+function toast(msg, isErr){
+  if(typeof document === 'undefined') return;
+  const t = document.getElementById('toast');
+  if(!t) return;
+  t.textContent = msg;
+  t.classList.toggle('err', !!isErr);
+  t.classList.add('show');
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 4200);
+}
+
+/* Delegated events: one listener per action attribute, re-bound after
+   every render. Simple, and it cannot leak listeners onto detached
+   nodes the way per-element binding did in the prototype. */
+function on(selector, event, handler){
+  document.querySelectorAll(selector).forEach(function(el){
+    el.addEventListener(event, handler);
+  });
+}
+
+/* ============================================================
+   FILTER / SORT / PAGE — client side, for the item views
+   ============================================================ */
+function applyView(items, view, extra){
+  const search = String(view.search || '').trim().toLowerCase();
+  let rows = items.filter(function(it){
+    if(view.category && it.category !== view.category) return false;
+    if(view.location && !(it.byLocation && it.byLocation[view.location] > 0)) return false;
+    if(view.flagged && !it.flag) return false;
+    if(extra && !extra(it)) return false;
+    if(search){
+      if((it.item + ' ' + it.name + ' ' + it.category).toLowerCase().indexOf(search) < 0) return false;
+    }
+    return true;
+  });
+
+  const key = view.sortBy || 'item';
+  const dir = view.sortDir === 'asc' ? 1 : -1;
+  rows.sort(function(a, b){
+    const av = a[key], bv = b[key];
+    const an = isNum(av), bn = isNum(bv);
+    /* Unknown sorts last whichever way the column is pointing — an item
+       with no ageing figure is not "the newest". */
+    if(!an && !bn) return String(a.item).localeCompare(String(b.item));
+    if(!an) return 1;
+    if(!bn) return -1;
+    if(an && bn && Number(av) !== Number(bv)) return (Number(av) - Number(bv)) * dir;
+    if(av === bv) return String(a.item).localeCompare(String(b.item));
+    return (av < bv ? -1 : 1) * dir;
+  });
+
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const page = Math.min(Math.max(1, view.page || 1), pages);
+  view.page = page;
+  return {rows: rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), total: total, page: page, pages: pages};
+}
+
+function sortableTh(viewId, field, label, numeric){
+  const v = STATE.views[viewId];
+  const active = v.sortBy === field;
+  const caret = active ? '<span class="sort-caret">' + (v.sortDir === 'asc' ? '▲' : '▼') + '</span>' : '';
+  return '<th class="sortable' + (numeric ? ' num' : '') + '" data-sort="' + attr(viewId) + '" ' +
+    'data-field="' + attr(field) + '">' + esc(label) + caret + '</th>';
+}
+
+function pager(viewId, result){
+  if(result.total === 0) return '';
+  const from = (result.page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(result.page * PAGE_SIZE, result.total);
+  return '<div class="pager">' +
+    '<div class="pager-info">showing ' + from + '–' + to + ' of ' + result.total + '</div>' +
+    '<div class="pager-btns">' +
+      '<button class="btn secondary sm" data-page="' + attr(viewId) + '" data-to="1" ' +
+        (result.page === 1 ? 'disabled' : '') + '>&laquo; first</button>' +
+      '<button class="btn secondary sm" data-page="' + attr(viewId) + '" data-to="' + (result.page - 1) + '" ' +
+        (result.page === 1 ? 'disabled' : '') + '>prev</button>' +
+      '<span class="pager-info">page ' + result.page + ' of ' + result.pages + '</span>' +
+      '<button class="btn secondary sm" data-page="' + attr(viewId) + '" data-to="' + (result.page + 1) + '" ' +
+        (result.page >= result.pages ? 'disabled' : '') + '>next</button>' +
+      '<button class="btn secondary sm" data-page="' + attr(viewId) + '" data-to="' + result.pages + '" ' +
+        (result.page >= result.pages ? 'disabled' : '') + '>last &raquo;</button>' +
+    '</div></div>';
+}
+
+function categoryOptions(selected){
+  const cats = (STATE.data && STATE.data.categories) || [];
+  return '<option value="">All categories</option>' + cats.map(function(c){
+    return '<option value="' + attr(c.category) + '"' + (selected === c.category ? ' selected' : '') + '>' +
+      esc(c.category) + '</option>';
+  }).join('');
+}
+function locationOptions(selected, allLabel){
+  const locs = (STATE.data && STATE.data.locations) || [];
+  return '<option value="">' + esc(allLabel || 'All warehouses') + '</option>' + locs.map(function(l){
+    return '<option value="' + attr(l.code) + '"' + (selected === l.code ? ' selected' : '') + '>' +
+      esc(l.code) + ' — ' + esc(l.name) + '</option>';
+  }).join('');
+}
+
+function lockedNote(msg){
+  return '<div class="locked-note">🔒 ' + esc(msg) + '</div>';
+}
+
+function emptyRow(cols, msg){
+  return '<tr><td colspan="' + cols + '"><div class="empty-state">' + esc(msg) + '</div></td></tr>';
+}
+</script>
+
+<script>
+/* ============================================================
+   SHELL: loading, fatal, sign-in
+   ============================================================ */
+
+function viewLoading(){
+  return '<div class="auth-wrap"><div class="auth-card">' +
+    '<div class="auth-brand"><div class="brand-dot"></div>' +
+    '<div class="brand-name">TD Africa <b>Stockflow</b></div></div>' +
+    '<div class="auth-sub">Group Inventory &amp; Pricing Platform</div>' +
+    '<div class="auth-msg info">Connecting to the Google Sheet…</div>' +
+    '</div></div>';
+}
+
+function viewFatal(){
+  const d = STATE.fatal || {title: 'Stockflow could not start', detail: ''};
+  return '<div class="auth-wrap"><div class="auth-card">' +
+    '<div class="auth-brand"><div class="brand-dot"></div>' +
+    '<div class="brand-name">TD Africa <b>Stockflow</b></div></div>' +
+    '<div class="auth-sub">Group Inventory &amp; Pricing Platform</div>' +
+    '<div class="auth-msg err"><b>' + esc(d.title) + '</b><br>' + esc(d.detail).replace(/\n/g, '<br>') + '</div>' +
+    '<div class="btn-row">' +
+      '<button class="btn secondary" id="fatal-retry">Try again</button>' +
+      '<button class="btn secondary" id="fatal-check">Run connection check</button>' +
+    '</div>' +
+    '<div id="fatal-diag" style="margin-top:14px;"></div>' +
+    '</div></div>';
+}
+
+function viewAuth(){
+  const a = STATE.auth;
+  const msg = a.message
+    ? '<div class="auth-msg ' + (a.messageKind === 'err' ? 'err' : 'info') + '">' +
+        esc(a.message).replace(/\n/g, '<br>') + '</div>'
+    : '';
+
+  let body;
+  if(a.needsBootstrap){
+    body =
+      '<div class="auth-msg info">This Stockflow Sheet has no Admin yet. Create the first one — ' +
+      'you will still sign in with an emailed code, like everybody else.</div>' +
+      '<div class="auth-field"><label>Your full name</label>' +
+        '<input type="text" id="bootstrap-name" placeholder="Ada Adeyemi" autocomplete="name"></div>' +
+      '<div class="auth-field"><label>Your work email</label>' +
+        '<input type="email" id="bootstrap-email" placeholder="you@tdafrica.com" autocomplete="email"></div>' +
+      '<button class="btn" id="bootstrap-btn" style="width:100%;"' + (a.busy ? ' disabled' : '') + '>' +
+        (a.busy ? 'Creating…' : 'Create the first Admin') + '</button>';
+  }else if(a.step === 'email'){
+    body =
+      '<div class="auth-field"><label>Work email</label>' +
+        '<input type="email" id="auth-email" data-keep-value="1" placeholder="you@tdafrica.com" ' +
+        'autocomplete="email" value="' + attr(a.email) + '"></div>' +
+      '<button class="btn" id="auth-send" style="width:100%;"' + (a.busy ? ' disabled' : '') + '>' +
+        (a.busy ? 'Sending…' : 'Email me a sign-in code') + '</button>';
+  }else{
+    body =
+      '<div class="auth-field"><label>6-digit code sent to ' + esc(a.email) + '</label>' +
+        '<input type="text" id="auth-code" class="auth-code" inputmode="numeric" maxlength="6" ' +
+        'autocomplete="one-time-code" placeholder="······"></div>' +
+      '<button class="btn" id="auth-verify" style="width:100%;"' + (a.busy ? ' disabled' : '') + '>' +
+        (a.busy ? 'Checking…' : 'Sign in') + '</button>' +
+      '<div class="auth-foot">' +
+        '<button class="link-btn" id="auth-back">Use a different address</button>' +
+        '<button class="link-btn" id="auth-resend">Send another code</button>' +
+      '</div>';
+  }
+
+  return '<div class="auth-wrap"><div class="auth-card">' +
+    '<div class="auth-brand"><div class="brand-dot"></div>' +
+    '<div class="brand-name">TD Africa <b>Stockflow</b></div></div>' +
+    '<div class="auth-sub">Group Inventory &amp; Pricing Platform</div>' +
+    msg + body +
+    '<div class="auth-foot" style="margin-top:20px;border-top:1px solid var(--border-soft);padding-top:12px;">' +
+      '<span>No passwords. Codes expire in 10 minutes.</span>' +
+      '<button class="link-btn" id="auth-check">Connection check</button>' +
+    '</div>' +
+    '<div id="auth-diag"></div>' +
+    '</div></div>';
+}
+
+/* ============================================================
+   THE APPLICATION SHELL
+   ============================================================ */
+
+const NAV = [
+  {group: 'Overview', items: [{id: 'overview', label: 'Overview'}]},
+  {group: 'Stock Movement', items: [
+    {id: 'ledger', label: 'Transactions Ledger'},
+    {id: 'git', label: 'GIT — In Transit'},
+    {id: 'mainwh', label: 'Main Warehouse'},
+    {id: 'consolidated', label: 'Consolidated Position'}
+  ]},
+  {group: 'Cost & Pricing', items: [
+    {id: 'itemmaster', label: 'Item Master'},
+    {id: 'simulator', label: 'Selling Price Simulator'},
+    {id: 'category', label: 'Category Settings'}
+  ]},
+  {group: 'Other', items: [
+    {id: 'b2b', label: 'B2B Stock'},
+    {id: 'analytics', label: 'Analytics'},
+    {id: 'audit', label: 'Audit Trail'},
+    {id: 'access', label: 'Access & Roles'}
+  ]}
+];
+
+const TAB_META = {
+  overview: {title: 'Overview', sub: 'Live stock, movement and pricing position'},
+  ledger: {title: 'Transactions Ledger', sub: 'Single source of truth — every movement is one row, append-only'},
+  git: {title: 'GIT — Goods In Transit', sub: 'Shipped, not yet received into the Main Warehouse'},
+  mainwh: {title: 'Main Warehouse', sub: 'Physically received and available for sale'},
+  consolidated: {title: 'Consolidated Stock Position', sub: 'GIT + Main Warehouse — total owned position'},
+  itemmaster: {title: 'Item Master', sub: 'Category, cost build-up and live quantities per part number'},
+  simulator: {title: 'Selling Price Simulator', sub: 'Global, category or SKU-level margin scenarios'},
+  category: {title: 'Category Settings', sub: 'Landed cost % applied per category'},
+  b2b: {title: 'B2B Stock', sub: 'Reseller-owned, fixed cost & price — excluded from averaging'},
+  analytics: {title: 'Analytics', sub: 'Value, mix and ageing across the whole position'},
+  audit: {title: 'Audit Trail', sub: 'Who changed which cost or price, when, and from what to what'},
+  access: {title: 'Access & Roles', sub: 'Who can see and edit what — enforced on the server'}
+};
+
+function viewApp(){
+  const meta = TAB_META[STATE.tab] || TAB_META.overview;
+  const s = STATE.session || {};
+  const badges = navBadges();
+
+  const stale = STATE.stale
+    ? '<div class="stale-strip"><span>Someone else has changed the data since this page loaded.</span>' +
+      '<button class="btn secondary sm" id="refresh-now">Refresh</button></div>'
+    : '';
+
+  return '<div class="app">' +
+    '<div class="sidebar">' +
+      '<div class="brand">' +
+        '<div class="brand-mark"><div class="brand-dot"></div>' +
+        '<div class="brand-name">TD Africa <b>Stockflow</b></div></div>' +
+        '<div class="brand-sub">Group Inventory &amp; Pricing Platform</div>' +
+      '</div>' +
+      brandSwitch() +
+      NAV.map(function(g){
+        return '<div class="nav-group"><div class="nav-label">' + esc(g.group) + '</div>' +
+          g.items.map(function(it){
+            const badge = badges[it.id]
+              ? '<span class="nav-badge">' + esc(badges[it.id]) + '</span>' : '';
+            return '<div class="nav-item' + (STATE.tab === it.id ? ' active' : '') + '" data-tab="' +
+              attr(it.id) + '">' + esc(it.label) + badge + '</div>';
+          }).join('') +
+          '</div>';
+      }).join('') +
+    '</div>' +
+    '<div class="main">' +
+      '<div class="topbar">' +
+        '<div><div class="topbar-title">' + esc(meta.title) + '</div>' +
+        '<div class="topbar-sub">' + esc(meta.sub) + '</div></div>' +
+        '<div class="topbar-right">' +
+          '<div class="serverdate" title="Every age in Stockflow is measured against this date, ' +
+            'which is supplied by the server">as at <b>' + esc(STATE.today || '—') + '</b></div>' +
+          '<div class="whoami">' +
+            '<div class="whoami-avatar">' + esc(initials(s.name)) + '</div>' +
+            '<div><div class="whoami-name">' + esc(s.name || '') + '</div>' +
+            '<div class="whoami-role">' + esc(s.roleLabel || s.role || '') + '</div></div>' +
+          '</div>' +
+          '<button class="link-btn" id="sign-out">Sign out</button>' +
+        '</div>' +
+      '</div>' +
+      stale +
+      '<div class="content" id="content">' + renderTab() + '</div>' +
+      '<div class="footer-note">Stockflow — TD Africa Group · ' +
+        'the position is derived from the ledger and reconciled against it · ' +
+        '<button class="link-btn" id="foot-check">connection check</button></div>' +
+    '</div>' +
+    renderModal() +
+  '</div>';
+}
+
+function brandSwitch(){
+  const brands = (STATE.data && STATE.data.brands) || [];
+  if(!brands.length) return '';
+  const active = STATE.activeBrand;
+  const bu = active
+    ? (brands.filter(function(b){ return b.brand === active; })[0] || {}).businessUnit || ''
+    : 'every brand loaded';
+  return '<div class="brand-switch" id="brand-switch" title="Filter the whole app to one brand">' +
+    '<div style="min-width:0;">' +
+      '<div class="brand-switch-label">Business Unit / Brand</div>' +
+      '<div class="brand-switch-value">' + esc(active || 'All brands') +
+        ' <small>· ' + esc(bu) + '</small></div>' +
+    '</div>' +
+    '<div class="brand-switch-chevron">&#9662;</div>' +
+  '</div>';
+}
+
+function brandModal(){
+  const brands = (STATE.data && STATE.data.brands) || [];
+  const counts = brandsWithStock();
+  const groups = [];
+  brands.forEach(function(b){
+    let g = groups.filter(function(x){ return x.bu === b.businessUnit; })[0];
+    if(!g){ g = {bu: b.businessUnit, brands: []}; groups.push(g); }
+    g.brands.push(b);
+  });
+
+  return '<div class="modal-head"><div class="modal-title">Switch Business Unit / Brand</div>' +
+      '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+    '<div class="modal-sub">Stockflow runs every TD Africa Group brand through the same engine. ' +
+      'Brand is a real column on every item, so this filters the whole app rather than only ' +
+      'relabelling it — a brand with no items loaded shows nothing because it has nothing, not ' +
+      'because it is switched off.</div>' +
+    '<div class="brand-chip-row" style="margin-bottom:16px;">' +
+      '<div class="brand-chip' + (STATE.activeBrand ? '' : ' active') + '" data-brand="">' +
+        'All brands<span class="chip-tag live">' + Object.keys(counts).length + ' loaded</span></div>' +
+    '</div>' +
+    groups.map(function(g){
+      return '<div class="bu-group"><div class="bu-group-name">' + esc(g.bu) + '</div>' +
+        '<div class="brand-chip-row">' +
+        g.brands.map(function(b){
+          const n = counts[b.brand] || 0;
+          const isActive = STATE.activeBrand === b.brand;
+          const cls = isActive ? 'active' : (n ? '' : 'locked');
+          return '<div class="brand-chip ' + cls + '" data-brand="' + attr(b.brand) + '">' +
+            esc(b.brand) +
+            (n ? '<span class="chip-tag live">' + n + ' SKUs</span>'
+               : '<span class="chip-tag">not loaded</span>') +
+          '</div>';
+        }).join('') +
+        '</div></div>';
+    }).join('');
+}
+
+function navBadges(){
+  const items = visibleItems();
+  const b = {};
+  const openFlags = items.filter(function(i){ return i.flag && !i.flagResolvedBy; }).length;
+  if(openFlags) b.analytics = String(openFlags);
+  const git = items.filter(function(i){ return i.gitQty > 0; }).length;
+  if(git) b.git = String(git);
+  return b;
+}
+
+function renderTab(){
+  const renderers = {
+    overview: viewOverview, ledger: viewLedger, git: viewGit, mainwh: viewMainWh,
+    consolidated: viewConsolidated, itemmaster: viewItemMaster, simulator: viewSimulator,
+    category: viewCategory, b2b: viewB2B, analytics: viewAnalytics, audit: viewAudit, access: viewAccess
+  };
+  const fn = renderers[STATE.tab] || viewOverview;
+  try{
+    return fn();
+  }catch(err){
+    console.error('screen failed to render', err);
+    return '<div class="banner bad"><div>⚠</div><div><b>This screen could not be drawn.</b> ' +
+      esc(String(err && err.message || err)) +
+      '<br>This is a fault in Stockflow, not something you did. The rest of the app still works.</div></div>';
+  }
+}
+
+/* Totals used by more than one screen. */
+function totals(){
+  const items = visibleItems();
+  const t = {gitQty: 0, mwQty: 0, backlogQty: 0, soldQty: 0,
+    gitValue: 0, mwValue: 0, consolidatedValue: 0, soldValue: 0, costOfSale: 0, skus: 0, b2bSkus: 0};
+  items.forEach(function(i){
+    if(i.b2b) t.b2bSkus++; else t.skus++;
+    t.gitQty += i.gitQty; t.mwQty += i.mwQty; t.backlogQty += i.backlogQty; t.soldQty += i.soldQty;
+    t.gitValue += i.gitValue; t.mwValue += i.mwValue; t.consolidatedValue += i.consolidatedValue;
+    t.soldValue += i.soldValue; t.costOfSale += i.costOfSale;
+  });
+  t.consolidatedQty = t.gitQty + t.mwQty;
+  return t;
+}
+
+/* Brand is a real column on every item, so the switcher filters rather
+   than pretending. It is a view, not a permission: nothing is hidden
+   from anyone, and the server returns every item regardless. */
+function visibleItems(){
+  const all = (STATE.data && STATE.data.items) || [];
+  if(!STATE.activeBrand) return all;
+  return all.filter(function(i){ return i.brand === STATE.activeBrand; });
+}
+function nonB2B(){
+  return visibleItems().filter(function(i){ return !i.b2b; });
+}
+function b2bItems(){
+  return visibleItems().filter(function(i){ return i.b2b; });
+}
+function itemByCode(code){
+  return ((STATE.data && STATE.data.items) || []).filter(function(i){ return i.item === code; })[0] || null;
+}
+
+/* Which brands actually have items loaded, so the switcher can say what
+   is live rather than repeating a hard-coded list. */
+function brandsWithStock(){
+  const counts = {};
+  ((STATE.data && STATE.data.items) || []).forEach(function(i){
+    if(i.brand) counts[i.brand] = (counts[i.brand] || 0) + 1;
+  });
+  return counts;
+}
+</script>
+
+<script>
+/* ============================================================
+   SCREEN: Overview
+   ============================================================ */
+function viewOverview(){
+  const t = totals();
+  const cats = (STATE.data.categories || []).map(function(c){ return c.category; });
+  const catValues = cats.map(function(cat){
+    return nonB2B().filter(function(i){ return i.category === cat; })
+      .reduce(function(s, i){ return s + i.consolidatedValue; }, 0);
+  });
+  const flagged = nonB2B().filter(function(i){ return i.flag && !i.flagResolvedBy; }).length;
+
+  const dataQuality = [];
+  const unknownCost = ((STATE.data.items) || []).filter(function(i){ return i.costUnknown && i.consolidatedQty > 0; });
+  if(unknownCost.length){
+    dataQuality.push(unknownCost.length + ' item(s) hold stock with no purchase history, so their cost is not known');
+  }
+  const unknownAge = ((STATE.data.items) || []).filter(function(i){ return i.ageUnknownQty > 0; });
+  if(unknownAge.length) dataQuality.push(unknownAge.length + ' item(s) hold stock whose entry date cannot be read');
+  const futureAge = ((STATE.data.items) || []).filter(function(i){ return i.ageFutureQty > 0; });
+  if(futureAge.length) dataQuality.push(futureAge.length + ' item(s) hold stock dated in the future');
+  if(flagged) dataQuality.push(flagged + ' item(s) carry an unresolved data-quality flag');
+
+  return '' +
+    (dataQuality.length
+      ? '<div class="banner"><div>⚠</div><div><b>Worth a look.</b> ' +
+        dataQuality.map(esc).join('<br>') + '</div></div>'
+      : '') +
+
+    '<div class="kpi-grid">' +
+      kpi('Consolidated Stock Value', fmtMoney0(t.consolidatedValue),
+        fmtNum(t.consolidatedQty) + ' units across ' + (t.skus + t.b2bSkus) + ' SKUs' +
+        (t.b2bSkus ? ' (' + t.b2bSkus + ' B2B)' : ''), 'var(--flow)') +
+      kpi('GIT Value', fmtMoney0(t.gitValue), fmtNum(t.gitQty) + ' units in transit', 'var(--amber)') +
+      kpi('Main Warehouse Value', fmtMoney0(t.mwValue), fmtNum(t.mwQty) + ' units on ground', 'var(--flow)') +
+      kpi('Sold (all time)', fmtMoney0(t.soldValue),
+        fmtNum(t.soldQty) + ' units · cost of sale ' + fmtMoney0(t.costOfSale), 'var(--green)') +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Stock Flow' +
+        '<span>Backlog → GIT → Main Warehouse → Sold</span></div></div>' +
+      '<div class="flow-wrap">' +
+        flowNode('backlog', 'Backlog (on order)', fmtNum(t.backlogQty), 'not owned yet') +
+        '<div class="flow-arrow">&#8594;</div>' +
+        flowNode('git', 'Goods In Transit', fmtNum(t.gitQty), fmtMoney0(t.gitValue)) +
+        '<div class="flow-arrow">&#8594;</div>' +
+        flowNode('mw', 'Main Warehouse', fmtNum(t.mwQty), fmtMoney0(t.mwValue)) +
+        '<div class="flow-arrow">&#8594;</div>' +
+        flowNode('sold', 'Sold', fmtNum(t.soldQty), fmtMoney0(t.soldValue)) +
+      '</div>' +
+      '<div style="font-size:11.5px;color:var(--text-faint);margin-top:12px;">' +
+        'Ageing starts the day stock is recognised as GIT and carries through to the Main Warehouse ' +
+        'and across any transfer — it never resets. Sold value is the price actually achieved; ' +
+        'cost of sale was frozen at the moment of each sale, so changing a landed percentage today ' +
+        'cannot restate it.' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="grid-2">' +
+      '<div class="panel">' +
+        '<div class="panel-head"><div class="panel-title">Consolidated Value by Category</div></div>' +
+        '<div class="chart-box">' + chartBar(cats, catValues, null, {px: 262, fmt: money0k}) + '</div>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<div class="panel-head"><div class="panel-title">GIT vs Main Warehouse</div></div>' +
+        '<div class="chart-box">' + chartDonut(['GIT', 'Main Warehouse'], [t.gitValue, t.mwValue],
+          ['#E3A23D', '#2FBEB0'], {px: 262, centre: '$' + Math.round(t.consolidatedValue / 1000) + 'k',
+            fmt: function(v){ return '$' + Math.round(v).toLocaleString('en-US'); }}) + '</div>' +
+      '</div>' +
+    '</div>';
+}
+
+function kpi(label, value, delta, accent){
+  return '<div class="kpi-card" style="--kpi-accent:' + accent + '">' +
+    '<div class="kpi-label">' + esc(label) + '</div>' +
+    '<div class="kpi-value">' + value + '</div>' +
+    '<div class="kpi-delta">' + delta + '</div></div>';
+}
+function flowNode(cls, label, value, sub){
+  return '<div class="flow-node ' + cls + '"><div class="fn-label">' + esc(label) + '</div>' +
+    '<div class="fn-value">' + value + '</div><div class="fn-sub">' + sub + '</div></div>';
+}
+
+/* ============================================================
+   SCREEN: Transactions Ledger
+   ============================================================ */
+const BULK_TEMPLATE_ROWS = [
+  ['date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'sellPrice'],
+  ['2026-08-25', '9G158ET', 'Ship-to-GIT', '20', '', '', '', 'PO-4471', ''],
+  ['2026-08-25', 'D79E6EA', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', ''],
+  ['2026-09-02', '9G158ET', 'Receive-to-MainWH', '20', '', 'TD MW', '', 'ASN-1123', ''],
+  ['2026-09-05', '9G158ET', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '799.00']
+];
+
+function viewLedger(){
+  const editable = STATE.perms.ledger;
+  const v = STATE.views.ledger;
+  const types = (STATE.data.txnTypes || []);
+
+  const form = editable ? (
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Log a Transaction' +
+        '<span>one row per event — the server checks the stock is really there</span></div></div>' +
+      '<div class="form-grid">' +
+        '<div class="field"><label>Date</label>' +
+          '<input type="date" id="f-date" data-keep-value="1" value="' + attr(STATE.today) + '"></div>' +
+        '<div class="field"><label>Item Number</label>' +
+          '<select id="f-item" data-keep-value="1">' +
+            ((STATE.data.items) || []).map(function(i){
+              return '<option value="' + attr(i.item) + '">' + esc(i.item) +
+                (i.b2b ? ' (B2B)' : '') + '</option>';
+            }).join('') +
+          '</select></div>' +
+        '<div class="field"><label>Type</label>' +
+          '<select id="f-type" data-keep-value="1">' +
+            types.map(function(t){ return '<option value="' + attr(t) + '">' + esc(t) + '</option>'; }).join('') +
+          '</select></div>' +
+        '<div class="field"><label>Qty</label>' +
+          '<input type="number" id="f-qty" min="0" step="any" placeholder="e.g. 10"></div>' +
+        '<div class="field" id="f-fob-wrap"><label>Unit FOB $</label>' +
+          '<input type="number" id="f-fob" min="0" step="any" placeholder="e.g. 750.00"></div>' +
+        '<div class="field"><label>Reference</label>' +
+          '<input type="text" id="f-ref" placeholder="PO / ASN / Invoice #"></div>' +
+        '<div class="field" id="f-loc-wrap"><label>Warehouse</label>' +
+          '<select id="f-location" data-keep-value="1">' + locationOptions('', 'Not specified') + '</select></div>' +
+        '<div class="field" id="f-toloc-wrap"><label>Move to</label>' +
+          '<select id="f-tolocation" data-keep-value="1">' + locationOptions('', 'Choose…') + '</select></div>' +
+        '<div class="field" id="f-sell-wrap"><label>Unit selling price $</label>' +
+          '<input type="number" id="f-sellprice" min="0" step="any" placeholder="e.g. 799.00"></div>' +
+        '<div class="field" style="grid-column:span 2;"><label>Notes</label>' +
+          '<input type="text" id="f-notes" placeholder="optional"></div>' +
+      '</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn" id="log-btn"' + (STATE.busy === 'post' ? ' disabled' : '') + '>' +
+          (STATE.busy === 'post' ? 'Posting…' : 'Log Transaction') + '</button>' +
+        '<label style="font-size:11.5px;color:var(--text-faint);display:flex;align-items:center;gap:6px;">' +
+          '<input type="checkbox" id="f-allow-dup" data-keep-value="1" style="width:auto;"> ' +
+          'post anyway if it repeats the last one</label>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text-faint);margin-top:10px;">' +
+        'A selling price is only recorded on a sale, and it is what makes achieved margin reportable. ' +
+        'There is no way to edit or delete a movement: a mistake is corrected with a reversing entry, ' +
+        'which leaves both rows on the record.' +
+      '</div>' +
+    '</div>' +
+    viewBulkPanel()
+  ) : lockedNote('Your role can view every movement but not post one. Admin and Warehouse can post.');
+
+  return form + viewLedgerHistory();
+}
+
+function viewBulkPanel(){
+  const b = STATE.bulk;
+  let preview = '';
+  if(b.error){
+    preview = '<div class="banner bad"><div>⚠</div><div>' + esc(b.error).replace(/\n/g, '<br>') + '</div></div>';
+  }else if(b.preview){
+    const p = b.preview;
+    preview = (b.ignored && b.ignored.length
+      ? '<div class="banner"><div>i</div><div>' +
+        esc(b.ignored.length === 1 ? 'One column was ignored' : b.ignored.length + ' columns were ignored') +
+        ': <b>' + esc(b.ignored.join(', ')) + '</b>. Stockflow reads date, item, type, qty, fob, ' +
+        'location, toLocation, ref, sellPrice and notes; anything else in your file is left alone.' +
+        '</div></div>'
+      : '') +
+      '<div class="banner ' + (p.invalid ? '' : 'good') + '"><div>' + (p.invalid ? '⚠' : '✓') + '</div><div>' +
+        '<b>' + p.total + ' rows checked against the live position</b> — ' + p.valid + ' would import, ' +
+        p.invalid + ' would be refused. Every row was simulated against the real stock, so an overselling ' +
+        'row is caught here rather than after it has corrupted the position.' +
+      '</div></div>' +
+      '<div class="table-wrap" data-keep-scroll="bulk" style="max-height:300px;overflow-y:auto;margin-bottom:12px;">' +
+        '<table><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Type</th><th class="num">Qty</th>' +
+        '<th class="num">FOB</th><th>Where</th><th>Ref</th><th>Status</th></tr></thead><tbody>' +
+        p.rows.map(function(r){
+          return '<tr><td>' + r.line + '</td><td>' + esc(r.date || '—') + '</td><td><b>' + esc(r.item || '—') + '</b></td>' +
+            '<td>' + esc(r.type || '—') + '</td><td class="num">' + esc(String(r.qty || '—')) + '</td>' +
+            '<td class="num">' + (r.fob ? esc(String(r.fob)) : '—') + '</td>' +
+            '<td>' + esc([r.location, r.toLocation].filter(Boolean).join(' → ')) + '</td>' +
+            '<td>' + esc(r.ref || '') + '</td>' +
+            '<td>' + (r.status === 'ok'
+              ? '<span style="color:var(--green)">OK</span>'
+              : '<span style="color:var(--red)">' + esc(r.errors.join('; ')) + '</span>') + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+      '<div class="btn-row">' +
+        '<button class="btn" id="bulk-commit"' + ((!p.valid || b.busy) ? ' disabled' : '') + '>' +
+          (b.busy ? 'Importing…' : 'Import ' + p.valid + ' row' + (p.valid === 1 ? '' : 's')) + '</button>' +
+        (p.invalid
+          ? '<label style="font-size:11.5px;color:var(--text-faint);display:flex;align-items:center;gap:6px;">' +
+            '<input type="checkbox" id="bulk-skip" data-keep-value="1" style="width:auto;"' +
+            (b.skipInvalid ? ' checked' : '') + '> skip the ' + p.invalid + ' refused row(s)</label>'
+          : '') +
+        '<button class="btn secondary" id="bulk-cancel">Cancel</button>' +
+        (p.invalid ? '<button class="btn secondary" id="bulk-export-errors">Download the refused rows</button>' : '') +
+      '</div>';
+  }
+
+  return '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">Bulk Upload' +
+      '<span>a day\'s sales report, a shipment manifest — checked against the position before anything is written</span></div></div>' +
+    '<div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;align-items:start;">' +
+      '<div class="field"><label>1. Get the template</label>' +
+        '<button class="btn secondary" id="copy-template" type="button">Copy CSV template</button></div>' +
+      '<div class="field"><label>2. Upload a .csv file</label>' +
+        '<input type="file" id="bulk-file" accept=".csv,text/csv"></div>' +
+      '<div class="field"><label>3. Or paste rows below</label>' +
+        '<button class="btn secondary" id="bulk-parse" type="button"' + (b.busy ? ' disabled' : '') + '>' +
+          (b.busy ? 'Checking…' : 'Check pasted rows') + '</button></div>' +
+    '</div>' +
+    '<textarea id="bulk-paste" data-keep-value="1" rows="4" ' +
+      'placeholder="date,item,type,qty,fob,location,toLocation,ref,sellPrice"></textarea>' +
+    '<div style="font-size:11px;color:var(--text-faint);margin:10px 0 12px 0;">' +
+      'Columns: <b>date</b> (YYYY-MM-DD), <b>item</b>, <b>type</b> (' +
+      esc((STATE.data.txnTypes || []).join(' / ')) + '), <b>qty</b>, ' +
+      '<b>fob</b> (required for Purchase-Backlog and Opening Balance-MainWH), ' +
+      '<b>location</b> / <b>toLocation</b> (warehouse codes), <b>ref</b>, <b>sellPrice</b> (sales only). ' +
+      'Column order does not matter; the header row does.' +
+    '</div>' +
+    preview +
+  '</div>';
+}
+
+function viewLedgerHistory(){
+  const v = STATE.views.ledger;
+  const d = v.data;
+  const types = ['Opening Balance-MainWH'].concat(STATE.data.txnTypes || []).concat(['Reversal']);
+
+  const filters = '<div class="filter-bar">' +
+    '<div class="field narrow"><label>From</label><input type="date" id="lf-from" data-keep-value="1" value="' + attr(v.dateFrom) + '"></div>' +
+    '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="lf-to" data-keep-value="1" value="' + attr(v.dateTo) + '"></div>' +
+    '<div class="field"><label>Item</label><select id="lf-item" data-keep-value="1">' +
+      '<option value="">All items</option>' +
+      ((STATE.data.items) || []).map(function(i){
+        return '<option value="' + attr(i.item) + '"' + (v.item === i.item ? ' selected' : '') + '>' + esc(i.item) + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="field"><label>Type</label><select id="lf-type" data-keep-value="1">' +
+      '<option value="">All types</option>' +
+      types.map(function(t){
+        return '<option value="' + attr(t) + '"' + (v.type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="field"><label>Search reference, notes, who</label>' +
+      '<input type="text" id="lf-search" data-keep-value="1" placeholder="PO-4471, INV-, a name…" value="' + attr(v.search) + '"></div>' +
+    '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="lf-clear">Clear</button></div>' +
+  '</div>';
+
+  let body;
+  if(v.loading && !d){
+    body = '<div class="empty-state">Loading…</div>';
+  }else if(!d){
+    body = '<div class="empty-state">No movements loaded yet.</div>';
+  }else if(!d.rows.length){
+    body = '<div class="empty-state">No movements match these filters.</div>';
+  }else{
+    body = '<div class="table-wrap" data-keep-scroll="ledger">' +
+      '<table><thead><tr>' +
+        '<th>Date</th><th>Item</th><th>Type</th><th class="num">Qty</th><th class="num">FOB $</th>' +
+        '<th>Where</th><th class="num">Sell $</th><th class="num">Cost of sale</th>' +
+        '<th>Reference</th><th>Posted by</th><th></th>' +
+      '</tr></thead><tbody>' +
+      d.rows.map(function(r){
+        const canReverse = STATE.perms.ledger && !r.voided && r.type !== 'Reversal';
+        return '<tr class="' + (r.voided ? 'voided' : '') + '">' +
+          '<td>' + esc(r.date) + '</td>' +
+          '<td><b>' + esc(r.item) + '</b></td>' +
+          '<td>' + typePill(r.type) + '</td>' +
+          '<td class="num">' + fmtNum(r.qty) + '</td>' +
+          '<td class="num">' + (r.fob ? fmtMoney(r.fob) : '—') + '</td>' +
+          '<td>' + esc([r.location, r.toLocation].filter(function(x, i, a){ return x && a.indexOf(x) === i; }).join(' → ')) + '</td>' +
+          '<td class="num">' + (isNum(r.sellPrice) ? fmtMoney(r.sellPrice) : '—') + '</td>' +
+          '<td class="num">' + (r.costOfSale ? fmtMoney0(r.costOfSale) : '—') + '</td>' +
+          '<td class="wrap">' + esc(r.ref) +
+            (r.reversalOf ? '<br><span class="unknown">reverses ' + esc(r.reversalOf) + ' — ' + esc(r.reversalReason) + '</span>' : '') +
+            (r.notes ? '<br><span class="unknown">' + esc(r.notes) + '</span>' : '') + '</td>' +
+          '<td class="wrap">' + esc(r.actor) + '</td>' +
+          '<td>' + (canReverse
+            ? '<button class="btn secondary sm" data-reverse="' + attr(r.txnId) + '">Reverse</button>'
+            : (r.voided ? '<span class="unknown">reversed</span>' : '')) + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>' +
+      pagerServer('ledger', d);
+  }
+
+  return '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">Ledger History' +
+      '<span>' + (d ? d.total + ' matching row' + (d.total === 1 ? '' : 's') : '') + '</span></div>' +
+      '<button class="btn secondary sm" id="export-ledger">Export CSV</button>' +
+    '</div>' +
+    filters + body +
+  '</div>';
+}
+
+function pagerServer(viewId, d){
+  if(!d.total) return '';
+  const from = (d.page - 1) * d.pageSize + 1;
+  const to = Math.min(d.page * d.pageSize, d.total);
+  return '<div class="pager">' +
+    '<div class="pager-info">showing ' + from + '–' + to + ' of ' + d.total + '</div>' +
+    '<div class="pager-btns">' +
+      '<button class="btn secondary sm" data-spage="' + attr(viewId) + '" data-to="1"' + (d.page === 1 ? ' disabled' : '') + '>&laquo; first</button>' +
+      '<button class="btn secondary sm" data-spage="' + attr(viewId) + '" data-to="' + (d.page - 1) + '"' + (d.page === 1 ? ' disabled' : '') + '>prev</button>' +
+      '<span class="pager-info">page ' + d.page + ' of ' + d.pages + '</span>' +
+      '<button class="btn secondary sm" data-spage="' + attr(viewId) + '" data-to="' + (d.page + 1) + '"' + (d.page >= d.pages ? ' disabled' : '') + '>next</button>' +
+      '<button class="btn secondary sm" data-spage="' + attr(viewId) + '" data-to="' + d.pages + '"' + (d.page >= d.pages ? ' disabled' : '') + '>last &raquo;</button>' +
+    '</div></div>';
+}
+</script>
+
+<script>
+/* ============================================================
+   SCREEN: GIT
+   ============================================================ */
+function viewGit(){
+  const v = STATE.views.git;
+  const b = STATE.data.ageBuckets || [30, 60, 90];
+  const all = nonB2B().concat(b2bItems());
+  const withGit = all.filter(function(i){ return i.gitQty > 0; });
+  const res = applyView(withGit, v);
+  const totalQty = withGit.reduce(function(s, i){ return s + i.gitQty; }, 0);
+  const totalVal = withGit.reduce(function(s, i){ return s + i.gitValue; }, 0);
+  const over = withGit.filter(function(i){ return isNum(i.gitOldestAge) && i.gitOldestAge > b[2]; }).length;
+
+  return '<div class="banner"><div>⏳</div><div>Stock ships to GIT and clears to the Main Warehouse ' +
+    'through the ledger. Ageing starts the day stock is recognised as GIT and carries through to the ' +
+    'Main Warehouse — it does not reset on receipt, and it does not reset on a transfer either.</div></div>' +
+
+    '<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px;">' +
+      kpi('Total GIT Units', fmtNum(totalQty), withGit.length + ' SKUs in transit', 'var(--amber)') +
+      kpi('Total GIT Value', fmtMoney0(totalVal), 'at net cost', 'var(--amber)') +
+      kpi('SKUs over ' + b[2] + ' days in GIT', String(over), over ? 'chase these' : 'nothing overdue', over ? 'var(--red)' : 'var(--flow)') +
+    '</div>' +
+
+    '<div class="panel">' +
+      filterBar('git', {search: true, category: true}) +
+      '<div class="table-wrap"><table><thead><tr>' +
+        sortableTh('git', 'item', 'Item') +
+        '<th>Product</th>' +
+        sortableTh('git', 'category', 'Category') +
+        sortableTh('git', 'gitQty', 'GIT Qty', true) +
+        sortableTh('git', 'netCost', 'Net Cost/unit', true) +
+        sortableTh('git', 'gitValue', 'GIT Value', true) +
+        '<th>Oldest lot entered GIT</th>' +
+        sortableTh('git', 'gitOldestAge', 'Oldest age', true) +
+        sortableTh('git', 'gitAvgAge', 'Avg age', true) +
+        '<th>Status</th>' +
+      '</tr></thead><tbody>' +
+      (res.rows.length ? res.rows.map(function(i){
+        const age = i.gitOldestAge;
+        const status = !isNum(age) ? 'Unknown age'
+          : age > b[2] ? 'Delayed (' + b[2] + '+ days)'
+          : age > b[1] ? 'Ageing (' + b[1] + '+ days)' : 'In Transit';
+        return '<tr>' +
+          '<td><b>' + esc(i.item) + '</b>' + flagIcon(i) + '</td>' +
+          '<td class="wrap">' + esc(i.name) + '</td>' +
+          '<td>' + catTag(i.category) + '</td>' +
+          '<td class="num">' + fmtNum(i.gitQty) + '</td>' +
+          '<td class="num">' + costCell(i) + '</td>' +
+          '<td class="num">' + fmtMoney0(i.gitValue) + '</td>' +
+          '<td>' + esc(i.gitOldestDate || '—') + '</td>' +
+          '<td class="num" style="color:' + ageColour(age) + ';font-weight:600;">' + fmtDays(age) + '</td>' +
+          '<td class="num">' + fmtDays(i.gitAvgAge) + '</td>' +
+          '<td><span style="color:' + ageColour(age) + ';font-weight:600;">' + esc(status) + '</span></td>' +
+        '</tr>';
+      }).join('') : emptyRow(10, 'No stock currently in transit. Log a Ship-to-GIT on the Transactions Ledger.')) +
+      '</tbody></table></div>' +
+      pager('git', res) +
+    '</div>';
+}
+
+function flagIcon(i){
+  if(!i.flag) return '';
+  const resolved = !!i.flagResolvedBy;
+  const title = i.flag + (resolved ? ' — confirmed by ' + i.flagResolvedBy + ': ' + i.flagNote : '');
+  return ' <span class="flag-icon' + (resolved ? ' resolved' : '') + '" title="' + attr(title) + '">' +
+    (resolved ? '✓' : '⚠') + '</span>';
+}
+
+/* An item that has never been purchased has no cost, and saying "$0.00"
+   would be a lie the prototype told on every such row. */
+function costCell(i){
+  if(i.costUnknown) return '<span class="unknown" title="No purchase history, so there is no cost to show">no cost yet</span>';
+  const warn = i.supportExceedsLanded
+    ? ' <span class="flag-icon" title="HP support exceeds landed cost, so net cost is floored at zero">⚠</span>'
+    : '';
+  return fmtMoney(i.netCost) + warn;
+}
+
+function filterBar(viewId, opts){
+  const v = STATE.views[viewId];
+  let html = '<div class="filter-bar">';
+  if(opts.search){
+    html += '<div class="field"><label>Search item or product</label>' +
+      '<input type="text" id="vf-' + attr(viewId) + '-search" data-keep-value="1" ' +
+      'placeholder="part number or description" value="' + attr(v.search) + '"></div>';
+  }
+  if(opts.category){
+    html += '<div class="field narrow"><label>Category</label>' +
+      '<select id="vf-' + attr(viewId) + '-category" data-keep-value="1">' + categoryOptions(v.category) + '</select></div>';
+  }
+  if(opts.location){
+    html += '<div class="field narrow"><label>Warehouse</label>' +
+      '<select id="vf-' + attr(viewId) + '-location" data-keep-value="1">' + locationOptions(v.location) + '</select></div>';
+  }
+  if(opts.flagged){
+    html += '<div class="field narrow"><label>&nbsp;</label>' +
+      '<label style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px;height:34px;">' +
+      '<input type="checkbox" id="vf-' + attr(viewId) + '-flagged" data-keep-value="1" style="width:auto;"' +
+      (v.flagged ? ' checked' : '') + '> flagged only</label></div>';
+  }
+  html += '<div class="field narrow"><label>&nbsp;</label>' +
+    '<button class="btn secondary" data-clearview="' + attr(viewId) + '">Clear</button></div>';
+  return html + '</div>';
+}
+
+/* ============================================================
+   SCREEN: Main Warehouse
+   ============================================================ */
+function viewMainWh(){
+  const v = STATE.views.mainwh;
+  const b = STATE.data.ageBuckets || [30, 60, 90];
+  const all = nonB2B().concat(b2bItems());
+  const withMw = all.filter(function(i){ return i.mwQty > 0; });
+  const res = applyView(withMw, v);
+  const totalQty = withMw.reduce(function(s, i){ return s + i.mwQty; }, 0);
+  const totalVal = withMw.reduce(function(s, i){ return s + i.mwValue; }, 0);
+  const over = withMw.filter(function(i){ return isNum(i.mwOldestAge) && i.mwOldestAge > b[2]; }).length;
+
+  /* Per-warehouse totals. The prototype captured a warehouse on every
+     opening lot and then collapsed all of them into one number. */
+  const byLoc = {};
+  withMw.forEach(function(i){
+    Object.keys(i.byLocation || {}).forEach(function(code){
+      if(!byLoc[code]) byLoc[code] = {qty: 0, value: 0};
+      byLoc[code].qty += i.byLocation[code];
+      byLoc[code].value += i.byLocation[code] * (i.costUnknown ? 0 : i.netCost);
+    });
+  });
+  const locCodes = Object.keys(byLoc).sort();
+
+  return '<div class="banner"><div>📦</div><div>Age here carries over from the date stock entered GIT ' +
+    '(or, for opening-balance stock, the date it was loaded into Stockflow) — receiving into the ' +
+    'warehouse does not restart the clock, and neither does moving it between warehouses.</div></div>' +
+
+    '<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px;">' +
+      kpi('Total Main WH Units', fmtNum(totalQty), withMw.length + ' SKUs on hand', 'var(--flow)') +
+      kpi('Total Main WH Value', fmtMoney0(totalVal), 'at net cost', 'var(--flow)') +
+      kpi('SKUs over ' + b[2] + ' days on hand', String(over), over ? 'ageing stock' : 'nothing overdue', over ? 'var(--red)' : 'var(--flow)') +
+    '</div>' +
+
+    (locCodes.length ? '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">By Warehouse' +
+        '<span>where the stock physically is</span></div></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Warehouse</th><th class="num">Units</th>' +
+      '<th class="num">Value</th><th class="num">Share of units</th></tr></thead><tbody>' +
+      locCodes.map(function(code){
+        const loc = (STATE.data.locations || []).filter(function(l){ return l.code === code; })[0];
+        const share = totalQty > 0 ? (byLoc[code].qty / totalQty) : 0;
+        return '<tr><td><b>' + esc(code) + '</b> <span class="unknown">' +
+          esc(loc ? loc.name : '') + '</span></td>' +
+          '<td class="num">' + fmtNum(byLoc[code].qty) + '</td>' +
+          '<td class="num">' + fmtMoney0(byLoc[code].value) + '</td>' +
+          '<td class="num">' + fmtPct(share) + '</td></tr>';
+      }).join('') +
+      '</tbody></table></div></div>' : '') +
+
+    '<div class="panel">' +
+      filterBar('mainwh', {search: true, category: true, location: true}) +
+      '<div class="table-wrap" data-keep-scroll="mainwh"><table><thead><tr>' +
+        sortableTh('mainwh', 'item', 'Item') +
+        '<th>Product</th>' +
+        sortableTh('mainwh', 'category', 'Category') +
+        sortableTh('mainwh', 'mwQty', 'MW Qty', true) +
+        '<th>Held at</th>' +
+        sortableTh('mainwh', 'netCost', 'Net Cost/unit', true) +
+        sortableTh('mainwh', 'mwValue', 'MW Value', true) +
+        '<th>Oldest lot entry</th>' +
+        sortableTh('mainwh', 'mwOldestAge', 'Oldest age', true) +
+        sortableTh('mainwh', 'mwAvgAge', 'Avg age', true) +
+      '</tr></thead><tbody>' +
+      (res.rows.length ? res.rows.map(function(i){
+        const where = Object.keys(i.byLocation || {}).sort().map(function(code){
+          return esc(code) + '&nbsp;' + fmtNum(i.byLocation[code]);
+        }).join(' · ');
+        return '<tr>' +
+          '<td><b>' + esc(i.item) + '</b>' + flagIcon(i) + '</td>' +
+          '<td class="wrap">' + esc(i.name) + '</td>' +
+          '<td>' + catTag(i.category) + '</td>' +
+          '<td class="num">' + fmtNum(i.mwQty) + '</td>' +
+          '<td class="wrap">' + (where || '<span class="unknown">unassigned</span>') + '</td>' +
+          '<td class="num">' + costCell(i) + '</td>' +
+          '<td class="num">' + fmtMoney0(i.mwValue) + '</td>' +
+          '<td>' + esc(i.mwOldestDate || '—') + '</td>' +
+          '<td class="num" style="color:' + ageColour(i.mwOldestAge) + ';font-weight:600;">' + fmtDays(i.mwOldestAge) + '</td>' +
+          '<td class="num">' + fmtDays(i.mwAvgAge) + '</td>' +
+        '</tr>';
+      }).join('') : emptyRow(10, 'Nothing on hand matches these filters.')) +
+      '</tbody></table></div>' +
+      pager('mainwh', res) +
+    '</div>';
+}
+
+/* ============================================================
+   SCREEN: Consolidated position
+   ============================================================ */
+function viewConsolidated(){
+  const v = STATE.views.consolidated;
+  const t = totals();
+  const all = nonB2B().concat(b2bItems());
+  const res = applyView(all, v);
+
+  const labels = ageBucketLabels();
+  const buckets = {};
+  labels.forEach(function(l){ buckets[l] = 0; });
+  let unbucketed = 0;
+  all.forEach(function(i){
+    (i.lots || []).forEach(function(lot){
+      const bucket = ageBucket(lot.age);
+      const value = lot.qty * (i.costUnknown ? 0 : i.netCost);
+      if(bucket) buckets[bucket] += value; else unbucketed += lot.qty;
+    });
+  });
+
+  return '<div class="kpi-grid" style="margin-bottom:18px;">' +
+      kpi('GIT Qty', fmtNum(t.gitQty), 'in transit', 'var(--amber)') +
+      kpi('Main WH Qty', fmtNum(t.mwQty), 'on ground', 'var(--flow)') +
+      kpi('Consolidated Qty', fmtNum(t.consolidatedQty), 'owned position', 'var(--flow)') +
+      kpi('Consolidated Value', fmtMoney0(t.consolidatedValue), 'at net cost', 'var(--flow)') +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Inventory Ageing' +
+        '<span>value by days held, from GIT entry through to ' + esc(STATE.today) +
+        ' (opening stock ages from its upload date)</span></div></div>' +
+      '<div class="chart-box">' + chartBar(labels, labels.map(function(l){ return buckets[l]; }),
+        ['#5FE0BE', '#2FBEB0', '#E3A23D', '#E0654F'], {px: 210, fmt: money0k}) + '</div>' +
+      (unbucketed ? '<div style="font-size:11.5px;color:var(--red);margin-top:8px;">' +
+        fmtNum(unbucketed) + ' unit(s) are not in any bucket because their entry date cannot be read. ' +
+        'They are excluded from this chart rather than counted as brand new.</div>' : '') +
+    '</div>' +
+
+    '<div class="panel">' +
+      filterBar('consolidated', {search: true, category: true}) +
+      '<div class="table-wrap" data-keep-scroll="consolidated"><table><thead><tr>' +
+        sortableTh('consolidated', 'item', 'Item') +
+        '<th>Product</th>' +
+        sortableTh('consolidated', 'category', 'Category') +
+        sortableTh('consolidated', 'backlogQty', 'Backlog', true) +
+        sortableTh('consolidated', 'gitQty', 'GIT', true) +
+        sortableTh('consolidated', 'mwQty', 'Main WH', true) +
+        sortableTh('consolidated', 'consolidatedQty', 'Consolidated', true) +
+        '<th class="num">Oldest age</th>' +
+        sortableTh('consolidated', 'netCost', 'Net Cost/unit', true) +
+        sortableTh('consolidated', 'consolidatedValue', 'Value', true) +
+      '</tr></thead><tbody>' +
+      (res.rows.length ? res.rows.map(function(i){
+        const ages = [i.gitOldestAge, i.mwOldestAge].filter(isNum);
+        const oldest = ages.length ? Math.max.apply(null, ages) : null;
+        return '<tr>' +
+          '<td><b>' + esc(i.item) + '</b>' + flagIcon(i) + (i.b2b ? ' <span class="tag">B2B</span>' : '') + '</td>' +
+          '<td class="wrap">' + esc(i.name) + '</td>' +
+          '<td>' + catTag(i.category) + '</td>' +
+          '<td class="num">' + fmtNum(i.backlogQty) + '</td>' +
+          '<td class="num">' + fmtNum(i.gitQty) + '</td>' +
+          '<td class="num">' + fmtNum(i.mwQty) + '</td>' +
+          '<td class="num">' + fmtNum(i.consolidatedQty) + '</td>' +
+          '<td class="num" style="color:' + ageColour(oldest) + ';font-weight:600;">' +
+            (i.consolidatedQty > 0 ? fmtDays(oldest) : '—') + '</td>' +
+          '<td class="num">' + costCell(i) + '</td>' +
+          '<td class="num">' + fmtMoney0(i.consolidatedValue) + '</td>' +
+        '</tr>';
+      }).join('') : emptyRow(10, 'Nothing matches these filters.')) +
+      '</tbody></table></div>' +
+      pager('consolidated', res) +
+      '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
+        'Backlog is shown for context but is <b>not</b> part of the consolidated position: it is ordered, ' +
+        'not owned, and it carries no ageing clock.</div>' +
+    '</div>';
+}
+</script>
+
+<script>
+/* ============================================================
+   SCREEN: Item Master — the cost build-up, spelled out
+   ============================================================ */
+function viewItemMaster(){
+  const editable = STATE.perms.category;
+  const v = STATE.views.itemmaster;
+  const res = applyView(nonB2B(), v);
+
+  return (editable ? '' : lockedNote(
+      'Only an Admin can change an FOB override or HP price support — those two numbers revalue the ' +
+      'whole inventory. You can see every figure.')) +
+
+    '<div class="banner info"><div>🧮</div><div><b>How the cost is built, in order.</b> ' +
+      'weighted average FOB across every purchase ever &rarr; an optional per-SKU override &rarr; ' +
+      '&times; (1 + the category landed %) &rarr; less HP price support &rarr; net cost, floored at zero. ' +
+      'Every valuation on every screen uses net cost, which is why a change here is written to the audit trail.' +
+    '</div></div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Item Master' +
+        '<span>' + nonB2B().length + ' SKUs</span></div>' +
+        '<button class="btn secondary sm" id="export-items">Export CSV</button></div>' +
+      filterBar('itemmaster', {search: true, category: true, flagged: true}) +
+      '<div class="table-wrap" data-keep-scroll="itemmaster"><table><thead><tr>' +
+        sortableTh('itemmaster', 'item', 'Item') +
+        '<th>Product</th>' +
+        sortableTh('itemmaster', 'category', 'Category') +
+        sortableTh('itemmaster', 'weightedFob', 'Weighted avg FOB', true) +
+        '<th class="num">FOB override</th>' +
+        sortableTh('itemmaster', 'effectiveFob', 'Effective FOB', true) +
+        sortableTh('itemmaster', 'landedPct', 'Landed %', true) +
+        sortableTh('itemmaster', 'landedCost', 'Landed cost', true) +
+        '<th class="num">HP support</th>' +
+        sortableTh('itemmaster', 'netCost', 'Net cost', true) +
+        sortableTh('itemmaster', 'gitQty', 'GIT', true) +
+        sortableTh('itemmaster', 'mwQty', 'Main WH', true) +
+        sortableTh('itemmaster', 'consolidatedQty', 'Consolidated', true) +
+        sortableTh('itemmaster', 'consolidatedValue', 'Value', true) +
+      '</tr></thead><tbody>' +
+      (res.rows.length ? res.rows.map(function(i){
+        return '<tr>' +
+          '<td><b>' + esc(i.item) + '</b>' + flagIcon(i) + '</td>' +
+          '<td class="wrap">' + esc(i.name) + '</td>' +
+          '<td>' + catTag(i.category) + '</td>' +
+          '<td class="num">' + (i.costUnknown ? '<span class="unknown">—</span>' : fmtMoney(i.weightedFob)) + '</td>' +
+          '<td class="num"><input type="number" step="any" min="0" style="width:96px;text-align:right;padding:5px 6px;" ' +
+            'id="fob-' + attr(i.item) + '" data-fob="' + attr(i.item) + '" placeholder="—" ' +
+            'value="' + (isNum(i.fobOverride) ? attr(i.fobOverride) : '') + '"' + (editable ? '' : ' disabled') + '></td>' +
+          '<td class="num">' + (i.costUnknown && !isNum(i.fobOverride) ? '<span class="unknown">—</span>' : fmtMoney(i.effectiveFob)) + '</td>' +
+          '<td class="num">' + fmtPct(i.landedPct) + '</td>' +
+          '<td class="num">' + (i.costUnknown && !isNum(i.fobOverride) ? '<span class="unknown">—</span>' : fmtMoney(i.landedCost)) + '</td>' +
+          '<td class="num"><input type="number" step="any" min="0" style="width:88px;text-align:right;padding:5px 6px;" ' +
+            'id="sup-' + attr(i.item) + '" data-support="' + attr(i.item) + '" placeholder="0" ' +
+            'value="' + (i.support ? attr(i.support) : '') + '"' + (editable ? '' : ' disabled') + '></td>' +
+          '<td class="num">' + costCell(i) + '</td>' +
+          '<td class="num">' + fmtNum(i.gitQty) + '</td>' +
+          '<td class="num">' + fmtNum(i.mwQty) + '</td>' +
+          '<td class="num">' + fmtNum(i.consolidatedQty) + '</td>' +
+          '<td class="num">' + fmtMoney0(i.consolidatedValue) + '</td>' +
+        '</tr>';
+      }).join('') : emptyRow(14, 'No items match these filters.')) +
+      '</tbody></table></div>' +
+      pager('itemmaster', res) +
+      (editable ? '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
+        'Leave the FOB override blank (or set it to 0) to go back to the weighted average. ' +
+        'An HP support of 0 is a real zero and is kept as one.</div>' : '') +
+    '</div>';
+}
+
+/* ============================================================
+   SCREEN: Selling Price Simulator
+   ============================================================ */
+function viewSimulator(){
+  const editable = STATE.perms.pricing;
+  const v = STATE.views.simulator;
+  const pricing = STATE.data.pricing || {global: null, category: {}, sku: {}};
+  const globalPct = isNum(pricing.global) ? Number(pricing.global) : STATE.data.defaultMarginPct;
+  const res = applyView(nonB2B(), v);
+
+  const catRows = (STATE.data.categories || []).map(function(c){
+    const ov = pricing.category[c.category];
+    const set = isNum(ov);
+    return '<div class="sim-row">' +
+      '<label>' + esc(c.category) + '</label>' +
+      '<input type="range" min="0" max="40" step="0.5" data-catsim="' + attr(c.category) + '" ' +
+        'id="catsim-' + attr(c.category) + '" value="' + (set ? attr(ov) : String(globalPct)) + '"' +
+        (editable ? '' : ' disabled') + '>' +
+      '<div class="sim-val' + (set ? '' : ' inherit') + '" id="catval-' + attr(c.category) + '">' +
+        (set ? Number(ov).toFixed(1) + '%' : 'global') + '</div>' +
+      (editable
+        ? '<button class="btn secondary sm" data-clearcat="' + attr(c.category) + '"' +
+          (set ? '' : ' disabled') + '>clear</button>'
+        : '') +
+    '</div>';
+  }).join('');
+
+  return (editable ? '' : lockedNote('Admin and Sales can adjust margin scenarios. You can see the results.')) +
+
+    '<div class="grid-2">' +
+      '<div class="panel">' +
+        '<div class="panel-head"><div class="panel-title">Global Margin' +
+          '<span>applies unless a category or SKU override is set</span></div></div>' +
+        '<div class="sim-row"><label>Global margin %</label>' +
+          '<input type="range" id="sim-global" min="0" max="40" step="0.5" value="' + attr(globalPct) + '"' +
+            (editable ? '' : ' disabled') + '>' +
+          '<div class="sim-val" id="sim-global-val">' + Number(globalPct).toFixed(1) + '%</div>' +
+        '</div>' +
+        '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
+          'Drag to preview. Nothing is saved until you press Save — and a saved margin is written to ' +
+          'the audit trail with its old value.</div>' +
+        (editable ? '<div class="btn-row" style="margin-top:12px;">' +
+          '<button class="btn" id="save-margins"' + (STATE.busy === 'margins' ? ' disabled' : '') + '>' +
+            (STATE.busy === 'margins' ? 'Saving…' : 'Save margins') + '</button>' +
+          '<button class="btn secondary" id="revert-margins">Discard changes</button>' +
+        '</div>' : '') +
+      '</div>' +
+      '<div class="panel">' +
+        '<div class="panel-head"><div class="panel-title">Category Overrides' +
+          '<span>"global" means inherit — an explicit 0% does not</span></div></div>' +
+        catRows +
+        (editable ? '<div class="btn-row" style="margin-top:8px;">' +
+          '<button class="btn secondary" id="clear-cat-ov">Clear every category override</button></div>' : '') +
+      '</div>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Resulting Selling Prices' +
+        '<span>SKU beats category, category beats global — and an explicit 0% beats a wider non-zero one</span></div>' +
+        '<button class="btn secondary sm" id="export-prices">Export CSV</button></div>' +
+      filterBar('simulator', {search: true, category: true}) +
+      '<div class="table-wrap" data-keep-scroll="simulator"><table><thead><tr>' +
+        sortableTh('simulator', 'item', 'Item') +
+        '<th>Product</th>' +
+        sortableTh('simulator', 'category', 'Category') +
+        sortableTh('simulator', 'netCost', 'Net cost', true) +
+        '<th class="num">SKU override %</th>' +
+        '<th class="num">Applicable %</th>' +
+        '<th class="num">Selling price</th>' +
+        '<th class="num">Margin $</th>' +
+      '</tr></thead><tbody id="sim-body">' + simRows(res.rows, editable) + '</tbody>' +
+      '</table></div>' +
+      pager('simulator', res) +
+    '</div>';
+}
+
+/* Mirrors the server's resolver exactly. This is a preview of what the
+   server would compute; the server is still the authority. */
+function livePricing(){
+  const p = STATE.data.pricing || {global: null, category: {}, sku: {}};
+  const draft = STATE.marginDraft || {};
+  return {
+    global: draft.global !== undefined ? draft.global : p.global,
+    category: Object.assign({}, p.category, draft.category || {}),
+    sku: Object.assign({}, p.sku, draft.sku || {})
+  };
+}
+function resolveMargin(item, category){
+  const p = livePricing();
+  const sku = p.sku[item];
+  if(isNum(sku)) return Number(sku) / 100;
+  const cat = p.category[category];
+  if(isNum(cat)) return Number(cat) / 100;
+  if(isNum(p.global)) return Number(p.global) / 100;
+  return Number(STATE.data.defaultMarginPct || 0) / 100;
+}
+
+function simRows(rows, editable){
+  const p = livePricing();
+  return rows.map(function(i){
+    const margin = resolveMargin(i.item, i.category);
+    const unknown = i.costUnknown;
+    const sp = unknown ? null : i.netCost * (1 + margin);
+    const skuOv = p.sku[i.item];
+    return '<tr>' +
+      '<td><b>' + esc(i.item) + '</b>' + flagIcon(i) + '</td>' +
+      '<td class="wrap">' + esc(i.name) + '</td>' +
+      '<td>' + catTag(i.category) + '</td>' +
+      '<td class="num">' + costCell(i) + '</td>' +
+      '<td class="num"><input type="number" step="any" style="width:78px;text-align:right;padding:5px 6px;" ' +
+        'id="skusim-' + attr(i.item) + '" data-skusim="' + attr(i.item) + '" placeholder="—" ' +
+        'value="' + (isNum(skuOv) ? attr(skuOv) : '') + '"' + (editable ? '' : ' disabled') + '></td>' +
+      '<td class="num">' + fmtPct(margin) + '</td>' +
+      '<td class="num">' + (unknown ? '<span class="unknown">—</span>' : fmtMoney(sp)) + '</td>' +
+      '<td class="num">' + (unknown ? '<span class="unknown">—</span>' : fmtMoney(sp - i.netCost)) + '</td>' +
+    '</tr>';
+  }).join('') || emptyRow(8, 'No items match these filters.');
+}
+
+/* Dragging a slider redraws ONE table body, not the page. The prototype
+   got this right and it is worth keeping. */
+function redrawSimBody(){
+  const body = document.getElementById('sim-body');
+  if(!body) return;
+  const res = applyView(nonB2B(), STATE.views.simulator);
+  body.innerHTML = simRows(res.rows, STATE.perms.pricing);
+  bindSimInputs();
+}
+
+/* ============================================================
+   SCREEN: Category settings
+   ============================================================ */
+function viewCategory(){
+  const editable = STATE.perms.category;
+  const cats = STATE.data.categories || [];
+  const items = nonB2B();
+
+  return (editable ? '' : lockedNote('Only an Admin can edit a category landed cost %.')) +
+    '<div class="banner"><div>⚠</div><div><b>These percentages revalue the entire inventory.</b> ' +
+      'Changing one restates the net cost of every item in that category, and therefore every valuation ' +
+      'on every screen. Stock already sold keeps the cost it was sold at. Each change is recorded with ' +
+      'who made it and what it was before.</div></div>' +
+
+    '<div class="panel" style="max-width:760px;">' +
+      '<div class="panel-head"><div class="panel-title">Landed Cost % by Category</div></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Category</th><th class="num">Landed cost %</th>' +
+      '<th class="num">SKUs</th><th class="num">Units held</th><th class="num">Value at this %</th>' +
+      (editable ? '<th></th>' : '') + '</tr></thead><tbody>' +
+      cats.map(function(c){
+        const mine = items.filter(function(i){ return i.category === c.category; });
+        const units = mine.reduce(function(s, i){ return s + i.consolidatedQty; }, 0);
+        const value = mine.reduce(function(s, i){ return s + i.consolidatedValue; }, 0);
+        return '<tr>' +
+          '<td>' + catTag(c.category) + '</td>' +
+          '<td class="num"><input type="number" step="0.1" min="0" style="width:92px;text-align:right;padding:5px 6px;" ' +
+            'id="catpct-' + attr(c.category) + '" data-catpct="' + attr(c.category) + '" ' +
+            'value="' + attr((c.landedPct * 100).toFixed(2)) + '"' + (editable ? '' : ' disabled') + '> %</td>' +
+          '<td class="num">' + mine.length + '</td>' +
+          '<td class="num">' + fmtNum(units) + '</td>' +
+          '<td class="num">' + fmtMoney0(value) + '</td>' +
+          (editable ? '<td><button class="btn secondary sm" data-savecat="' + attr(c.category) + '">Save</button></td>' : '') +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>' +
+      '<div style="font-size:11.5px;color:var(--text-faint);margin-top:12px;">' +
+        'A category set to 0% is honoured as 0%, not quietly replaced by a default.</div>' +
+    '</div>';
+}
+
+/* ============================================================
+   SCREEN: B2B
+   ============================================================ */
+function viewB2B(){
+  const editable = STATE.perms.b2b;
+  const rows = b2bItems();
+  const b2bMap = {};
+  (STATE.data.b2b || []).forEach(function(r){ b2bMap[r.item] = r; });
+
+  return '<div class="banner"><div>🤝</div><div><b>Separate from cost-averaging, but not separate from ' +
+    'the ledger.</b> B2B stock is reseller-owned with a predetermined fixed cost and price, and it never ' +
+    'enters the weighted-average FOB on Item Master. Its <b>quantities</b> now come from the ledger like ' +
+    'everything else — the prototype read them from a seed row, so they could never change and could ' +
+    'never agree with a movement.</div></div>' +
+
+    (editable ? '' : lockedNote('Only an Admin can edit partner, cost, price or status.')) +
+
+    '<div class="panel"><div class="table-wrap"><table><thead><tr>' +
+      '<th>Item</th><th>Product</th><th>Category</th><th>Reseller / Partner</th><th>End user</th>' +
+      '<th class="num">Qty (from the ledger)</th><th class="num">Fixed FOB</th>' +
+      '<th class="num">Fixed landed cost</th><th class="num">Fixed selling price</th><th>Status</th>' +
+    '</tr></thead><tbody>' +
+    (rows.length ? rows.map(function(i){
+      const b = b2bMap[i.item] || {partner: '', endUser: '', fixedFob: 0, sellPrice: null, status: ''};
+      const landed = Number(b.fixedFob || 0) * (1 + i.landedPct);
+      return '<tr>' +
+        '<td><b>' + esc(i.item) + '</b>' + flagIcon(i) + '</td>' +
+        '<td class="wrap">' + esc(i.name) + '</td>' +
+        '<td>' + catTag(i.category) + '</td>' +
+        '<td><input type="text" style="width:120px;" id="b2b-partner-' + attr(i.item) + '" ' +
+          'data-b2b="partner" data-item="' + attr(i.item) + '" value="' + attr(b.partner) + '"' +
+          (editable ? '' : ' disabled') + '></td>' +
+        '<td><input type="text" style="width:120px;" id="b2b-endUser-' + attr(i.item) + '" ' +
+          'data-b2b="endUser" data-item="' + attr(i.item) + '" value="' + attr(b.endUser) + '"' +
+          (editable ? '' : ' disabled') + '></td>' +
+        '<td class="num">' + fmtNum(i.consolidatedQty) + '</td>' +
+        '<td class="num"><input type="number" step="any" min="0" style="width:92px;text-align:right;" ' +
+          'id="b2b-fixedFob-' + attr(i.item) + '" data-b2b="fixedFob" data-item="' + attr(i.item) + '" ' +
+          'value="' + attr(b.fixedFob) + '"' + (editable ? '' : ' disabled') + '></td>' +
+        '<td class="num">' + fmtMoney(landed) + '</td>' +
+        '<td class="num"><input type="number" step="any" min="0" style="width:92px;text-align:right;" ' +
+          'id="b2b-sellPrice-' + attr(i.item) + '" data-b2b="sellPrice" data-item="' + attr(i.item) + '" ' +
+          'placeholder="—" value="' + (isNum(b.sellPrice) ? attr(b.sellPrice) : '') + '"' +
+          (editable ? '' : ' disabled') + '></td>' +
+        '<td><input type="text" style="width:150px;" id="b2b-status-' + attr(i.item) + '" ' +
+          'data-b2b="status" data-item="' + attr(i.item) + '" value="' + attr(b.status) + '"' +
+          (editable ? '' : ' disabled') + '></td>' +
+      '</tr>';
+    }).join('') : emptyRow(10, 'No B2B items.')) +
+    '</tbody></table></div>' +
+    (editable ? '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
+      'Changes save when you leave the field, and each one is written to the audit trail.</div>' : '') +
+    '</div>';
+}
+</script>
+
+<script>
+/* ============================================================
+   SCREEN: Analytics
+   ============================================================ */
+function viewAnalytics(){
+  const items = nonB2B();
+  const t = totals();
+  const cats = (STATE.data.categories || []).map(function(c){ return c.category; });
+  const catValues = cats.map(function(c){
+    return items.filter(function(i){ return i.category === c; })
+      .reduce(function(s, i){ return s + i.consolidatedValue; }, 0);
+  });
+  const catUnits = cats.map(function(c){
+    return items.filter(function(i){ return i.category === c; })
+      .reduce(function(s, i){ return s + i.consolidatedQty; }, 0);
+  });
+  const top10 = items.slice().sort(function(a, b){ return b.consolidatedValue - a.consolidatedValue; }).slice(0, 10);
+
+  const labels = ageBucketLabels();
+  const buckets = {};
+  labels.forEach(function(l){ buckets[l] = 0; });
+  items.forEach(function(i){
+    (i.lots || []).forEach(function(lot){
+      const bucket = ageBucket(lot.age);
+      if(bucket) buckets[bucket] += lot.qty * (i.costUnknown ? 0 : i.netCost);
+    });
+  });
+
+  /* Achieved margin — impossible in the prototype, because a sale
+     recorded no selling price at all. */
+  const sold = items.filter(function(i){ return i.soldQty > 0; });
+  const achievedRevenue = sold.reduce(function(s, i){ return s + i.soldValue; }, 0);
+  const achievedCost = sold.reduce(function(s, i){ return s + i.costOfSale; }, 0);
+  const achievedMargin = achievedRevenue > 0 ? (achievedRevenue - achievedCost) / achievedRevenue : null;
+
+  const openFlags = items.filter(function(i){ return i.flag && !i.flagResolvedBy; });
+  const resolvedFlags = items.filter(function(i){ return i.flag && i.flagResolvedBy; });
+
+  return '<div class="kpi-grid">' +
+      kpi('Total SKUs', String(items.length), t.b2bSkus + ' B2B held separately', 'var(--flow)') +
+      kpi('Consolidated Value', fmtMoney0(t.consolidatedValue), fmtNum(t.consolidatedQty) + ' units', 'var(--flow)') +
+      kpi('Achieved Margin', achievedMargin === null ? '<span class="unknown">no sales yet</span>' : fmtPct(achievedMargin),
+        achievedRevenue > 0 ? fmtMoney0(achievedRevenue) + ' revenue less ' + fmtMoney0(achievedCost) + ' cost' :
+        'record a selling price on a sale to populate this', 'var(--green)') +
+      kpi('Open data-quality flags', String(openFlags.length),
+        resolvedFlags.length + ' resolved', openFlags.length ? 'var(--red)' : 'var(--flow)') +
+    '</div>' +
+
+    '<div class="grid-2">' +
+      '<div class="panel"><div class="panel-head"><div class="panel-title">Value by Category</div></div>' +
+        '<div class="chart-box">' + chartBar(cats, catValues, null, {px: 230, fmt: money0k}) + '</div></div>' +
+      '<div class="panel"><div class="panel-head"><div class="panel-title">Units by Category</div></div>' +
+        '<div class="chart-box">' + chartBar(cats, catUnits, null, {px: 230, fmt: function(v){ return Math.round(v).toLocaleString('en-US'); }}) + '</div></div>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Top 10 Items by Value</div></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>#</th><th>Item</th><th>Product</th>' +
+      '<th>Category</th><th class="num">Qty</th><th class="num">Oldest age</th><th class="num">Value</th>' +
+      '</tr></thead><tbody>' +
+      (top10.length ? top10.map(function(i, n){
+        const ages = [i.gitOldestAge, i.mwOldestAge].filter(isNum);
+        const oldest = ages.length ? Math.max.apply(null, ages) : null;
+        return '<tr><td>' + (n + 1) + '</td><td><b>' + esc(i.item) + '</b></td>' +
+          '<td class="wrap">' + esc(i.name) + '</td><td>' + catTag(i.category) + '</td>' +
+          '<td class="num">' + fmtNum(i.consolidatedQty) + '</td>' +
+          '<td class="num" style="color:' + ageColour(oldest) + '">' + fmtDays(oldest) + '</td>' +
+          '<td class="num">' + fmtMoney0(i.consolidatedValue) + '</td></tr>';
+      }).join('') : emptyRow(7, 'No stock held.')) +
+      '</tbody></table></div>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Inventory Ageing (value)' +
+        '<span>GIT + Main Warehouse, from GIT entry or upload date</span></div></div>' +
+      '<div class="chart-box">' + chartBar(labels, labels.map(function(l){ return buckets[l]; }),
+        ['#5FE0BE', '#2FBEB0', '#E3A23D', '#E0654F'], {px: 220, fmt: money0k}) + '</div>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Data Quality Flags' +
+        '<span>a flag records where a source figure was missing and what was used instead</span></div></div>' +
+      (openFlags.length || resolvedFlags.length
+        ? '<div class="table-wrap"><table><thead><tr><th>Item</th><th>Flag</th><th>Status</th>' +
+          (STATE.perms.category ? '<th></th>' : '') + '</tr></thead><tbody>' +
+          openFlags.concat(resolvedFlags).map(function(i){
+            const resolved = !!i.flagResolvedBy;
+            return '<tr>' +
+              '<td><b>' + esc(i.item) + '</b></td>' +
+              '<td class="wrap" style="max-width:520px;color:' + (resolved ? 'var(--text-dim)' : 'var(--red)') + '">' +
+                esc(i.flag) + '</td>' +
+              '<td class="wrap">' + (resolved
+                ? '<span style="color:var(--green)">confirmed by ' + esc(i.flagResolvedBy) + ' on ' +
+                  esc(String(i.flagResolvedAt).slice(0, 10)) + '</span><br><span class="unknown">' +
+                  esc(i.flagNote) + '</span>'
+                : '<span style="color:var(--red)">open</span>') + '</td>' +
+              (STATE.perms.category
+                ? '<td><button class="btn secondary sm" data-resolveflag="' + attr(i.item) + '">' +
+                  (resolved ? 'Reopen' : 'Confirm') + '</button></td>'
+                : '') +
+            '</tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<div class="empty-state">No flags on any item.</div>') +
+    '</div>';
+}
+
+/* ============================================================
+   SCREEN: Audit trail
+   ============================================================ */
+function viewAudit(){
+  const v = STATE.views.audit;
+  const d = v.data;
+  const entities = ['Costing', 'Categories', 'Pricing', 'B2B', 'Items', 'Ledger', 'Directory', 'Settings'];
+
+  const filters = '<div class="filter-bar">' +
+    '<div class="field narrow"><label>From</label><input type="date" id="af-from" data-keep-value="1" value="' + attr(v.dateFrom) + '"></div>' +
+    '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="af-to" data-keep-value="1" value="' + attr(v.dateTo) + '"></div>' +
+    '<div class="field narrow"><label>What changed</label><select id="af-entity" data-keep-value="1">' +
+      '<option value="">Everything</option>' +
+      entities.map(function(e){
+        return '<option value="' + attr(e) + '"' + (v.entity === e ? ' selected' : '') + '>' + esc(e) + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="field"><label>Search</label>' +
+      '<input type="text" id="af-search" data-keep-value="1" placeholder="an item, a name, a reason…" value="' + attr(v.search) + '"></div>' +
+    '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="af-clear">Clear</button></div>' +
+  '</div>';
+
+  let body;
+  if(v.loading && !d) body = '<div class="empty-state">Loading…</div>';
+  else if(!d) body = '<div class="empty-state">Nothing loaded yet.</div>';
+  else if(!d.rows.length) body = '<div class="empty-state">No changes match these filters.</div>';
+  else{
+    body = '<div class="table-wrap" data-keep-scroll="audit"><table><thead><tr>' +
+      '<th>When</th><th>Who</th><th>What</th><th>Which</th><th>Field</th>' +
+      '<th>From</th><th>To</th><th>Reason</th></tr></thead><tbody>' +
+      d.rows.map(function(r){
+        return '<tr>' +
+          '<td>' + esc(fmtDateTime(r.at)) + '</td>' +
+          '<td>' + esc(r.actor) + '</td>' +
+          '<td>' + esc(r.entity) + '</td>' +
+          '<td><b>' + esc(r.key) + '</b></td>' +
+          '<td>' + esc(r.field) + '</td>' +
+          '<td class="wrap" style="color:var(--text-dim)">' + esc(r.oldValue) + '</td>' +
+          '<td class="wrap" style="color:var(--text)">' + esc(r.newValue) + '</td>' +
+          '<td class="wrap">' + esc(r.reason) + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table></div>' + pagerServer('audit', d);
+  }
+
+  return '<div class="banner info"><div>📒</div><div>The ledger is the history for stock movements. ' +
+    'This is the history for everything else: who changed a landed percentage, an FOB override, a support ' +
+    'amount, a B2B price or someone\'s access — and what it was before. Inventory valuation without this ' +
+    'is not auditable.</div></div>' +
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Audit Trail' +
+        '<span>' + (d ? d.total + ' entr' + (d.total === 1 ? 'y' : 'ies') : '') + '</span></div>' +
+        '<button class="btn secondary sm" id="export-audit">Export CSV</button></div>' +
+      filters + body +
+    '</div>';
+}
+
+/* ============================================================
+   SCREEN: Access & Roles
+   ============================================================ */
+function viewAccess(){
+  const canManage = STATE.perms.directory;
+  const roles = STATE.data.roles || [];
+  const dir = STATE.data.directory || [];
+
+  const matrix = '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">What each role can change' +
+      '<span>enforced on the server, for every request</span></div></div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Role</th><th>Stock movements</th>' +
+    '<th>Margins &amp; prices</th><th>Landed % / FOB / support</th><th>B2B</th><th>People</th>' +
+    '</tr></thead><tbody>' +
+    roles.map(function(r){
+      const cell = function(v){
+        return '<td>' + (v ? '<span style="color:var(--green);font-weight:600;">yes</span>'
+          : '<span class="unknown">—</span>') + '</td>';
+      };
+      return '<tr><td><b>' + esc(r.label) + '</b></td>' +
+        cell(r.perms.ledger) + cell(r.perms.pricing) + cell(r.perms.category) +
+        cell(r.perms.b2b) + cell(r.perms.directory) + '</tr>';
+    }).join('') +
+    '</tbody></table></div>' +
+    '<div style="font-size:11.5px;color:var(--text-faint);margin-top:12px;">' +
+      '<b>Every role can read everything.</b> Nothing on the position is hidden from anyone who can ' +
+      'sign in — that is a decision, not an oversight. Roles gate writes only, and they are checked ' +
+      'on the server: a request that bypasses this page is refused just the same. There is no ' +
+      '"reset data" action anywhere in the API.' +
+    '</div></div>';
+
+  const people = '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">Directory' +
+      '<span>' + dir.length + ' ' + (dir.length === 1 ? 'person' : 'people') + '</span></div>' +
+      (canManage ? '<button class="btn sm" id="add-member">Add someone</button>' : '') + '</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th>' +
+    '<th>Status</th><th>Added by</th><th>Last active</th>' + (canManage ? '<th></th>' : '') +
+    '</tr></thead><tbody>' +
+    dir.map(function(m){
+      return '<tr>' +
+        '<td><b>' + esc(m.name) + '</b></td>' +
+        '<td>' + esc(m.email) + '</td>' +
+        '<td>' + esc(m.roleLabel) + '</td>' +
+        '<td>' + (m.status === 'disabled'
+          ? '<span style="color:var(--red)">disabled</span>'
+          : '<span style="color:var(--green)">active</span>') + '</td>' +
+        '<td class="wrap">' + esc(m.addedBy) + '</td>' +
+        '<td>' + esc(m.lastActive ? fmtDateTime(m.lastActive) : 'never') + '</td>' +
+        (canManage ? '<td><div class="btn-row">' +
+          '<button class="btn secondary sm" data-editmember="' + attr(m.userId) + '">Edit</button>' +
+          '<button class="btn secondary sm" data-togglemember="' + attr(m.userId) + '">' +
+            (m.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
+        '</div></td>' : '') +
+      '</tr>';
+    }).join('') +
+    '</tbody></table></div>' +
+    (canManage ? '<div style="font-size:11.5px;color:var(--text-faint);margin-top:12px;">' +
+      'Disabling someone, or pointing their row at a different address, ends their session on their ' +
+      'very next request — there is no waiting for a token to expire.</div>' : '') +
+    '</div>';
+
+  return matrix + people + '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">This deployment</div></div>' +
+    '<div class="table-wrap"><table><tbody>' +
+      '<tr><td>Signed in as</td><td><b>' + esc((STATE.session || {}).name) + '</b> (' +
+        esc((STATE.session || {}).email) + ')</td></tr>' +
+      '<tr><td>Server date used for every age</td><td><b>' + esc(STATE.today) + '</b></td></tr>' +
+      '<tr><td>Data revision</td><td>' + esc(String(STATE.revision)) + '</td></tr>' +
+    '</tbody></table></div>' +
+    '<div class="btn-row" style="margin-top:14px;">' +
+      '<button class="btn secondary" id="access-check">Run connection check</button>' +
+    '</div>' +
+    '<div id="access-diag" style="margin-top:12px;"></div>' +
+  '</div>';
+}
+</script>
+
+<script>
+/* ============================================================
+   MODALS
+   ------------------------------------------------------------
+   While STATE.modal is set the background poll never re-renders —
+   it sets STATE.stale instead, and the strip appears when the
+   dialog closes. Re-rendering over an open form throws away
+   whatever someone was half-way through typing.
+   ============================================================ */
+function renderModal(){
+  const m = STATE.modal;
+  if(!m) return '<div class="modal-overlay" id="modal"></div>';
+  let inner = '';
+
+  if(m.kind === 'reverse'){
+    const r = m.row || {};
+    inner =
+      '<div class="modal-head"><div class="modal-title">Reverse a movement</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="modal-sub">A stock ledger is corrected with a reversing entry, never by editing or ' +
+        'deleting. The original row stays exactly as recorded and this reversal sits beside it, with ' +
+        'your reason on the record. If anything recorded later depends on this movement, the reversal ' +
+        'will be refused and will name what is blocking it.</div>' +
+      '<div class="table-wrap" style="margin-bottom:16px;"><table><tbody>' +
+        '<tr><td>Date</td><td><b>' + esc(r.date) + '</b></td></tr>' +
+        '<tr><td>Item</td><td><b>' + esc(r.item) + '</b></td></tr>' +
+        '<tr><td>Type</td><td>' + typePill(r.type) + '</td></tr>' +
+        '<tr><td>Quantity</td><td><b>' + fmtNum(r.qty) + '</b></td></tr>' +
+        '<tr><td>Reference</td><td>' + esc(r.ref || '—') + '</td></tr>' +
+        '<tr><td>Posted by</td><td>' + esc(r.actor) + '</td></tr>' +
+      '</tbody></table></div>' +
+      '<div class="field"><label>Why is this being reversed?</label>' +
+        '<input type="text" id="reverse-reason" placeholder="e.g. quantity typed as 999 instead of 9"></div>' +
+      (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error).replace(/\n/g, '<br>') + '</div>' : '') +
+      '<div class="modal-actions">' +
+        '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
+        '<button class="btn danger" id="reverse-confirm"' + (m.busy ? ' disabled' : '') + '>' +
+          (m.busy ? 'Reversing…' : 'Post the reversal') + '</button>' +
+      '</div>';
+
+  }else if(m.kind === 'flag'){
+    const i = itemByCode(m.item) || {};
+    const resolved = !!i.flagResolvedBy;
+    inner =
+      '<div class="modal-head"><div class="modal-title">' +
+        (resolved ? 'Reopen this flag' : 'Confirm this figure') + '</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="modal-sub">A data-quality flag records where a source figure was missing and what was ' +
+        'used instead. Confirming it does not erase it — the original text stays on the item, with your ' +
+        'note and your name beside it.</div>' +
+      '<div class="banner"><div>⚠</div><div><b>' + esc(m.item) + '</b><br>' + esc(i.flag) + '</div></div>' +
+      '<div class="field"><label>' + (resolved ? 'Why is this being reopened?' : 'What was confirmed, and by whom?') + '</label>' +
+        '<input type="text" id="flag-note" placeholder="e.g. HP confirmed $545.90 by email on 2026-08-19" ' +
+        'value="' + attr(resolved ? '' : (i.flagNote || '')) + '"></div>' +
+      (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error) + '</div>' : '') +
+      '<div class="modal-actions">' +
+        '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
+        '<button class="btn" id="flag-confirm"' + (m.busy ? ' disabled' : '') + '>' +
+          (m.busy ? 'Saving…' : (resolved ? 'Reopen' : 'Confirm')) + '</button>' +
+      '</div>';
+
+  }else if(m.kind === 'member'){
+    const editing = !!m.userId;
+    const existing = editing
+      ? (STATE.data.directory || []).filter(function(d){ return d.userId === m.userId; })[0] || {}
+      : {};
+    inner =
+      '<div class="modal-head"><div class="modal-title">' +
+        (editing ? 'Edit ' + esc(existing.name) : 'Add someone to Stockflow') + '</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="modal-sub">They sign in with a code emailed to this address, so it has to be one they ' +
+        'can read. Changing it here ends any session they currently hold.</div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Full name</label>' +
+        '<input type="text" id="member-name" value="' + attr(existing.name || '') + '"></div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Work email</label>' +
+        '<input type="email" id="member-email" value="' + attr(existing.email || '') + '"></div>' +
+      '<div class="field"><label>Role</label><select id="member-role">' +
+        (STATE.data.roles || []).map(function(r){
+          return '<option value="' + attr(r.id) + '"' +
+            ((existing.role || 'board') === r.id ? ' selected' : '') + '>' + esc(r.label) + '</option>';
+        }).join('') + '</select></div>' +
+      '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
+        'Admin: everything. Warehouse: stock movements. Sales: margins and prices. Board: read-only. ' +
+        'Every role sees the whole position.</div>' +
+      (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error) + '</div>' : '') +
+      '<div class="modal-actions">' +
+        '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
+        '<button class="btn" id="member-save"' + (m.busy ? ' disabled' : '') + '>' +
+          (m.busy ? 'Saving…' : 'Save') + '</button>' +
+      '</div>';
+
+  }else if(m.kind === 'brand'){
+    inner = brandModal();
+
+  }else if(m.kind === 'diag'){
+    inner =
+      '<div class="modal-head"><div class="modal-title">' + esc(m.title || 'Connection check') + '</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="diag">' + esc(m.text || '') + '</div>' +
+      '<div class="modal-actions"><button class="btn secondary" data-modalclose="1">Close</button></div>';
+  }
+
+  return '<div class="modal-overlay show" id="modal"><div class="modal-box' +
+    (m.kind === 'diag' ? ' wide' : '') + '">' + inner + '</div></div>';
+}
+
+function openModal(m){ STATE.modal = m; render(); }
+function closeModal(){
+  STATE.modal = null;
+  render();
+  /* Anything that changed while the dialog was open is applied now. */
+  if(STATE.stale) refreshData();
+}
+
+/* ============================================================
+   EVENT HANDLERS
+   ============================================================ */
+function bindHandlers(){
+  if(STATE.phase === 'fatal'){
+    on('#fatal-retry', 'click', function(){ boot(); });
+    on('#fatal-check', 'click', async function(){
+      const out = document.getElementById('fatal-diag');
+      out.innerHTML = '<div class="diag">Checking…</div>';
+      const lines = await connectionCheck();
+      out.innerHTML = '<div class="diag">' + esc(lines.join('\n')) + '</div>';
+    });
+    return;
+  }
+
+  if(STATE.phase === 'auth'){ bindAuth(); return; }
+  if(STATE.phase !== 'app') return;
+
+  on('.nav-item', 'click', function(e){
+    STATE.tab = e.currentTarget.dataset.tab;
+    render();
+    if(STATE.tab === 'ledger' && !STATE.views.ledger.data) loadLedger();
+    if(STATE.tab === 'audit' && !STATE.views.audit.data) loadAudit();
+  });
+  on('#sign-out', 'click', function(){
+    setSessionToken('');
+    STATE.session = null; STATE.data = null; STATE.phase = 'auth';
+    STATE.auth = {step: 'email', email: lastEmail(), message: 'Signed out.', messageKind: 'info', busy: false, needsBootstrap: false};
+    render();
+  });
+  on('#refresh-now', 'click', function(){ refreshData(); });
+  on('#brand-switch', 'click', function(){ openModal({kind: 'brand'}); });
+  on('[data-brand]', 'click', function(e){
+    const brand = e.currentTarget.dataset.brand;
+    const counts = brandsWithStock();
+    if(brand && !counts[brand]){
+      toast(brand + ' has no items in Stockflow yet — it is scaffolded, not switched off.', true);
+      return;
+    }
+    STATE.activeBrand = brand || null;
+    /* A change of scope returns every view to page one; page 4 of a list
+       that is now nine rows long is an empty screen. */
+    Object.keys(STATE.views).forEach(function(k){ STATE.views[k].page = 1; });
+    STATE.modal = null;
+    render();
+    toast(brand ? 'Viewing ' + brand : 'Viewing every brand');
+  });
+  on('#foot-check, #access-check', 'click', async function(){
+    openModal({kind: 'diag', title: 'Connection check', text: 'Checking both hops…'});
+    const lines = await connectionCheck();
+    if(STATE.modal && STATE.modal.kind === 'diag'){
+      STATE.modal.text = lines.join('\n');
+      render();
+    }
+  });
+  on('[data-modalclose]', 'click', function(){ closeModal(); });
+  on('#modal', 'click', function(e){ if(e.target.id === 'modal') closeModal(); });
+
+  /* client-side view controls */
+  on('[data-sort]', 'click', function(e){
+    const viewId = e.currentTarget.dataset.sort, field = e.currentTarget.dataset.field;
+    const v = STATE.views[viewId];
+    if(v.sortBy === field) v.sortDir = v.sortDir === 'asc' ? 'desc' : 'asc';
+    else { v.sortBy = field; v.sortDir = 'asc'; }
+    v.page = 1;              // a change of sort always returns to page one
+    render();
+  });
+  on('[data-page]', 'click', function(e){
+    STATE.views[e.currentTarget.dataset.page].page = Number(e.currentTarget.dataset.to);
+    render();
+  });
+  on('[data-clearview]', 'click', function(e){
+    const v = STATE.views[e.currentTarget.dataset.clearview];
+    v.search = ''; v.category = ''; v.location = ''; v.flagged = false; v.page = 1;
+    render();
+  });
+  ['git', 'mainwh', 'consolidated', 'itemmaster', 'simulator'].forEach(function(viewId){
+    const v = STATE.views[viewId];
+    on('#vf-' + viewId + '-search', 'input', debounce(function(e){
+      v.search = e.target.value; v.page = 1; render();
+    }, 200));
+    on('#vf-' + viewId + '-category', 'change', function(e){ v.category = e.target.value; v.page = 1; render(); });
+    on('#vf-' + viewId + '-location', 'change', function(e){ v.location = e.target.value; v.page = 1; render(); });
+    on('#vf-' + viewId + '-flagged', 'change', function(e){ v.flagged = e.target.checked; v.page = 1; render(); });
+  });
+
+  bindLedger();
+  bindItemMaster();
+  bindSimulator();
+  bindCategory();
+  bindB2B();
+  bindAnalytics();
+  bindAudit();
+  bindAccess();
+  bindModalActions();
+}
+
+function debounce(fn, ms){
+  let timer = null;
+  return function(){
+    const args = arguments, self = this;
+    clearTimeout(timer);
+    timer = setTimeout(function(){ fn.apply(self, args); }, ms);
+  };
+}
+
+function lastEmail(){
+  try{ return localStorage.getItem(EMAIL_KEY) || ''; }catch(e){ return ''; }
+}
+
+/* ---------------- Sign-in ---------------- */
+function bindAuth(){
+  const a = STATE.auth;
+  const send = async function(){
+    const input = document.getElementById('auth-email');
+    const email = String(input ? input.value : a.email).trim();
+    if(!email){ a.message = 'Enter your work email address.'; a.messageKind = 'err'; render(); return; }
+    a.email = email; a.busy = true; a.message = null; render();
+    try{
+      const res = await rpc('requestOtp', {email: email});
+      try{ localStorage.setItem(EMAIL_KEY, email); }catch(e){}
+      a.step = 'code'; a.busy = false;
+      a.message = 'A ' + res.expiresInMinutes + '-minute code is on its way to ' + email + '.';
+      a.messageKind = 'info';
+    }catch(err){
+      a.busy = false;
+      /* A lost reply on requestOtp means the email really was sent. */
+      if(err.replyLost){
+        a.step = 'code';
+        a.message = 'The reply was lost on the way back, but the request did reach the server — ' +
+          'so the code has probably been sent. Check your email.';
+        a.messageKind = 'info';
+      }else{
+        const d = diagnose(err);
+        a.message = d.detail; a.messageKind = 'err';
+      }
+    }
+    render();
+  };
+
+  on('#auth-send', 'click', send);
+  on('#auth-resend', 'click', send);
+  on('#auth-email', 'keydown', function(e){ if(e.key === 'Enter') send(); });
+
+  on('#auth-back', 'click', function(){
+    STATE.auth = {step: 'email', email: a.email, message: null, messageKind: 'info', busy: false, needsBootstrap: false};
+    render();
+  });
+
+  const verify = async function(){
+    const input = document.getElementById('auth-code');
+    const code = String(input ? input.value : '').replace(/\D/g, '');
+    if(code.length !== 6){ a.message = 'Enter the 6-digit code from your email.'; a.messageKind = 'err'; render(); return; }
+    a.busy = true; a.message = null; render();
+    try{
+      const res = await rpc('verifyOtp', {email: a.email, code: code});
+      setSessionToken(res.sessionToken);
+      STATE.session = res.session;
+      await loadApp();
+    }catch(err){
+      a.busy = false;
+      a.message = diagnose(err).detail; a.messageKind = 'err';
+      render();
+    }
+  };
+  on('#auth-verify', 'click', verify);
+  on('#auth-code', 'keydown', function(e){ if(e.key === 'Enter') verify(); });
+
+  on('#bootstrap-btn', 'click', async function(){
+    const name = (document.getElementById('bootstrap-name') || {}).value || '';
+    const email = (document.getElementById('bootstrap-email') || {}).value || '';
+    a.busy = true; a.message = null; render();
+    try{
+      await rpc('createFirstAdmin', {name: name.trim(), email: email.trim()});
+      STATE.auth = {step: 'email', email: email.trim(), busy: false, needsBootstrap: false,
+        message: 'Admin created. Now sign in with an emailed code, like everyone else.', messageKind: 'info'};
+    }catch(err){
+      a.busy = false; a.message = diagnose(err).detail; a.messageKind = 'err';
+    }
+    render();
+  });
+
+  on('#auth-check', 'click', async function(){
+    const out = document.getElementById('auth-diag');
+    out.innerHTML = '<div class="diag" style="margin-top:14px;">Checking…</div>';
+    const lines = await connectionCheck();
+    out.innerHTML = '<div class="diag" style="margin-top:14px;">' + esc(lines.join('\n')) + '</div>';
+  });
+}
+</script>
+
+<script>
+/* ---------------- Ledger handlers ---------------- */
+function bindLedger(){
+  if(STATE.tab !== 'ledger') return;
+
+  /* Which fields a type needs. The prototype hid the FOB box for
+     non-purchases and nothing else; there are more fields now. */
+  const syncFields = function(){
+    const typeEl = document.getElementById('f-type');
+    if(!typeEl) return;
+    const type = typeEl.value;
+    const show = function(id, on){
+      const el = document.getElementById(id);
+      if(el) el.style.display = on ? 'flex' : 'none';
+    };
+    show('f-fob-wrap', type === 'Purchase-Backlog' || type === 'Opening Balance-MainWH');
+    show('f-loc-wrap', type !== 'Purchase-Backlog' && type !== 'Ship-to-GIT');
+    show('f-toloc-wrap', type === 'Transfer-MainWH');
+    show('f-sell-wrap', type === 'Sale-from-GIT' || type === 'Sale-from-MainWH');
+    const locLabel = document.querySelector('#f-loc-wrap label');
+    if(locLabel) locLabel.textContent = type === 'Transfer-MainWH' ? 'Move from' : 'Warehouse';
+  };
+  on('#f-type', 'change', syncFields);
+  syncFields();
+
+  on('#log-btn', 'click', async function(){
+    const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
+    const data = {
+      date: val('f-date'), item: val('f-item'), type: val('f-type'),
+      qty: val('f-qty'), fob: val('f-fob'), ref: val('f-ref'), notes: val('f-notes'),
+      location: val('f-location'), toLocation: val('f-tolocation'), sellPrice: val('f-sellprice')
+    };
+    const dup = document.getElementById('f-allow-dup');
+    if(!data.qty){ toast('Enter a quantity greater than 0', true); return; }
+    STATE.busy = 'post'; render();
+    try{
+      await mutate('postTransaction', {data: data, allowDuplicate: !!(dup && dup.checked)});
+      toast('Logged: ' + data.type + ' — ' + data.item + ' × ' + data.qty);
+      ['f-qty', 'f-fob', 'f-ref', 'f-notes', 'f-sellprice'].forEach(function(id){
+        const el = document.getElementById(id); if(el) el.value = '';
+      });
+      const d = document.getElementById('f-allow-dup'); if(d) d.checked = false;
+      STATE.busy = null;
+      await refreshData();
+      await loadLedger();
+    }catch(err){
+      STATE.busy = null;
+      const diagnosis = diagnose(err);
+      toast(diagnosis.detail, !err.probablySucceeded);
+      render();
+    }
+  });
+
+  /* Filters. A change to any of them returns to page one. */
+  const setFilter = function(key, value){
+    const v = STATE.views.ledger;
+    v[key] = value; v.page = 1;
+    loadLedger();
+  };
+  on('#lf-from', 'change', function(e){ setFilter('dateFrom', e.target.value); });
+  on('#lf-to', 'change', function(e){ setFilter('dateTo', e.target.value); });
+  on('#lf-item', 'change', function(e){ setFilter('item', e.target.value); });
+  on('#lf-type', 'change', function(e){ setFilter('type', e.target.value); });
+  on('#lf-search', 'input', debounce(function(e){ setFilter('search', e.target.value); }, 300));
+  on('#lf-clear', 'click', function(){
+    STATE.views.ledger = Object.assign(STATE.views.ledger,
+      {page: 1, dateFrom: '', dateTo: '', item: '', type: '', search: ''});
+    loadLedger();
+  });
+  on('[data-spage]', 'click', function(e){
+    const viewId = e.currentTarget.dataset.spage;
+    STATE.views[viewId].page = Number(e.currentTarget.dataset.to);
+    if(viewId === 'ledger') loadLedger(); else loadAudit();
+  });
+  on('[data-reverse]', 'click', function(e){
+    const id = e.currentTarget.dataset.reverse;
+    const row = ((STATE.views.ledger.data || {}).rows || []).filter(function(r){ return r.txnId === id; })[0];
+    openModal({kind: 'reverse', txnId: id, row: row || {}});
+  });
+  on('#export-ledger', 'click', function(){ exportLedgerCsv(); });
+
+  /* Bulk upload */
+  on('#copy-template', 'click', function(){
+    const csv = toCsv(BULK_TEMPLATE_ROWS);
+    const paste = document.getElementById('bulk-paste');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(csv).then(
+        function(){ toast('Template copied — paste it into Excel, or into the box below'); },
+        function(){ if(paste) paste.value = csv; toast('Clipboard blocked — put the template in the box instead'); }
+      );
+    }else{
+      if(paste) paste.value = csv;
+      toast('Template put in the box below');
+    }
+  });
+  on('#bulk-file', 'change', function(e){
+    const file = e.target.files && e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = function(){ checkBulk(String(reader.result || '')); };
+    reader.onerror = function(){
+      STATE.bulk.error = 'That file could not be read. If it is open in Excel, close it and try again.';
+      render();
+    };
+    reader.readAsText(file);
+  });
+  on('#bulk-parse', 'click', function(){
+    const paste = document.getElementById('bulk-paste');
+    const text = paste ? paste.value.trim() : '';
+    if(!text){ toast('Paste some CSV rows first', true); return; }
+    checkBulk(text);
+  });
+  on('#bulk-skip', 'change', function(e){ STATE.bulk.skipInvalid = e.target.checked; });
+  on('#bulk-cancel', 'click', function(){
+    STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null};
+    const paste = document.getElementById('bulk-paste');
+    if(paste) paste.value = '';
+    render();
+  });
+  on('#bulk-commit', 'click', function(){ commitBulk(false); });
+  on('#bulk-export-errors', 'click', function(){
+    const rows = ((STATE.bulk.preview || {}).rows || []).filter(function(r){ return r.status !== 'ok'; });
+    download('stockflow-refused-rows.csv', toCsv(
+      [['line', 'date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'why it was refused']]
+        .concat(rows.map(function(r){
+          return [r.line, r.date, r.item, r.type, r.qty, r.fob, r.location, r.toLocation, r.ref, r.errors.join('; ')];
+        }))));
+  });
+}
+
+async function checkBulk(text){
+  STATE.bulk.error = null; STATE.bulk.preview = null; STATE.bulk.ignored = null;
+  STATE.bulk.busy = true; render();
+  const parsed = csvToObjects(text);
+  if(parsed.error){
+    /* "Your file is malformed" and "Stockflow hit an internal error" are
+       different problems and are reported differently. This is the first. */
+    STATE.bulk.busy = false;
+    STATE.bulk.error = 'That file could not be read: ' + parsed.error;
+    render();
+    return;
+  }
+  if(!parsed.rows.length){
+    STATE.bulk.busy = false;
+    STATE.bulk.error = 'The file has a header row but no data rows underneath it.';
+    render();
+    return;
+  }
+  STATE.bulk.rows = parsed.rows;
+  STATE.bulk.ignored = parsed.ignoredColumns;
+  try{
+    const preview = await rpc('bulkPostTransactions', {rows: parsed.rows, dryRun: true, skipInvalid: true});
+    STATE.bulk.preview = preview;
+    STATE.bulk.busy = false;
+    if(preview.duplicateBatch){
+      STATE.bulk.error = 'These exact rows were already imported on ' +
+        String(preview.duplicateBatch.importedAt).slice(0, 10) + ' by ' + preview.duplicateBatch.importedBy +
+        '. Importing them again would double every quantity. Only continue if this really is a ' +
+        'second, genuine set of movements.';
+    }
+  }catch(err){
+    STATE.bulk.busy = false;
+    const d = diagnose(err);
+    STATE.bulk.error = (err.internal ? 'Stockflow hit an internal error — this is not a problem with your file. ' : '') + d.detail;
+  }
+  render();
+}
+
+async function commitBulk(force){
+  const skipEl = document.getElementById('bulk-skip');
+  STATE.bulk.busy = true; render();
+  try{
+    const res = await mutate('bulkPostTransactions', {
+      rows: STATE.bulk.rows,
+      skipInvalid: skipEl ? skipEl.checked : STATE.bulk.skipInvalid,
+      force: !!force || !!(STATE.bulk.preview && STATE.bulk.preview.duplicateBatch)
+    });
+    STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null};
+    const paste = document.getElementById('bulk-paste');
+    if(paste) paste.value = '';
+    toast(res.imported + ' movement(s) imported' + (res.skipped ? ', ' + res.skipped + ' skipped' : ''));
+    await refreshData();
+    await loadLedger();
+  }catch(err){
+    STATE.bulk.busy = false;
+    STATE.bulk.error = diagnose(err).detail;
+    render();
+  }
+}
+
+function exportLedgerCsv(){
+  const d = STATE.views.ledger.data;
+  if(!d || !d.rows.length){ toast('Nothing to export with these filters', true); return; }
+  const header = ['txnId', 'date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation',
+    'ref', 'notes', 'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale', 'reversalOf',
+    'reversalReason', 'actor', 'voided'];
+  download('stockflow-ledger-page-' + d.page + '.csv', toCsv([header].concat(d.rows.map(function(r){
+    return header.map(function(h){ return r[h] === null || r[h] === undefined ? '' : r[h]; });
+  }))));
+}
+
+/* A download the page starts itself. Kept to a Blob URL and revoked
+   afterwards so a long session does not leak them. */
+function download(filename, text){
+  try{
+    const blob = new Blob([text], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    toast('Downloaded ' + filename);
+  }catch(err){
+    toast('This browser would not start the download.', true);
+  }
+}
+
+/* ---------------- Item Master ---------------- */
+function bindItemMaster(){
+  if(STATE.tab !== 'itemmaster' || !STATE.perms.category) return;
+  on('[data-fob]', 'change', async function(e){
+    const item = e.currentTarget.dataset.fob;
+    await saveCostInput('setFobOverride', item, e.currentTarget.value, 'FOB override');
+  });
+  on('[data-support]', 'change', async function(e){
+    const item = e.currentTarget.dataset.support;
+    await saveCostInput('setHpSupport', item, e.currentTarget.value, 'HP price support');
+  });
+  on('#export-items', 'click', function(){
+    const res = applyView(nonB2B(), STATE.views.itemmaster);
+    const header = ['item', 'name', 'category', 'weightedFob', 'fobOverride', 'effectiveFob',
+      'landedPct', 'landedCost', 'support', 'netCost', 'backlogQty', 'gitQty', 'mwQty',
+      'consolidatedQty', 'consolidatedValue', 'gitOldestAge', 'mwOldestAge', 'flag'];
+    download('stockflow-item-master.csv', toCsv([header].concat(res.rows.map(function(i){
+      return header.map(function(h){ return i[h] === null || i[h] === undefined ? '' : i[h]; });
+    }))));
+  });
+}
+
+async function saveCostInput(action, item, raw, label){
+  const value = String(raw).trim();
+  try{
+    await mutate(action, {item: item, value: value === '' ? null : Number(value)});
+    toast(label + ' saved for ' + item);
+    await refreshData();
+  }catch(err){
+    toast(diagnose(err).detail, !err.probablySucceeded);
+    await refreshData();
+  }
+}
+
+/* ---------------- Simulator ---------------- */
+function bindSimulator(){
+  if(STATE.tab !== 'simulator') return;
+  bindSimInputs();
+  if(!STATE.perms.pricing) return;
+
+  STATE.marginDraft = STATE.marginDraft || {category: {}, sku: {}};
+
+  on('#sim-global', 'input', function(e){
+    STATE.marginDraft.global = Number(e.target.value);
+    const out = document.getElementById('sim-global-val');
+    if(out) out.textContent = Number(e.target.value).toFixed(1) + '%';
+    redrawSimBody();            // one table body, not the page
+  });
+  on('[data-catsim]', 'input', function(e){
+    const cat = e.currentTarget.dataset.catsim;
+    STATE.marginDraft.category[cat] = Number(e.target.value);
+    const out = document.getElementById('catval-' + cat);
+    if(out){ out.textContent = Number(e.target.value).toFixed(1) + '%'; out.classList.remove('inherit'); }
+    redrawSimBody();
+  });
+  on('[data-clearcat]', 'click', function(e){
+    const cat = e.currentTarget.dataset.clearcat;
+    STATE.marginDraft.category[cat] = null;
+    redrawSimBody();
+    saveMargins([{scope: 'category', key: cat, percent: null}]);
+  });
+  on('#clear-cat-ov', 'click', async function(){
+    try{
+      await mutate('clearMargins', {scope: 'category'});
+      STATE.marginDraft = {category: {}, sku: {}};
+      toast('Every category override cleared — they inherit the global margin again');
+      await refreshData();
+    }catch(err){ toast(diagnose(err).detail, true); }
+  });
+  on('#revert-margins', 'click', function(){ STATE.marginDraft = {category: {}, sku: {}}; render(); });
+  on('#save-margins', 'click', function(){
+    const draft = STATE.marginDraft || {};
+    const changes = [];
+    if(draft.global !== undefined) changes.push({scope: 'global', key: '', percent: draft.global});
+    Object.keys(draft.category || {}).forEach(function(cat){
+      changes.push({scope: 'category', key: cat, percent: draft.category[cat]});
+    });
+    Object.keys(draft.sku || {}).forEach(function(item){
+      changes.push({scope: 'sku', key: item, percent: draft.sku[item]});
+    });
+    if(!changes.length){ toast('Nothing to save', true); return; }
+    saveMargins(changes);
+  });
+}
+
+function bindSimInputs(){
+  if(!STATE.perms.pricing) return;
+  on('[data-skusim]', 'change', function(e){
+    const item = e.currentTarget.dataset.skusim;
+    const raw = String(e.target.value).trim();
+    STATE.marginDraft = STATE.marginDraft || {category: {}, sku: {}};
+    /* '' clears the override; '0' is a real 0% and must survive as one. */
+    STATE.marginDraft.sku[item] = raw === '' ? null : Number(raw);
+    redrawSimBody();
+    saveMargins([{scope: 'sku', key: item, percent: raw === '' ? null : Number(raw)}]);
+  });
+}
+
+async function saveMargins(changes){
+  STATE.busy = 'margins'; render();
+  try{
+    for(let i = 0; i < changes.length; i++){
+      await mutate('setMargin', changes[i]);
+    }
+    STATE.busy = null;
+    STATE.marginDraft = {category: {}, sku: {}};
+    toast(changes.length === 1 ? 'Margin saved' : changes.length + ' margins saved');
+    await refreshData();
+  }catch(err){
+    STATE.busy = null;
+    toast(diagnose(err).detail, !err.probablySucceeded);
+    await refreshData();
+  }
+}
+
+/* ---------------- Category settings ---------------- */
+function bindCategory(){
+  if(STATE.tab !== 'category' || !STATE.perms.category) return;
+  on('[data-savecat]', 'click', async function(e){
+    const cat = e.currentTarget.dataset.savecat;
+    const input = document.getElementById('catpct-' + cat);
+    if(!input) return;
+    try{
+      await mutate('setCategoryPct', {category: cat, percent: Number(input.value)});
+      toast('Landed cost % saved for ' + cat + ' — every item in it has been revalued');
+      await refreshData();
+    }catch(err){
+      toast(diagnose(err).detail, !err.probablySucceeded);
+      await refreshData();
+    }
+  });
+}
+
+/* ---------------- B2B ---------------- */
+function bindB2B(){
+  if(STATE.tab !== 'b2b' || !STATE.perms.b2b) return;
+  on('[data-b2b]', 'change', async function(e){
+    const field = e.currentTarget.dataset.b2b;
+    const item = e.currentTarget.dataset.item;
+    const raw = e.target.value;
+    try{
+      await mutate('setB2BField', {item: item, field: field, value: raw === '' ? null : raw});
+      toast(field + ' saved for ' + item);
+      await refreshData();
+    }catch(err){
+      toast(diagnose(err).detail, !err.probablySucceeded);
+      await refreshData();
+    }
+  });
+}
+
+/* ---------------- Analytics ---------------- */
+function bindAnalytics(){
+  if(STATE.tab !== 'analytics') return;
+  on('[data-resolveflag]', 'click', function(e){
+    openModal({kind: 'flag', item: e.currentTarget.dataset.resolveflag});
+  });
+}
+
+/* ---------------- Audit ---------------- */
+function bindAudit(){
+  if(STATE.tab !== 'audit') return;
+  const set = function(key, value){
+    const v = STATE.views.audit;
+    v[key] = value; v.page = 1;
+    loadAudit();
+  };
+  on('#af-from', 'change', function(e){ set('dateFrom', e.target.value); });
+  on('#af-to', 'change', function(e){ set('dateTo', e.target.value); });
+  on('#af-entity', 'change', function(e){ set('entity', e.target.value); });
+  on('#af-search', 'input', debounce(function(e){ set('search', e.target.value); }, 300));
+  on('#af-clear', 'click', function(){
+    STATE.views.audit = Object.assign(STATE.views.audit, {page: 1, dateFrom: '', dateTo: '', entity: '', search: ''});
+    loadAudit();
+  });
+  on('[data-spage]', 'click', function(e){
+    const viewId = e.currentTarget.dataset.spage;
+    STATE.views[viewId].page = Number(e.currentTarget.dataset.to);
+    if(viewId === 'audit') loadAudit(); else loadLedger();
+  });
+  on('#export-audit', 'click', function(){
+    const d = STATE.views.audit.data;
+    if(!d || !d.rows.length){ toast('Nothing to export', true); return; }
+    const header = ['at', 'actor', 'entity', 'key', 'field', 'oldValue', 'newValue', 'reason'];
+    download('stockflow-audit.csv', toCsv([header].concat(d.rows.map(function(r){
+      return header.map(function(h){ return r[h] || ''; });
+    }))));
+  });
+}
+
+/* ---------------- Access ---------------- */
+function bindAccess(){
+  if(STATE.tab !== 'access' || !STATE.perms.directory) return;
+  on('#add-member', 'click', function(){ openModal({kind: 'member'}); });
+  on('[data-editmember]', 'click', function(e){
+    openModal({kind: 'member', userId: e.currentTarget.dataset.editmember});
+  });
+  on('[data-togglemember]', 'click', async function(e){
+    const userId = e.currentTarget.dataset.togglemember;
+    const m = (STATE.data.directory || []).filter(function(d){ return d.userId === userId; })[0];
+    if(!m) return;
+    const next = m.status === 'disabled' ? 'active' : 'disabled';
+    if(next === 'disabled' && !confirm('Disable ' + m.name + '? Their session ends on their next request.')) return;
+    try{
+      await mutate('setUserStatus', {userId: userId, status: next});
+      toast(m.name + ' is now ' + next);
+      await refreshData();
+    }catch(err){ toast(diagnose(err).detail, true); }
+  });
+}
+
+/* ---------------- Modal actions ---------------- */
+function bindModalActions(){
+  const m = STATE.modal;
+  if(!m) return;
+
+  on('#reverse-confirm', 'click', async function(){
+    const reason = (document.getElementById('reverse-reason') || {}).value || '';
+    m.busy = true; m.error = null; render();
+    try{
+      await mutate('reverseTransaction', {txnId: m.txnId, reason: reason.trim()});
+      STATE.modal = null;
+      toast('Reversed. Both rows stay on the ledger.');
+      await refreshData();
+      await loadLedger();
+    }catch(err){
+      m.busy = false;
+      m.error = diagnose(err).detail;
+      render();
+    }
+  });
+
+  on('#flag-confirm', 'click', async function(){
+    const note = (document.getElementById('flag-note') || {}).value || '';
+    const item = itemByCode(m.item) || {};
+    m.busy = true; m.error = null; render();
+    try{
+      await mutate('resolveItemFlag', {item: m.item, note: note.trim(), reopen: !!item.flagResolvedBy});
+      STATE.modal = null;
+      toast('Recorded against ' + m.item);
+      await refreshData();
+    }catch(err){
+      m.busy = false; m.error = diagnose(err).detail; render();
+    }
+  });
+
+  on('#member-save', 'click', async function(){
+    const data = {
+      name: (document.getElementById('member-name') || {}).value || '',
+      email: (document.getElementById('member-email') || {}).value || '',
+      role: (document.getElementById('member-role') || {}).value || 'board'
+    };
+    m.busy = true; m.error = null; render();
+    try{
+      if(m.userId) await mutate('updateTeamMember', {userId: m.userId, data: data});
+      else await mutate('addTeamMember', {data: data});
+      STATE.modal = null;
+      toast('Directory updated');
+      await refreshData();
+    }catch(err){
+      m.busy = false; m.error = diagnose(err).detail; render();
+    }
+  });
+}
+</script>
+
+<script>
+/* ============================================================
+   DATA LOADING AND THE BOOT SEQUENCE
+   ============================================================ */
+
+async function loadLedger(){
+  const v = STATE.views.ledger;
+  v.loading = true;
+  try{
+    v.data = await rpc('getLedger', {
+      page: v.page, pageSize: PAGE_SIZE,
+      dateFrom: v.dateFrom, dateTo: v.dateTo, item: v.item, type: v.type,
+      search: v.search, sortBy: v.sortBy, sortDir: v.sortDir
+    });
+  }catch(err){
+    if(!err.sessionInvalid) toast(diagnose(err).detail, true);
+  }
+  v.loading = false;
+  if(!STATE.modal) render();
+}
+
+async function loadAudit(){
+  const v = STATE.views.audit;
+  v.loading = true;
+  try{
+    v.data = await rpc('getAudit', {
+      page: v.page, pageSize: PAGE_SIZE,
+      dateFrom: v.dateFrom, dateTo: v.dateTo, entity: v.entity, search: v.search
+    });
+  }catch(err){
+    if(!err.sessionInvalid) toast(diagnose(err).detail, true);
+  }
+  v.loading = false;
+  if(!STATE.modal) render();
+}
+
+async function refreshData(){
+  try{
+    const data = await rpc('getBootstrap', {});
+    applyBootstrap(data);
+    STATE.stale = false;
+    if(!STATE.modal) render();
+  }catch(err){
+    if(!err.sessionInvalid) toast(diagnose(err).detail, true);
+  }
+}
+
+function applyBootstrap(data){
+  STATE.data = data;
+  STATE.today = data.today;           // the server's date, always
+  STATE.session = data.session;
+  STATE.perms = data.perms || STATE.perms;
+  STATE.revision = data.revision;
+  STATE.marginDraft = {category: {}, sku: {}};
+}
+
+async function loadApp(){
+  const data = await rpc('getBootstrap', {});
+  applyBootstrap(data);
+  STATE.phase = 'app';
+  render();
+  if(STATE.tab === 'ledger') loadLedger();
+  startPolling();
+}
+
+function onSessionLost(message){
+  setSessionToken('');
+  STATE.phase = 'auth';
+  STATE.session = null;
+  STATE.data = null;
+  STATE.auth = {step: 'email', email: lastEmail(), message: message, messageKind: 'err', busy: false, needsBootstrap: false};
+  stopPolling();
+  render();
+}
+
+/* The background poll asks only for a revision number. If it has moved
+   it refreshes — unless a dialog is open, in which case it sets the
+   stale flag and the strip appears the moment the dialog closes.
+   Re-rendering over an open form throws away someone's work. */
+let pollTimer = null;
+function startPolling(){
+  stopPolling();
+  pollTimer = setInterval(async function(){
+    if(STATE.phase !== 'app') return;
+    try{
+      const res = await rpc('getRevision', {});
+      if(res.today !== STATE.today){
+        /* The server's day rolled over while the page was open. Every
+           age on screen is now one day out; take the new date. */
+        STATE.today = res.today;
+        if(!STATE.modal) await refreshData();
+        else STATE.stale = true;
+        return;
+      }
+      if(res.revision !== STATE.revision){
+        if(STATE.modal) STATE.stale = true;
+        else await refreshData();
+      }
+    }catch(err){ /* a poll that fails is not worth interrupting anyone for */ }
+  }, 45000);
+}
+function stopPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+async function boot(){
+  STATE.phase = 'loading';
+  STATE.fatal = null;
+  render();
+
+  if(!backendUrl()){
+    STATE.phase = 'fatal';
+    STATE.fatal = {
+      title: 'This page has not been pointed at a Google Sheet',
+      detail: 'Whoever published stockflow.html needs to set STOCKFLOW_BACKEND_URL near the top of ' +
+        'the file to the Apps Script Web App /exec URL. Until then there is nothing for this page to read.'
+    };
+    render();
+    return;
+  }
+
+  /* A stored token is tried first, so a returning user goes straight in. */
+  if(sessionToken()){
+    try{
+      await loadApp();
+      return;
+    }catch(err){
+      if(err.sessionInvalid) return;                 // onSessionLost already redrew
+      STATE.phase = 'fatal';
+      STATE.fatal = diagnose(err);
+      render();
+      return;
+    }
+  }
+
+  try{
+    const ctx = await rpc('getLoginContext', {});
+    STATE.today = ctx.today;
+    STATE.phase = 'auth';
+    STATE.auth = {
+      step: 'email', email: lastEmail(), message: null, messageKind: 'info',
+      busy: false, needsBootstrap: !!ctx.needsBootstrap
+    };
+    if(!ctx.emailConfigured){
+      STATE.auth.message = 'This Stockflow Sheet cannot send email yet, so a sign-in code will not ' +
+        'arrive. Whoever set it up needs to run configureEmailFromSheet or set POSTMARK_TOKEN and ' +
+        'POSTMARK_FROM in Script Properties.';
+      STATE.auth.messageKind = 'err';
+    }
+  }catch(err){
+    STATE.phase = 'fatal';
+    STATE.fatal = diagnose(err);
+  }
+  render();
+}
+
+/* Only start in a browser. Under Node — where the test suite loads this
+   same file to check the CSV parser, the margin resolver, the formatters
+   and the tag balance of every screen — there is no document to render
+   into and nothing should reach for one. */
+if(typeof document !== 'undefined' && typeof window !== 'undefined' && !window.__HEADLESS__){
+  boot();
+}
+</script>
+</body>
+</html>
