@@ -156,6 +156,7 @@ td.muted{font-size:10px;color:var(--t3)}
 .rb-ADMIN{background:var(--rdl);color:var(--red)}
 .rb-HR{background:var(--tll);color:var(--tl)}
 .rb-FINANCE{background:var(--pul);color:var(--pur)}
+.rb-AUDIT{background:var(--bll);color:var(--blu)}
 .rb-VIEW{background:var(--neutral-bg);color:var(--neutral-fg)}
 .bu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:16px}
 .buc{background:var(--sf);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;border-left:5px solid var(--w);box-shadow:var(--sh)}
@@ -382,7 +383,8 @@ function setSessionToken(token){
 const RETRYABLE_ACTIONS = {
   getBootstrap:1, getRevision:1, getLoginContext:1, getPeriodData:1,
   getJournalPage:1, getJournalSummary:1, getJournalExport:1,
-  getHistoryPage:1, getPayslip:1, getReconciliation:1, getCostAllocation:1
+  getHistoryPage:1, getPayslip:1, getReconciliation:1, getCostAllocation:1,
+  previewPayslipBatch:1
 };
 
 /* Set once any call has succeeded. After that we know the deployment exists,
@@ -686,7 +688,12 @@ const STATE = {
   sch: {q:'', status:'', page:1, pageSize:25},
   pro: {q:'', status:'', page:1, pageSize:25},
   str: {q:'', page:1, pageSize:25},
-  bu:  {bg:''}
+  bu:  {bg:''},
+  /* Staff picked for a bulk action, by employee number. Deliberately survives
+     paging and filtering — you select across pages, then act once — and is
+     cleared when the period changes, because a selection from another month
+     means nothing here. */
+  sel: {}
 };
 
 function currentCaps(){
@@ -1028,7 +1035,8 @@ function renderTopBar(){
 function renderNav(){
   const pending = STATE.movements.filter(function(m){ return !m.reversedAt; }).length;
   return '<div class="nav">' + VIEWS.filter(function(v){
-    return v !== 'admin' || can('manageDirectory') || can('editSettings') || can('createPeriod');
+    return v !== 'admin' || can('manageDirectory') || can('editSettings') ||
+      can('createPeriod') || can('viewAdminDetail');
   }).map(function(v){
     const dot = (v === 'changes' && pending)
       ? '<span class="nb-dot">' + pending + '</span>' : '';
@@ -1462,6 +1470,11 @@ function kpi(value, label, cls, sub){
     '<div class="kpi-s">' + esc(sub || '') + '</div></div>';
 }
 
+function selectedEmpNos(){
+  return Object.keys(STATE.sel).filter(function(k){ return STATE.sel[k]; });
+}
+function selCount(){ return selectedEmpNos().length; }
+
 function staffIndex(){
   const idx = {};
   STATE.staff.forEach(function(s){ idx[s.emp_no] = s; });
@@ -1507,7 +1520,26 @@ function registerControls(mode){
       {act:'filter:reg.' + mode + ':pageSize'}) +
     '<button class="btn btn-w" data-act="export-register:' + mode + '">Export CSV</button>' +
     '<button class="btn btn-ghost" data-act="print">Print</button>' +
-    '</div>';
+    (can('sendPayslip')
+      ? '<button class="btn btn-ghost" data-act="select-filtered:' + mode + '">Select all ' +
+        filteredStaff(mode).length + ' filtered</button>'
+      : '') +
+    '</div>' + selectionBar();
+}
+
+/* Appears only when something is selected, so it is invisible until it is
+   useful and unmissable once it is. */
+function selectionBar(){
+  const n = selCount();
+  if(!n || !can('sendPayslip')) return '';
+  return '<div class="note blue" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+    '<strong>' + n + ' member' + (n === 1 ? '' : 's') + ' of staff selected</strong>' +
+    '<span style="color:var(--t2);font-weight:400">Selection is kept as you filter and page.</span>' +
+    '<span style="margin-left:auto;display:flex;gap:7px;flex-wrap:wrap">' +
+      '<button class="btn btn-sm btn-f" data-act="bulk-payslip">Email ' + n + ' payslip' +
+        (n === 1 ? '' : 's') + '</button>' +
+      '<button class="btn btn-sm btn-ghost" data-act="clear-selection">Clear selection</button>' +
+    '</span></div>';
 }
 
 function nameCell(e){
@@ -1516,8 +1548,27 @@ function nameCell(e){
   return '<td class="nm' + cls + '" title="' + attr(e.name) + '">' + esc(e.name) + '</td>';
 }
 
+function selectCell(e){
+  if(!can('sendPayslip')) return '';
+  return '<td class="c"><input type="checkbox" data-pick="' + attr(e.emp_no) + '"' +
+    (STATE.sel[e.emp_no] ? ' checked' : '') + ' aria-label="Select ' + attr(e.name) + '"></td>';
+}
+/* Ticks or clears every row on the page in view, which is what a header
+   checkbox is expected to do. Selecting the whole filtered set — which may run
+   to several pages — is the separate button in the controls. */
+function selectHeader(mode, pageRows){
+  if(!can('sendPayslip')) return '';
+  const all = pageRows.length && pageRows.every(function(e){ return STATE.sel[e.emp_no]; });
+  return '<th class="hc c"><input type="checkbox" data-pick-page="' + attr(mode) + '"' +
+    (all ? ' checked' : '') + ' aria-label="Select everyone on this page"></th>';
+}
+
 function rowActions(e){
   return '<td class="c">' +
+    (e.payslipSentAt
+      ? '<span class="bdg bNEW" title="Payslip emailed to ' + attr(e.payslipSentTo) + ' on ' +
+        attr(shortDate(e.payslipSentAt)) + '">sent</span> '
+      : '') +
     '<button class="btn btn-sm btn-w" data-act="payslip:' + attr(e.emp_no) + '">Payslip</button>' +
     (canEditNow('editStaff')
       ? ' <button class="btn btn-sm btn-ghost" data-act="edit-staff:' + attr(e.emp_no) + '">Edit</button>' : '') +
@@ -1543,13 +1594,14 @@ function viewRegister(mode){
 
   if(mode === 'payroll'){
     head = '<tr>' +
-        '<th class="hg" colspan="6"></th>' +
+        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
         '<th class="hg" colspan="6">Payroll earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="1">Employer cost</th>' +
         '<th class="hg" colspan="5">Payroll deductions</th>' +
         '<th class="hg" colspan="1">Net</th>' +
         '<th class="hg" colspan="2"></th>' +
       '</tr><tr>' +
+        selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
         sortHeader(mode, 'bus_unit', 'Bus unit') + sortHeader(mode, 'org', 'Org') +
@@ -1565,7 +1617,7 @@ function viewRegister(mode){
         '<th class="hc c">Status</th><th class="hc c">Actions</th>' +
       '</tr>';
     body = p.rows.map(function(e){
-      return '<tr><td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
+      return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
         '<td>' + esc(e.grade) + '</td><td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td>' +
         ['gross','basic','housing','transport','domestic','total_earn'].map(function(k){
@@ -1581,13 +1633,14 @@ function viewRegister(mode){
     }).join('');
   }else if(mode === 'security'){
     head = '<tr>' +
-        '<th class="hg" colspan="5"></th>' +
+        '<th class="hg" colspan="' + (can('sendPayslip') ? 6 : 5) + '"></th>' +
         '<th class="hg" colspan="8">Security earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="5">Fixed deductions</th>' +
         '<th class="hg" colspan="5">EMP account deductions · DR employee loan account</th>' +
         '<th class="hg" colspan="1">Total ded</th><th class="hg" colspan="1">Net</th>' +
         '<th class="hg" colspan="2"></th>' +
       '</tr><tr>' +
+        selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
         sortHeader(mode, 'org', 'Org') +
@@ -1615,7 +1668,7 @@ function viewRegister(mode){
       '</tr>';
     body = p.rows.map(function(e){
       const car = (Number(e.car_scheme1) || 0) + (Number(e.car_scheme2) || 0);
-      return '<tr><td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
+      return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
         '<td>' + esc(e.grade) + '</td><td>' + esc(e.org) + '</td>' +
         ['sec_allow','resp_allow','sec_arrears','special_sec','commission','contract_sec',
@@ -1634,10 +1687,12 @@ function viewRegister(mode){
     }).join('');
   }else{
     head = '<tr>' +
-        '<th class="hg" colspan="5"></th><th class="hg" colspan="3">Payroll</th>' +
+        '<th class="hg" colspan="' + (can('sendPayslip') ? 6 : 5) + '"></th>' +
+        '<th class="hg" colspan="3">Payroll</th>' +
         '<th class="hg" colspan="3">Security</th><th class="hg" colspan="1">Consolidated</th>' +
         '<th class="hg" colspan="3"></th>' +
       '</tr><tr>' +
+        selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'bus_unit', 'Bus unit') + sortHeader(mode, 'org', 'Org') +
         sortHeader(mode, 'grade', 'Grade') +
@@ -1655,7 +1710,7 @@ function viewRegister(mode){
     body = p.rows.map(function(e){
       const movP = (Number(e.netPay) || 0) - (Number(e.jul_net) || 0);
       const movS = (Number(e.netSecurity) || 0) - (Number(e.jul_sec_net) || 0);
-      return '<tr><td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
+      return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
         '<td class="r">' + esc(moneyOrBlank(e.jul_net)) + '</td>' +
         '<td class="' + (movP > 0 ? 'earn' : movP < 0 ? 'ded' : 'r') + '">' + esc(signed(movP)) + '</td>' +
@@ -2423,7 +2478,8 @@ function viewAdmin(){
   return '<div class="sec-title">Administration</div>' +
     userBar() +
 
-    (can('createPeriod') ? '<div class="card" style="margin-bottom:14px">' +
+    (can('createPeriod') || can('viewAdminDetail')
+      ? '<div class="card" style="margin-bottom:14px">' +
       '<div class="card-h">Payroll periods</div>' +
       '<div class="tw"><div class="ts"><table><thead><tr>' +
         '<th class="hc">Period</th><th class="hc">Label</th><th class="hc c">State</th>' +
@@ -2443,6 +2499,10 @@ function viewAdmin(){
           '<td class="muted">' + esc(p.openedBy) + '<br>' + esc(shortDate(p.openedAt)) + '</td>' +
           '<td class="muted">' + (closed ? esc(p.closedBy) + '<br>' + esc(shortDate(p.closedAt)) : '—') + '</td>' +
           '<td class="c">' +
+            (can('editSettings')
+              ? '<button class="btn btn-sm btn-ghost" data-act="edit-controls:' + attr(p.period) +
+                '">Rename</button> '
+              : '') +
             (p.period !== STATE.period
               ? '<button class="btn btn-sm btn-ghost" data-act="switch-period:' + attr(p.period) + '">Open</button> '
               : '') +
@@ -2455,13 +2515,16 @@ function viewAdmin(){
           '</td></tr>';
       }).join('') +
       '</tbody></table></div></div>' +
-      '<button class="btn btn-f" style="margin-top:10px" data-act="new-period">+ Create the next period</button>' +
+      (can('createPeriod')
+        ? '<button class="btn btn-f" style="margin-top:10px" data-act="new-period">+ Create the next period</button>'
+        : '') +
       '<div class="note grey" style="margin-top:10px;font-weight:400">Creating a period rolls every live ' +
         'staff record forward with its movement accumulators cleared, and advances each active deduction ' +
         'scheme by one instalment. Exited staff are not carried over.</div>' +
     '</div>' : '') +
 
-    (can('manageDirectory') ? '<div class="card" style="margin-bottom:14px">' +
+    (can('manageDirectory') || can('viewAdminDetail')
+      ? '<div class="card" style="margin-bottom:14px">' +
       '<div class="card-h">People</div>' +
       '<div class="tw"><div class="ts"><table><thead><tr>' +
         '<th class="hc">Name</th><th class="hc">Email</th><th class="hc c">Role</th>' +
@@ -2477,16 +2540,20 @@ function viewAdmin(){
           '<td class="muted">' + esc(u.addedBy || '') + '</td>' +
           '<td class="muted">' + esc(u.lastActive ? shortDate(u.lastActive) : 'never') + '</td>' +
           '<td class="c">' +
-            '<button class="btn btn-sm btn-ghost" data-act="edit-user:' + attr(u.userId) + '">Edit</button> ' +
-            (u.userId !== STATE.session.userId
-              ? '<button class="btn btn-sm ' + (u.status === 'active' ? 'btn-r' : 'btn-g') +
-                '" data-act="toggle-user:' + attr(u.userId) + '">' +
-                (u.status === 'active' ? 'Disable' : 'Enable') + '</button>'
-              : '<span class="muted" style="font-size:10px">that’s you</span>') +
+            (can('manageDirectory')
+              ? '<button class="btn btn-sm btn-ghost" data-act="edit-user:' + attr(u.userId) + '">Edit</button> ' +
+                (u.userId !== STATE.session.userId
+                  ? '<button class="btn btn-sm ' + (u.status === 'active' ? 'btn-r' : 'btn-g') +
+                    '" data-act="toggle-user:' + attr(u.userId) + '">' +
+                    (u.status === 'active' ? 'Disable' : 'Enable') + '</button>'
+                  : '<span class="muted" style="font-size:10px">that’s you</span>')
+              : '<span class="muted" style="font-size:10px">read only</span>') +
           '</td></tr>';
       }).join('') +
       '</tbody></table></div></div>' +
-      '<button class="btn btn-f" style="margin-top:10px" data-act="new-user">+ Add someone</button>' +
+      (can('manageDirectory')
+        ? '<button class="btn btn-f" style="margin-top:10px" data-act="new-user">+ Add someone</button>'
+        : '') +
       '<div class="note grey" style="margin-top:10px;font-weight:400">Disabling somebody ends their ' +
         'sessions immediately — the Directory is re-read on every request, so they do not stay signed ' +
         'in until their token expires.</div>' +
@@ -2543,6 +2610,7 @@ function renderOverlay(){
     scheme: modalScheme, proration: modalProration, structure: modalStructure,
     user: modalUser, period: modalPeriod, controls: modalControls,
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
+    bulkPayslip: modalBulkPayslip, renumber: modalRenumber,
     diagnostics: modalDiagnostics
   }[m.kind];
   box.innerHTML = body ? body(m) : '';
@@ -2552,7 +2620,9 @@ function modalShell(opts){
   return '<div class="ov" data-act="modal-backdrop"><div class="mdl ' + (opts.cls || '') + '">' +
     '<div class="mdl-h"><div><h3>' + esc(opts.title) + '</h3>' +
       (opts.sub ? '<p>' + esc(opts.sub) + '</p>' : '') + '</div>' +
-      '<button class="mdl-x" data-act="close-modal">×</button></div>' +
+      /* A dialog that must not be dismissed hides the control rather than
+         showing one that silently does nothing. */
+      (opts.noClose ? '' : '<button class="mdl-x" data-act="close-modal">×</button>') + '</div>' +
     '<div class="mdl-b">' +
       (STATE.modalError ? '<div class="alert err"><div>' + esc(STATE.modalError) + '</div></div>' : '') +
       opts.body + '</div>' +
@@ -2688,6 +2758,11 @@ function modalMovement(m){
         esc(money(emp.netSecurity)) + '</strong></div>' : '') +
 
       (isNew ? '<div class="form-row">' +
+        '<div class="fld"><label>Employee number *</label>' +
+          '<input type="text" id="mv-nh-empno" placeholder="e.g. TD1234 or TDCS0987">' +
+          '<span class="hint">Type the number this person already has. Nothing is generated — ' +
+          'employee numbers follow several patterns here and an invented one would only have to ' +
+          'be reconciled away later.</span></div>' +
         '<div class="fld"><label>Full name *</label>' +
           '<input type="text" id="mv-nh-name" placeholder="SURNAME, FIRSTNAME"></div>' +
         '<div class="fld"><label>Grade</label>' +
@@ -2767,8 +2842,25 @@ function modalStaff(m){
     sub:periodLabel(STATE.period) + ' · totals are recalculated from these figures on save',
     body:
       '<div class="form-row">' +
-        '<div class="fld"><label>Employee no *</label><input type="text" id="st-emp_no" value="' +
-          attr(e ? e.emp_no : '') + '"' + (e ? ' readonly' : '') + '></div>' +
+        '<div class="fld"><label>Employee number *</label>' +
+          (e
+            /* Editable, but through its own step. Typing over it here would
+               either create a second person with no history, or silently
+               rewrite eight tabs while someone was really only fixing a
+               salary. The button is the affordance; the field shows what it
+               is now. */
+            ? '<div style="display:flex;gap:7px;align-items:center">' +
+                '<input type="text" id="st-emp_no" value="' + attr(e.emp_no) + '" readonly ' +
+                'style="flex:1;min-width:0;background:var(--lt);color:var(--t2)">' +
+                '<button class="btn btn-sm btn-w" data-act="renumber:' + attr(e.emp_no) +
+                  '" style="flex-shrink:0">Change number</button>' +
+              '</div>' +
+              '<span class="hint">Their movements, schemes, proration, journal lines and payslip ' +
+              'history move with it.</span>'
+            : '<input type="text" id="st-emp_no" value="" ' +
+              'placeholder="e.g. TD1234 or TDCS0987">' +
+              '<span class="hint">Type the number this person already has — nothing is generated.</span>') +
+          '</div>' +
         '<div class="fld"><label>Full name *</label><input type="text" id="st-name" value="' +
           attr(e ? e.name : '') + '" placeholder="SURNAME, FIRSTNAME"></div>' +
         '<div class="fld"><label>Email</label><input type="email" id="st-email" value="' +
@@ -2912,6 +3004,228 @@ function modalStructure(m){
   });
 }
 
+/* ---------------- Bulk payslip delivery ----------------
+   Four stages, because sending payslips to hundreds of people is irreversible
+   and slow enough that silence would be alarming: work out what will happen,
+   show it, send in batches with visible progress, then report per person. */
+function modalBulkPayslip(m){
+  if(m.stage === 'loading'){
+    return modalShell({
+      cls:'narrow', title:'Email payslips',
+      body:'<div class="empty">Working out who these will go to…</div>'
+    });
+  }
+
+  const pv = m.preview;
+  const n = pv.counts.sendable;
+
+  if(m.stage === 'sending' || m.stage === 'done'){
+    const p = m.progress;
+    const done = m.stage === 'done';
+    const pctDone = p.total ? Math.round((p.attempted / p.total) * 100) : 100;
+    return modalShell({
+      cls:'narrow',
+      title: done ? 'Payslips sent' : 'Sending payslips…',
+      sub: pv.label,
+      noClose: !done,
+      body:
+        '<div class="rec" style="margin:0 0 12px">' +
+          '<div class="rr"><span class="rlbl">Sent</span><span class="rval" ' +
+            'style="color:var(--grn)">' + p.sent + '</span></div>' +
+          (p.failed ? '<div class="rr var"><span class="rlbl">Failed</span>' +
+            '<span class="rval var">' + p.failed + '</span></div>' : '') +
+          '<div class="rr"><span class="rlbl">Remaining</span><span class="rval">' +
+            Math.max(0, p.total - p.attempted) + '</span></div>' +
+        '</div>' +
+        '<div class="buc-bar" style="height:8px"><div class="buc-fill" style="height:8px;width:' +
+          pctDone + '%;background:var(--grn)"></div></div>' +
+        (done ? '' : '<p style="margin-top:10px;color:var(--t2)">Leave this open. Sending in ' +
+          'batches of ' + pv.batchSize + ' so nothing times out — anyone already sent stays ' +
+          'sent even if this stops.</p>') +
+        (m.error ? '<div class="alert err" style="margin-top:12px"><div><strong>The batch stopped.' +
+          '</strong><br>' + esc(m.error) + '<br><br>Nobody has been sent twice — every send is ' +
+          'logged, so starting again picks up only those still outstanding.</div></div>' : '') +
+        (m.failures.length
+          ? '<div class="note red" style="margin-top:12px"><strong>These did not go out:</strong>' +
+            '<ul style="margin:6px 0 0 18px">' + m.failures.slice(0, 12).map(function(f){
+              return '<li>' + esc(f.name || f.emp_no) + ' — ' + esc(f.error) + '</li>';
+            }).join('') + '</ul>' +
+            (m.failures.length > 12 ? '<div style="margin-top:6px">…and ' +
+              (m.failures.length - 12) + ' more. The full list is on the PayslipSends tab.</div>' : '') +
+            '</div>'
+          : '') +
+        (done && !m.failures.length && !m.error
+          ? '<div class="note green" style="margin-top:12px">All ' + p.sent + ' went out. ' +
+            'Each one is recorded, so sending again will not post a duplicate.</div>'
+          : ''),
+      footer: done
+        ? '<button class="btn btn-f" data-act="close-modal">Done</button>'
+        : '<span class="left">Do not close this window</span>'
+    });
+  }
+
+  /* ── the preview ── */
+  const needsConfirm = n > 50;
+  const list = function(title, rows, tone, extra){
+    if(!rows.length) return '';
+    return '<div class="note ' + tone + '" style="margin-bottom:10px"><strong>' + esc(title) +
+      '</strong>' + (extra ? ' ' + extra : '') +
+      '<ul style="margin:6px 0 0 18px;max-height:130px;overflow:auto">' +
+      rows.slice(0, 40).map(function(r){
+        return '<li>' + esc(r.name || r.emp_no) + ' (' + esc(r.emp_no) + ')' +
+          (r.sentAt ? ' — sent ' + esc(shortDate(r.sentAt)) : '') + '</li>';
+      }).join('') +
+      (rows.length > 40 ? '<li>…and ' + (rows.length - 40) + ' more</li>' : '') +
+      '</ul></div>';
+  };
+
+  return modalShell({
+    cls:'narrow',
+    title:'Email payslips — ' + pv.label,
+    sub: n ? n + ' will be sent' : 'Nothing to send',
+    body:
+      pv.warnings.map(function(w){
+        return '<div class="note amber" style="margin-bottom:10px">' + esc(w) + '</div>';
+      }).join('') +
+      (n
+        ? '<div class="note green" style="margin-bottom:10px"><strong>' + n + ' payslip' +
+          (n === 1 ? '' : 's') + ' will be emailed</strong> for ' + esc(pv.label) +
+          ', each to the address on that person’s staff record.</div>'
+        : '<div class="note grey" style="margin-bottom:10px">Nobody in this selection can be sent ' +
+          'a payslip right now. The reasons are below.</div>') +
+      list('No email address on file — these will be skipped', pv.noEmail, 'red',
+        'Add an address on the staff record to include them.') +
+      list('Already received a payslip for this period', pv.alreadySent, 'grey',
+        'Left out unless you tick the box below.') +
+      list('Being sent by someone else right now', pv.inFlight, 'amber',
+        'Wait for their batch to finish.') +
+      list('Not on this period’s register', pv.unknown, 'amber', '') +
+      (pv.counts.alreadySent
+        ? '<div class="fld" style="margin-bottom:10px"><label><input type="checkbox" id="bp-resend"' +
+          (m.resend ? ' checked' : '') + ' data-act="bulk-resend"> Send again to the ' +
+          pv.counts.alreadySent + ' who already have one</label>' +
+          '<span class="hint">Only for a corrected payslip — they will receive a second email.</span>' +
+          '</div>'
+        : '') +
+      (needsConfirm
+        ? '<div class="fld"><label><input type="checkbox" id="bp-confirm"> I have checked the ' +
+          'figures — send ' + n + ' payslips</label></div>'
+        : ''),
+    footer:
+      (n ? busyBtn('Send ' + n + ' payslip' + (n === 1 ? '' : 's'), 'bulk-payslip-send') : '') +
+      '<button class="btn btn-ghost" data-act="close-modal">' + (n ? 'Cancel' : 'Close') + '</button>'
+  });
+}
+
+async function openBulkPayslip(resend){
+  STATE.modal = {kind:'bulkPayslip', stage:'loading', resend:!!resend,
+    batchId:'', progress:null, failures:[], error:null};
+  render();
+  try{
+    const pv = await rpc('previewPayslipBatch',
+      {period:STATE.period, emp_nos:selectedEmpNos(), resend:!!resend});
+    if(!STATE.modal || STATE.modal.kind !== 'bulkPayslip') return;
+    STATE.modal.preview = pv;
+    STATE.modal.stage = 'preview';
+  }catch(err){
+    STATE.modal = null;
+    toast(String(err.message || err), true);
+  }
+  render();
+}
+
+/* Loops the server's batch endpoint until nothing is left. Each call is a
+   write and is never retried automatically — a lost reply is reported, and
+   because every send is logged, starting again resumes rather than repeats. */
+async function runBulkPayslipSend(){
+  const m = STATE.modal;
+  const empNos = m.preview.sendable.map(function(s){ return s.emp_no; });
+  m.batchId = 'BPS-' + STATE.period.replace('-', '') + '-' +
+    Math.random().toString(36).slice(2, 8).toUpperCase();
+  m.stage = 'sending';
+  m.progress = {sent:0, failed:0, attempted:0, total:empNos.length};
+  m.failures = [];
+  m.error = null;
+  render();
+
+  let guard = 0;
+  try{
+    while(guard++ < 400){
+      const res = await rpc('sendPayslipBatch', {
+        period: STATE.period, emp_nos: empNos, batchId: m.batchId, resend: m.resend
+      });
+      m.progress.sent += res.sent;
+      m.progress.attempted += res.attempted;
+      m.progress.failed += res.failed.length;
+      res.failed.forEach(function(f){ m.failures.push(f); });
+      if(res.revision) STATE.revision = res.revision;
+      render();
+      if(res.remaining === 0) break;
+      /* Nothing moved — everything left is claimed by another batch, or the
+         quota has run out. Stop rather than spin. */
+      if(res.attempted === 0){
+        m.error = 'Stopped with ' + res.remaining + ' still to send. They are either part of ' +
+          'another batch running right now, or the daily email quota has run out. Nothing has ' +
+          'been sent twice — try again later and it will pick up where it left off.';
+        break;
+      }
+    }
+  }catch(err){
+    m.error = String(err.message || err);
+  }
+  m.stage = 'done';
+  render();
+  /* Refresh so the register shows who now has a payslip. */
+  await loadPeriod(STATE.period, true);
+}
+
+/* Renumbering is separated from the ordinary edit on purpose. It touches eight
+   tabs, and a field that quietly rewrote a person's history when you tabbed
+   past it would be the wrong shape of control entirely. */
+function modalRenumber(m){
+  const e = staffIndex()[m.emp_no] || {};
+  const counts = {
+    movements: STATE.movements.filter(function(x){ return x.emp_no === m.emp_no; }).length,
+    schemes: STATE.schemes.filter(function(x){ return x.emp_no === m.emp_no; }).length,
+    proration: STATE.proration.filter(function(x){ return x.emp_no === m.emp_no; }).length
+  };
+  const attached = [];
+  if(counts.movements) attached.push(counts.movements + ' movement' + (counts.movements === 1 ? '' : 's'));
+  if(counts.schemes) attached.push(counts.schemes + ' deduction scheme' + (counts.schemes === 1 ? '' : 's'));
+  if(counts.proration) attached.push(counts.proration + ' proration entr' + (counts.proration === 1 ? 'y' : 'ies'));
+  if(e.payslipSentAt) attached.push('a sent payslip');
+
+  return modalShell({
+    cls:'narrow',
+    title:'Change employee number',
+    sub:e.name,
+    body:
+      '<div class="rec" style="margin:0 0 12px">' +
+        '<div class="rr"><span class="rlbl">Current number</span>' +
+          '<span class="rval">' + esc(m.emp_no) + '</span></div>' +
+      '</div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>New employee number *</label>' +
+        '<input type="text" id="rn-new" placeholder="e.g. TD1234" maxlength="40">' +
+        '<span class="hint">Must not already be in use on this period\u2019s register.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Reason *</label>' +
+        '<input type="text" id="rn-reason" placeholder="e.g. entered with the wrong prefix">' +
+        '<span class="hint">Recorded in the audit trail against your name.</span></div>' +
+      (attached.length
+        ? '<div class="note amber">The new number will be applied to <strong>' +
+          esc(attached.join(', ')) + '</strong> as well as the staff record, so nothing is left ' +
+          'pointing at the old one.</div>'
+        : '<div class="note grey">This person has no movements, schemes or proration yet, so only ' +
+          'their staff record changes.</div>') +
+      (!periodIsOpen()
+        ? '<div class="note red">' + esc(periodLabel(STATE.period)) + ' is closed. Its journal has ' +
+          'been posted to the ledger under the current number, so this cannot be changed until an ' +
+          'Administrator reopens the period.</div>'
+        : ''),
+    footer: busyBtn('Change number', 'renumber-save') +
+      '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
+  });
+}
+
 /* ---------------- User / period / controls / confirm ---------------- */
 function modalUser(m){
   const u = m.userId ? STATE.directory.filter(function(x){ return x.userId === m.userId; })[0] : null;
@@ -2941,9 +3255,17 @@ function modalPeriod(){
     cls:'narrow',
     title:'Create a payroll period',
     body:
-      '<div class="fld" style="margin-bottom:10px"><label>Period *</label>' +
-        '<input type="text" id="pd-period" value="' + attr(next) + '" placeholder="2026-08">' +
-        '<span class="hint">Year and month, like 2026-08.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Period code *</label>' +
+        '<input type="text" id="pd-period" value="' + attr(next) + '" placeholder="2026-08" ' +
+        'data-act="period-code">' +
+        '<span class="hint">Year and month, like 2026-08. Fixed once created — every staff record ' +
+        'and journal line for the month is filed under it.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Name</label>' +
+        '<input type="text" id="pd-label" maxlength="60" placeholder="' +
+        attr(next ? periodLabel(next) : 'August 2026') + '">' +
+        '<span class="hint">What everyone sees on screen and on payslips. Leave it blank for ' +
+        '“' + esc(next ? periodLabel(next) : 'August 2026') + '”, or type your own — ' +
+        '“August 2026 — mid-month run”, say. Changeable later either way.</span></div>' +
       '<div class="fld" style="margin-bottom:10px"><label>Working days</label>' +
         '<input type="number" id="pd-wdays" min="1" max="31" value="' +
         attr((STATE.settings && STATE.settings.defaultWorkingDays) || 23) + '"></div>' +
@@ -2962,30 +3284,52 @@ function nextPeriodOf(p){
   return y + '-' + String(m).padStart(2, '0');
 }
 
-function modalControls(){
-  const p = STATE.periodRow || {};
-  const r = STATE.reconciliation;
+function modalControls(m){
+  /* Openable for any period, not only the one being worked on — a name usually
+     needs correcting from the period list rather than from Reconciliation. */
+  const target = (m && m.period) || STATE.period;
+  const p = STATE.periods.filter(function(x){ return x.period === target; })[0] ||
+    STATE.periodRow || {};
+  const isCurrent = target === STATE.period;
+  const r = isCurrent ? STATE.reconciliation : null;
   return modalShell({
     cls:'narrow',
-    title:'Control totals — ' + (p.label || ''),
-    sub:'What Reconciliation measures the computed figures against',
+    title:'Period details — ' + (p.label || target),
+    sub:'What this month is called, how long it is, and what it reconciles to',
     body:
-      '<div class="note grey">Enter the figures from the payroll file you are reconciling to. Leave ' +
-        'them blank and Reconciliation will say no control total is recorded, rather than showing a ' +
-        'variance against zero.</div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Name</label>' +
+        '<input type="text" id="ct-label" maxlength="60" value="' + attr(p.label || '') + '" ' +
+        'placeholder="' + attr(periodLabel(target)) + '">' +
+        '<span class="hint">What everyone sees on screen and on payslips. Safe to change at ' +
+        'any time, including after the month is closed.</span></div>' +
+      /* The code is the natural key on every staff row, movement, proration
+         entry and posted journal line for this month. Changing it would leave
+         all of them pointing at a month that no longer exists, so it is shown
+         and locked rather than quietly editable. */
+      '<div class="fld" style="margin-bottom:10px"><label>Period code</label>' +
+        '<input type="text" value="' + attr(target) + '" readonly ' +
+        'style="background:var(--lt);color:var(--t2)">' +
+        '<span class="hint">Fixed. Every staff record, movement and journal line for this month ' +
+        'is filed under this code — renaming it would orphan them. Change the name above ' +
+        'instead.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Working days</label>' +
+        '<input type="number" id="ct-wdays" min="1" max="31" value="' + attr(p.workingDays) + '">' +
+        '<span class="hint">Used by proration.</span></div>' +
+      '<div class="note grey">Control totals are what Reconciliation measures the computed figures ' +
+        'against. Leave them blank and it will say none is recorded, rather than showing a variance ' +
+        'against zero.</div>' +
       '<div class="fld" style="margin-bottom:10px"><label>Control net payroll (' + NAIRA + ')</label>' +
         '<input type="number" id="ct-pay" step="0.01" value="' +
         attr(p.controlPay === null || p.controlPay === '' ? '' : p.controlPay) + '">' +
         (r ? '<span class="hint">Computed right now: ' + esc(money(r.payroll.computed)) + '</span>' : '') +
       '</div>' +
-      '<div class="fld" style="margin-bottom:10px"><label>Control net security (' + NAIRA + ')</label>' +
+      '<div class="fld"><label>Control net security (' + NAIRA + ')</label>' +
         '<input type="number" id="ct-sec" step="0.01" value="' +
         attr(p.controlSec === null || p.controlSec === '' ? '' : p.controlSec) + '">' +
         (r ? '<span class="hint">Computed right now: ' + esc(money(r.security.computed)) + '</span>' : '') +
-      '</div>' +
-      '<div class="fld"><label>Working days</label>' +
-        '<input type="number" id="ct-wdays" min="1" max="31" value="' + attr(p.workingDays) + '"></div>',
-    footer: busyBtn('Save', 'save-controls') +
+      '</div>',
+    footer: '<span class="left">' + esc(target) + '</span>' +
+      busyBtn('Save', 'save-controls') +
       '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
   });
 }
@@ -3352,6 +3696,26 @@ function closeModal(){
 /* One delegated listener for the whole application. Every button carries
    data-act, so nothing depends on a handler surviving a re-render. */
 document.addEventListener('click', function(ev){
+  /* Selection checkboxes are handled here rather than on 'change', so the
+     click never bubbles into a row action and the state lands before the
+     re-render reads it back. */
+  const pick = ev.target.getAttribute && ev.target.getAttribute('data-pick');
+  if(pick !== null && pick !== undefined){
+    if(ev.target.checked) STATE.sel[pick] = true; else delete STATE.sel[pick];
+    render();
+    return;
+  }
+  const pickPage = ev.target.getAttribute && ev.target.getAttribute('data-pick-page');
+  if(pickPage){
+    const f = STATE.reg[pickPage];
+    const page = paginate(filteredStaff(pickPage), f).rows;
+    const turningOn = ev.target.checked;
+    page.forEach(function(e){
+      if(turningOn) STATE.sel[e.emp_no] = true; else delete STATE.sel[e.emp_no];
+    });
+    render();
+    return;
+  }
   const nav = ev.target.closest('[data-nav]');
   if(nav){
     STATE.view = nav.getAttribute('data-nav');
@@ -3389,7 +3753,11 @@ document.addEventListener('click', function(ev){
 /* Enter submits the sign-in steps — a code screen you have to reach for the
    mouse on is a code screen people mistype. */
 document.addEventListener('keydown', function(ev){
-  if(ev.key === 'Escape' && STATE.modal && !STATE.modalBusy){ closeModal(); return; }
+  if(ev.key === 'Escape' && STATE.modal && !STATE.modalBusy){
+    if(STATE.modal.kind === 'bulkPayslip' && STATE.modal.stage === 'sending') return;
+    closeModal();
+    return;
+  }
   if(ev.key !== 'Enter') return;
   if(!STATE.session){
     if(STATE.login.step === 'email') handleAction('request-otp');
@@ -3438,6 +3806,11 @@ document.addEventListener('change', function(ev){
       scope.page = 1;
       render();
     }
+    return;
+  }
+  if(act === 'period-code'){
+    /* Re-render so the Name placeholder follows the code being typed. */
+    render();
     return;
   }
   if(act === 'movement-emp'){
@@ -3532,8 +3905,15 @@ async function handleAction(act, arg, ev, el){
       /* ---- chrome ---- */
       case 'open-periods': STATE.modal = {kind:'periods'}; return render();
       case 'open-account': STATE.modal = {kind:'account'}; return render();
-      case 'close-modal': return closeModal();
+      case 'close-modal':
+        if(STATE.modal && STATE.modal.kind === 'bulkPayslip' && STATE.modal.stage === 'sending'){
+          return;
+        }
+        return closeModal();
       case 'modal-backdrop':
+        if(STATE.modal && STATE.modal.kind === 'bulkPayslip' && STATE.modal.stage === 'sending'){
+          return;
+        }
         if(ev.target.classList.contains('ov') && !STATE.modalBusy) closeModal();
         return;
       case 'print': window.print(); return;
@@ -3567,6 +3947,29 @@ async function handleAction(act, arg, ev, el){
         return;
 
       /* ---- exports ---- */
+      case 'select-filtered': {
+        filteredStaff(arg).forEach(function(e){ STATE.sel[e.emp_no] = true; });
+        toast(selCount() + ' selected.');
+        return render();
+      }
+      case 'clear-selection':
+        STATE.sel = {};
+        return render();
+      case 'bulk-payslip':
+        if(!selCount()){ toast('Select some staff first.', true); return; }
+        return openBulkPayslip(false);
+      case 'bulk-resend':
+        /* Re-running the preview is what recalculates who is eligible. */
+        return openBulkPayslip(!STATE.modal.resend);
+      case 'bulk-payslip-send': {
+        const need = STATE.modal.preview.counts.sendable > 50;
+        if(need && !checked('bp-confirm')){
+          STATE.modalError = 'Tick the box to confirm you have checked the figures. ' +
+            'These emails cannot be recalled.';
+          return render();
+        }
+        return runBulkPayslipSend();
+      }
       case 'export-register': return exportRegister(arg);
       case 'export-changes': return exportChanges();
       case 'export-journal': return exportJournal();
@@ -3625,6 +4028,7 @@ async function handleAction(act, arg, ev, el){
         }
         if(movement.emp_no === '__new__'){
           movement.newHire = {
+            emp_no: val('mv-nh-empno'),
             name: val('mv-nh-name'), grade: val('mv-nh-grade'),
             staff_type: val('mv-nh-type'), bus_unit: val('mv-nh-bu'), email: val('mv-nh-email')
           };
@@ -3672,6 +4076,25 @@ async function handleAction(act, arg, ev, el){
             {period:STATE.period, mode: existing ? 'edit' : 'create', staff:staff}, {inModal:true});
           closeModal();
           toast('Staff record saved.');
+          await loadPeriod(STATE.period, true);
+        }catch(e){ render(); }
+        return;
+      }
+      case 'renumber':
+        STATE.modal = {kind:'renumber', emp_no:arg};
+        return render();
+      case 'renumber-save': {
+        const from = STATE.modal.emp_no;
+        try{
+          const res = await mutate('Changing the employee number', 'changeEmployeeNumber', {
+            emp_no: from, newEmpNo: val('rn-new'), reason: val('rn-reason')
+          }, {inModal:true});
+          closeModal();
+          /* A stale selection would still hold the old number. */
+          if(STATE.sel[from]){ delete STATE.sel[from]; STATE.sel[res.to] = true; }
+          const tabs = Object.keys(res.moved).length;
+          toast(res.name + ' is now ' + res.to + ' — updated across ' + tabs +
+            ' record type' + (tabs === 1 ? '' : 's') + '.');
           await loadPeriod(STATE.period, true);
         }catch(e){ render(); }
         return;
@@ -3838,25 +4261,31 @@ async function handleAction(act, arg, ev, el){
       case 'save-period': {
         try{
           const res = await mutate('Creating the period', 'createPeriod', {
-            period: val('pd-period'), workingDays: numVal('pd-wdays'),
-            rollForward: checked('pd-roll')
+            period: val('pd-period'), label: val('pd-label'),
+            workingDays: numVal('pd-wdays'), rollForward: checked('pd-roll')
           }, {inModal:true});
           closeModal();
-          toast(res.rolledForward + ' staff rolled forward, ' + res.schemesAdvanced +
-            ' scheme instalment(s) applied.');
+          toast(res.label + ' created — ' + res.rolledForward + ' staff rolled forward, ' +
+            res.schemesAdvanced + ' scheme instalment(s) applied.');
           await loadPeriod(res.period);
         }catch(e){ render(); }
         return;
       }
-      case 'edit-controls': STATE.modal = {kind:'controls'}; return render();
+      case 'edit-controls':
+        STATE.modal = {kind:'controls', period: arg || STATE.period};
+        return render();
       case 'save-controls': {
+        const target = STATE.modal.period || STATE.period;
         try{
-          await mutate('Saving the control totals', 'savePeriodControls', {
-            period: STATE.period, controlPay: numVal('ct-pay'), controlSec: numVal('ct-sec'),
+          const res = await mutate('Saving the period', 'savePeriodControls', {
+            period: target, label: val('ct-label'),
+            controlPay: numVal('ct-pay'), controlSec: numVal('ct-sec'),
             workingDays: numVal('ct-wdays')
           }, {inModal:true});
           closeModal();
-          toast('Control totals saved.');
+          toast(res.periodRow && res.periodRow.label
+            ? 'Saved — this month is now called “' + res.periodRow.label + '”.'
+            : 'Period saved.');
           await loadPeriod(STATE.period, true);
         }catch(e){ render(); }
         return;
@@ -3984,6 +4413,7 @@ function signOut(){
 }
 
 function absorb(data){
+  const previousPeriod = STATE.period;
   STATE.period = data.period || STATE.period;
   if(data.periods) STATE.periods = data.periods;
   if(data.periodRow) STATE.periodRow = data.periodRow;
@@ -4000,6 +4430,7 @@ function absorb(data){
   if(data.settings) STATE.settings = data.settings;
   if(data.session) STATE.session = data.session;
   if(data.revision) STATE.revision = data.revision;
+  if(data.period && data.period !== previousPeriod) STATE.sel = {};
   STATE.staleRevision = null;
   /* Server-paged views must refetch — their cached page is now stale. */
   STATE.jnl.key = '';
@@ -4103,6 +4534,16 @@ function startPolling(){
     }catch(err){ /* a transient poll failure is not worth interrupting anyone for */ }
   }, 45000);
 }
+
+/* A bulk send is the one thing here that cannot be undone by reloading, so
+   closing the tab mid-batch gets the browser's own confirmation. */
+window.addEventListener('beforeunload', function(ev){
+  if(STATE.modal && STATE.modal.kind === 'bulkPayslip' && STATE.modal.stage === 'sending'){
+    ev.preventDefault();
+    ev.returnValue = '';
+    return '';
+  }
+});
 
 /* ============================================================
    START
