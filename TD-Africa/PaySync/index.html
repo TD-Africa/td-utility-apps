@@ -2144,7 +2144,9 @@ function viewSchemes(){
           '<td class="muted">' + esc(s.account || '—') + '</td>' +
           '<td class="c"><span class="bdg ' + state[0] + '">' + state[1] + '</span></td>' +
           '<td class="c">' + (!s.reversedAt && canEditNow('editScheme')
-            ? '<button class="btn btn-sm btn-r" data-act="cancel-scheme:' + attr(s.id) + '">Cancel</button>'
+            ? '<button class="btn btn-sm btn-ghost" data-act="edit-scheme:' + attr(s.id) +
+                '">Edit</button> ' +
+              '<button class="btn btn-sm btn-r" data-act="cancel-scheme:' + attr(s.id) + '">Cancel</button>'
             : '') + '</td></tr>';
       }).join('') +
       '</tbody></table></div><div class="tf">' + pagerHtml('sch', p, 'schemes') + '</div></div>');
@@ -2646,7 +2648,7 @@ function renderOverlay(){
     scheme: modalScheme, proration: modalProration, structure: modalStructure,
     user: modalUser, period: modalPeriod, controls: modalControls,
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
-    bulkPayslip: modalBulkPayslip, renumber: modalRenumber,
+    bulkPayslip: modalBulkPayslip, renumber: modalRenumber, schemeEdit: modalSchemeEdit,
     fieldChange: modalFieldChange,
     diagnostics: modalDiagnostics
   }[m.kind];
@@ -3014,6 +3016,68 @@ function modalScheme(){
       '<div class="note grey">The first instalment is taken straight away when the scheme starts in ' +
         'the period you are working in. Each later period takes one more when it is created.</div>',
     footer: busyBtn('Save scheme', 'save-scheme') +
+      '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
+  });
+}
+
+/* Amending a running scheme. Not a plain edit form: instalments have already
+   been taken, so the dialog shows what has been collected and states plainly
+   what changing the monthly figure will do to this period. */
+function modalSchemeEdit(m){
+  const s = STATE.schemes.filter(function(x){ return x.id === m.id; })[0];
+  if(!s) return modalShell({title:'Edit scheme', body:'<div class="empty">Scheme not found.</div>'});
+  const emp = staffIndex()[s.emp_no] || {name:s.emp_no};
+  const takenThisPeriod = STATE.schemeLedger
+    .filter(function(l){ return l.schemeId === s.id && !l.reversedAt; })
+    .reduce(function(a, l){ return a + Number(l.amount || 0); }, 0);
+  const paid = Number(s.totalAmount || 0) - Number(s.balance || 0);
+
+  return modalShell({
+    cls:'narrow',
+    title:'Edit scheme — ' + emp.name,
+    sub:s.type + ' · started ' + s.startPeriod + ' · ' + s.paymentsCount + ' of ' + s.months +
+      ' instalment(s) taken',
+    body:
+      '<div class="rec" style="margin:0 0 12px">' +
+        '<div class="rr"><span class="rlbl">Collected so far</span>' +
+          '<span class="rval">' + esc(money(paid)) + '</span></div>' +
+        '<div class="rr"><span class="rlbl">Outstanding</span>' +
+          '<span class="rval">' + esc(money(s.balance)) + '</span></div>' +
+        (takenThisPeriod
+          ? '<div class="rr calc"><span class="rlbl">Taken in ' + esc(periodLabel(STATE.period)) +
+            '</span><span class="rval calc">' + esc(money(takenThisPeriod)) + '</span></div>'
+          : '') +
+      '</div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Scheme type</label>' +
+        '<input type="text" value="' + attr(s.type) + '" readonly ' +
+        'style="background:var(--lt);color:var(--t2)">' +
+        '<span class="hint">Fixed. It decides which deduction column the money sits in, and ' +
+        s.paymentsCount + ' instalment(s) are already in “' + esc(s.field) + '”. To change it, ' +
+        'cancel this scheme and create a new one.</span></div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Description</label>' +
+        '<input type="text" id="se-desc" maxlength="300" value="' + attr(s.description || '') + '">' +
+      '</div>' +
+      '<div class="form-row">' +
+        '<div class="fld"><label>Total amount (' + NAIRA + ') *</label>' +
+          '<input type="number" id="se-total" step="0.01" min="0" value="' +
+          attr(s.totalAmount) + '">' +
+          '<span class="hint">Cannot be less than what has already been collected.</span></div>' +
+        '<div class="fld"><label>Monthly deduction (' + NAIRA + ') *</label>' +
+          '<input type="number" id="se-monthly" step="0.01" min="0" value="' +
+          attr(s.monthlyDeduction) + '">' +
+          (takenThisPeriod
+            ? '<span class="hint">Changing this also corrects the ' +
+              esc(money(takenThisPeriod)) + ' taken in ' + esc(periodLabel(STATE.period)) +
+              '. Instalments in closed periods stay as posted.</span>'
+            : '<span class="hint">Applies from the next period on.</span>') +
+        '</div>' +
+      '</div>' +
+      '<div class="fld" style="margin-bottom:10px"><label>Loan account (DR)</label>' +
+        '<input type="text" id="se-acct" maxlength="40" value="' + attr(s.account || '') + '"></div>' +
+      '<div class="fld"><label>Reason *</label>' +
+        '<input type="text" id="se-reason" placeholder="e.g. monthly figure was entered wrong">' +
+        '<span class="hint">Recorded in the audit trail against your name.</span></div>',
+    footer: busyBtn('Save changes', 'scheme-edit-save') +
       '<button class="btn btn-ghost" data-act="close-modal">Cancel</button>'
   });
 }
@@ -4323,6 +4387,28 @@ async function handleAction(act, arg, ev, el){
           toast(res.firstInstalmentApplied
             ? 'Scheme saved and the first instalment taken.'
             : 'Scheme saved. It starts in ' + periodLabel(res.scheme.startPeriod) + '.');
+          await loadPeriod(STATE.period, true);
+        }catch(e){ render(); }
+        return;
+      }
+      case 'edit-scheme':
+        STATE.modal = {kind:'schemeEdit', id:arg};
+        return render();
+      case 'scheme-edit-save': {
+        try{
+          const res = await mutate('Saving the scheme', 'updateScheme', {
+            period: STATE.period, id: STATE.modal.id,
+            description: val('se-desc'), account: val('se-acct'),
+            totalAmount: numVal('se-total'), monthlyDeduction: numVal('se-monthly'),
+            reason: val('se-reason')
+          }, {inModal:true});
+          closeModal();
+          toast(res.changed.length
+            ? 'Scheme updated' + (res.adjustedThisPeriod
+                ? ' — this period adjusted by ' + (res.adjustedThisPeriod > 0 ? '+' : '−') +
+                  money(Math.abs(res.adjustedThisPeriod))
+                : '') + '.'
+            : 'Nothing changed.');
           await loadPeriod(STATE.period, true);
         }catch(e){ render(); }
         return;
