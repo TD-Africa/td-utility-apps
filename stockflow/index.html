@@ -666,7 +666,8 @@ const STATE = {
     simulator:    {page: 1, search: '', category: '', sortBy: 'item', sortDir: 'asc'}
   },
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
-         ignored: null, fileName: null, delimiter: null, lastBatchId: null}
+         ignored: null, fileName: null, delimiter: null, lastBatchId: null,
+         rawText: null, dateOrder: null, dateInfo: null}
 };
 
 const PAGE_SIZE = 25;
@@ -898,6 +899,100 @@ function csvToObjects(text){
     });
   return {headers: fields, rows: out, error: null, delimiter: delimiter,
     ignoredColumns: unknown.length ? unknown : null};
+}
+
+/* ============================================================
+   DATES AS A SPREADSHEET WRITES THEM
+   ------------------------------------------------------------
+   Excel rewrites a date column the moment the file is opened, so
+   "2026-08-25" comes back as "25/08/2026" and there is nothing
+   the person typing can do about it after the fact. Refusing the
+   file and telling them to reformat the column was correct and
+   useless: it happens on every file, to everyone.
+
+   So the import reads them — but never by guessing. The order is
+   settled from the FILE, not from a single date:
+
+     · any date with a first part above 12  → day/month, certain
+     · any date with a second part above 12 → month/day, certain
+     · both                                  → the file contradicts
+                                                itself; refused
+     · neither                               → genuinely ambiguous,
+                                                so the configured
+                                                default is used and
+                                                the preview says so
+
+   Whatever is decided, the preview states it in words before
+   anything is imported, and it can be flipped. The SERVER never
+   relaxes: only YYYY-MM-DD ever reaches the ledger, so a stored
+   date is never open to interpretation. */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const LOCAL_DATE_RE = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/;
+
+function inspectDates(rows){
+  let count = 0, firstOver12 = false, secondOver12 = false, sample = null;
+  rows.forEach(function(r){
+    const v = String((r && r.date) || '').trim();
+    if(!v || ISO_DATE_RE.test(v)) return;
+    const m = v.match(LOCAL_DATE_RE);
+    if(!m) return;
+    count++;
+    if(!sample) sample = v;
+    if(Number(m[1]) > 12) firstOver12 = true;
+    if(Number(m[2]) > 12) secondOver12 = true;
+  });
+  return {count: count, sample: sample, firstOver12: firstOver12, secondOver12: secondOver12};
+}
+
+function localDateToIso(value, order){
+  const m = String(value || '').trim().match(LOCAL_DATE_RE);
+  if(!m) return value;
+  const a = Number(m[1]), b = Number(m[2]);
+  const day = order === 'MDY' ? b : a;
+  const month = order === 'MDY' ? a : b;
+  let year = m[3];
+  /* Two-digit years: 00-69 is this century, 70-99 the last. The usual
+     convention, and a stock ledger will never legitimately carry 1970. */
+  if(year.length === 2) year = (Number(year) <= 69 ? '20' : '19') + year;
+  /* Deliberately not validated here — 31/02 becomes 2026-02-31 and the
+     server refuses it as an impossible date, which is the right place
+     for that to happen and the right message to get. */
+  return year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
+
+/* Returns the rows with every local-format date rewritten as ISO, plus
+   what was decided and on what basis, so the preview can say it. */
+function normaliseCsvDates(rows, preferred){
+  const found = inspectDates(rows);
+  const info = {
+    count: found.count,
+    sample: found.sample,
+    order: preferred === 'MDY' ? 'MDY' : 'DMY',
+    basis: 'none',
+    conflict: false,
+    example: null
+  };
+  if(!found.count) return {rows: rows, info: info};
+
+  if(found.firstOver12 && found.secondOver12){
+    info.conflict = true;
+    return {rows: rows, info: info};
+  }
+  if(found.firstOver12){ info.order = 'DMY'; info.basis = 'evidence'; }
+  else if(found.secondOver12){ info.order = 'MDY'; info.basis = 'evidence'; }
+  else { info.basis = 'preference'; }
+
+  const out = rows.map(function(r){
+    const v = String((r && r.date) || '').trim();
+    if(!v || ISO_DATE_RE.test(v) || !LOCAL_DATE_RE.test(v)) return r;
+    return Object.assign({}, r, {date: localDateToIso(v, info.order)});
+  });
+  if(info.sample) info.example = localDateToIso(info.sample, info.order);
+  return {rows: out, info: info};
+}
+
+function dateOrderLabel(order){
+  return order === 'MDY' ? 'month/day/year' : 'day/month/year';
 }
 
 function toCsv(rows){
@@ -1677,7 +1772,7 @@ function viewBulkPanel(){
     preview = '<div class="banner bad"><div>⚠</div><div>' + esc(b.error).replace(/\n/g, '<br>') + '</div></div>';
   }else if(b.preview){
     const p = b.preview;
-    preview = (b.ignored && b.ignored.length
+    preview = dateNotice(b) + (b.ignored && b.ignored.length
       ? '<div class="banner"><div>i</div><div>' +
         esc(b.ignored.length === 1 ? 'One column was ignored' : b.ignored.length + ' columns were ignored') +
         ': <b>' + esc(b.ignored.join(', ')) + '</b>. Stockflow reads date, item, type, qty, fob, ' +
@@ -1794,6 +1889,27 @@ function viewImports(){
     '</tbody></table></div>' +
     pagerServer('imports', d) +
   '</div>';
+}
+
+/* Says, in words, how the dates in this file were read — and offers the
+   other reading. Nothing is silently interpreted: the person clicking
+   Import has been told what the dates mean. */
+function dateNotice(b){
+  const d = b.dateInfo;
+  if(!d || !d.count) return '';
+  const other = d.order === 'DMY' ? 'MDY' : 'DMY';
+  const certain = d.basis === 'evidence';
+  return '<div class="banner ' + (certain ? 'info' : '') + '">' +
+    '<div>' + (certain ? 'i' : '?') + '</div><div>' +
+      '<b>' + d.count + ' date' + (d.count === 1 ? '' : 's') + ' came in as ' +
+      esc(d.sample) + '</b> — read as <b>' + esc(dateOrderLabel(d.order)) + '</b>, so ' +
+      esc(d.sample) + ' means <b>' + esc(d.example) + '</b>.' +
+      (certain
+        ? ' The file settles it: at least one date has a day above 12, so no other reading fits.'
+        : ' Every date in this file works either way, so the default was used.') +
+      ' <button class="link-btn" id="flip-date-order">Read them as ' +
+      esc(dateOrderLabel(other)) + ' instead</button>' +
+    '</div></div>';
 }
 
 function viewLedgerHistory(){
@@ -3145,10 +3261,16 @@ function bindLedger(){
     if(!text){ toast('Paste some CSV rows first', true); return; }
     checkBulk(text);
   });
+  on('#flip-date-order', 'click', function(){
+    const d = STATE.bulk.dateInfo;
+    STATE.bulk.dateOrder = (d && d.order === 'DMY') ? 'MDY' : 'DMY';
+    if(STATE.bulk.rawText) checkBulk(STATE.bulk.rawText);
+  });
   on('#bulk-skip', 'change', function(e){ STATE.bulk.skipInvalid = e.target.checked; });
   on('#bulk-cancel', 'click', function(){
     STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
-      ignored: null, fileName: null, delimiter: null, lastBatchId: null};
+      ignored: null, fileName: null, delimiter: null, lastBatchId: null,
+      rawText: null, dateOrder: null, dateInfo: null};
     const paste = document.getElementById('bulk-paste');
     if(paste) paste.value = '';
     render();
@@ -3166,8 +3288,12 @@ function bindLedger(){
 
 async function checkBulk(text, fileName){
   STATE.bulk.error = null; STATE.bulk.preview = null; STATE.bulk.ignored = null;
-  STATE.bulk.fileName = fileName || null;
+  if(fileName !== undefined) STATE.bulk.fileName = fileName || null;
+  /* Kept so the file can be re-read under the other date order without
+     asking the person to paste it again. */
+  STATE.bulk.rawText = text;
   STATE.bulk.delimiter = null;
+  STATE.bulk.dateInfo = null;
   STATE.bulk.busy = true; render();
   const parsed = csvToObjects(text);
   STATE.bulk.delimiter = parsed.delimiter;
@@ -3185,7 +3311,21 @@ async function checkBulk(text, fileName){
     render();
     return;
   }
-  STATE.bulk.rows = parsed.rows;
+  /* Excel's date rewriting, undone before the rows go anywhere. */
+  const preferred = STATE.bulk.dateOrder ||
+    ((STATE.data && STATE.data.settings && STATE.data.settings.csvDateOrder) || 'DMY');
+  const dated = normaliseCsvDates(parsed.rows, preferred);
+  STATE.bulk.dateInfo = dated.info;
+  if(dated.info.conflict){
+    STATE.bulk.busy = false;
+    STATE.bulk.error = 'This file contradicts itself on dates: some read as day/month ' +
+      '(like 25/08/2026) and others as month/day (like 08/25/2026), so there is no one ' +
+      'reading that fits. Fix the dates in the file, or write them as YYYY-MM-DD.';
+    render();
+    return;
+  }
+
+  STATE.bulk.rows = dated.rows;
   STATE.bulk.ignored = parsed.ignoredColumns;
   try{
     const preview = await rpc('bulkPostTransactions', {rows: parsed.rows, dryRun: true, skipInvalid: true});
@@ -3214,7 +3354,9 @@ async function commitBulk(force){
       skipInvalid: skipEl ? skipEl.checked : STATE.bulk.skipInvalid,
       force: !!force || !!(STATE.bulk.preview && STATE.bulk.preview.duplicateBatch)
     });
-    STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null};
+    STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
+      ignored: null, fileName: null, delimiter: null, lastBatchId: null,
+      rawText: null, dateOrder: null, dateInfo: null};
     const paste = document.getElementById('bulk-paste');
     if(paste) paste.value = '';
     STATE.bulk.lastBatchId = res.batchId;
