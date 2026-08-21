@@ -346,6 +346,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
    never be asked to point the app at anything. */
 const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQuJsynAJ4RexjNaPymlL6E8GMgBA-kc5Jx6P_6yWVQb3zOm4uhohRB06AFo/exec';
 
+/* Bump this whenever this file changes. Shown on the Access & Roles
+   screen next to the server's own build, and in the connection check.
+
+   The reason it exists: a fix can be deployed to the script and the page
+   left stale — not re-uploaded, or re-uploaded and then served from the
+   browser's cache — and the symptom is simply that the fix does not
+   work. Without a visible build there is nothing to check, and the
+   obvious conclusion is that the fix is broken. */
+const STOCKFLOW_BUILD = '2026-08-21.3';
+
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
 
@@ -518,6 +528,7 @@ async function connectionCheck(){
     'When    : ' + new Date().toISOString(),
     'Page    : ' + (typeof location !== 'undefined' ? location.origin : '(unknown)'),
     'Backend : ' + (url || '(not set)'),
+    'Page build : ' + STOCKFLOW_BUILD,
     ''
   ];
   if(!url){
@@ -535,7 +546,8 @@ async function connectionCheck(){
       let shape;
       try{
         const parsed = JSON.parse(body);
-        shape = (parsed.result && parsed.result.app === 'stockflow') ? 'Stockflow JSON'
+        shape = (parsed.result && parsed.result.app === 'stockflow')
+          ? 'Stockflow JSON, script build ' + (parsed.result.build || 'not reported')
           : (parsed.error ? 'JSON error: ' + parsed.error : 'JSON, unrecognised');
       }catch(e){
         shape = /<html|<!doctype/i.test(body) ? 'an HTML page (usually a Google sign-in)' : 'not JSON';
@@ -1432,6 +1444,14 @@ function viewApp(){
       '<button class="btn secondary sm" id="refresh-now">Refresh</button></div>'
     : '';
 
+  /* Worth interrupting for: every symptom of a half-deploy looks like a
+     bug in the thing that was just fixed. */
+  const mismatch = buildsMatch() ? '' :
+    '<div class="stale-strip"><span>This page is build <b>' + esc(STOCKFLOW_BUILD) +
+    '</b> but the script is build <b>' + esc((STATE.data && STATE.data.build) || '?') +
+    '</b>. Re-upload stockflow.html, then hard-refresh — Ctrl+Shift+R, or Cmd+Shift+R on a Mac.' +
+    '</span></div>';
+
   return '<div class="app">' +
     '<div class="sidebar">' +
       '<div class="brand">' +
@@ -1466,7 +1486,7 @@ function viewApp(){
           '<button class="link-btn" id="sign-out">Sign out</button>' +
         '</div>' +
       '</div>' +
-      stale +
+      mismatch + stale +
       '<div class="content" id="content">' + renderTab() + '</div>' +
       '<div class="footer-note">Stockflow — TD Africa Group · ' +
         'the position is derived from the ledger and reconciled against it · ' +
@@ -2750,6 +2770,14 @@ function viewAudit(){
 /* ============================================================
    SCREEN: Access & Roles
    ============================================================ */
+/* Both halves should be on the same build. They will not be, briefly,
+   during a deploy — and permanently if someone forgets the second half. */
+function buildsMatch(){
+  const server = STATE.data && STATE.data.build;
+  if(!server) return true;   // an older script does not report one
+  return server === STOCKFLOW_BUILD;
+}
+
 function viewAccess(){
   const canManage = STATE.perms.directory;
   const roles = STATE.data.roles || [];
@@ -2815,6 +2843,14 @@ function viewAccess(){
         esc((STATE.session || {}).email) + ')</td></tr>' +
       '<tr><td>Server date used for every age</td><td><b>' + esc(STATE.today) + '</b></td></tr>' +
       '<tr><td>Data revision</td><td>' + esc(String(STATE.revision)) + '</td></tr>' +
+      '<tr><td>This page (stockflow.html)</td><td><b>' + esc(STOCKFLOW_BUILD) + '</b></td></tr>' +
+      '<tr><td>The script (Code.gs)</td><td><b>' +
+        esc((STATE.data && STATE.data.build) || 'not reported') + '</b>' +
+        (buildsMatch() ? '' :
+          ' <span style="color:var(--amber);">— these differ. One side was deployed and the other ' +
+          'was not, or this page came from the browser cache. Re-upload stockflow.html and ' +
+          'hard-refresh (Ctrl+Shift+R, or Cmd+Shift+R on a Mac).</span>') +
+      '</td></tr>' +
     '</tbody></table></div>' +
     '<div class="btn-row" style="margin-top:14px;">' +
       '<button class="btn secondary" id="access-check">Run connection check</button>' +
