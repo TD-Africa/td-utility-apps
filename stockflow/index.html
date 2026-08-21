@@ -664,7 +664,8 @@ const STATE = {
     itemmaster:   {page: 1, search: '', category: '', flagged: false, sortBy: 'item', sortDir: 'asc'},
     simulator:    {page: 1, search: '', category: '', sortBy: 'item', sortDir: 'asc'}
   },
-  bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null}
+  bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
+         ignored: null, fileName: null, delimiter: null, lastBatchId: null}
 };
 
 const PAGE_SIZE = 25;
@@ -776,10 +777,40 @@ function ageColour(days){
    blocked script cannot take out the entire bulk-upload path, and
    so a malformed file produces our error rather than a library's.
    ============================================================ */
-function parseCsv(text){
+/* Which character separates the fields.
+
+   Copying a block of cells out of Excel puts TAB-separated text on the
+   clipboard, and this panel invites exactly that — "or paste rows below".
+   Excel on a European locale writes semicolons into a .csv. Assuming a
+   comma meant both of those failed with "required columns are missing",
+   which is true but tells you nothing about why.
+
+   Decided on the header line only: it is the one row guaranteed to have
+   no free text in it, so counting separators there cannot be thrown off
+   by a comma inside a product description. */
+function detectDelimiter(text){
+  const firstLine = String(text || '').replace(/^\uFEFF/, '').split(/\r\n|\r|\n/)[0] || '';
+  const counts = [
+    {ch: ',', n: (firstLine.match(/,/g) || []).length},
+    {ch: '\t', n: (firstLine.match(/\t/g) || []).length},
+    {ch: ';', n: (firstLine.match(/;/g) || []).length}
+  ].sort(function(a, b){ return b.n - a.n; });
+  return counts[0].n > 0 ? counts[0].ch : ',';
+}
+
+function delimiterName(ch){
+  return ch === '\t' ? 'tab-separated (as copied out of Excel)'
+    : ch === ';' ? 'semicolon-separated' : 'comma-separated';
+}
+
+function parseCsv(text, delimiter){
   const rows = [];
   let row = [], field = '', inQuotes = false;
-  const src = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  /* A UTF-8 byte-order mark is what Excel puts at the front of every CSV
+     it saves. Left in place it becomes part of the first header name. */
+  const src = String(text || '').replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const sep = delimiter || detectDelimiter(src);
   for(let i = 0; i < src.length; i++){
     const ch = src[i];
     if(inQuotes){
@@ -789,7 +820,7 @@ function parseCsv(text){
       }else field += ch;
     }else if(ch === '"'){
       inQuotes = true;
-    }else if(ch === ','){
+    }else if(ch === sep){
       row.push(field); field = '';
     }else if(ch === '\n'){
       row.push(field); field = '';
@@ -837,7 +868,8 @@ function normaliseHeader(h){
    reads, so "Date", "date", " DATE " and "Transaction Date" all work —
    and so do "toLocation", "To Location" and "Destination". */
 function csvToObjects(text){
-  const rows = parseCsv(text);
+  const delimiter = detectDelimiter(text);
+  const rows = parseCsv(text, delimiter);
   if(!rows.length) return {headers: [], rows: [], error: 'The file is empty.'};
 
   const raw = rows[0].map(normaliseHeader);
@@ -845,10 +877,11 @@ function csvToObjects(text){
   const required = ['date', 'item', 'type', 'qty'];
   const missing = required.filter(function(r){ return fields.indexOf(r) < 0; });
   if(missing.length){
-    return {headers: fields, rows: [], error: 'The first line must be a header row. ' +
+    return {headers: fields, rows: [], delimiter: delimiter,
+      error: 'The first line must be a header row. ' +
       'These required columns are missing: ' + missing.join(', ') + '. Found: ' +
       (rows[0].map(function(h){ return String(h).trim(); }).filter(Boolean).join(', ') || '(nothing)') +
-      '. Use "Copy CSV template" to get the right shape.'};
+      '. Download the template to get the right shape.'};
   }
   const unknown = fields.filter(function(f, i){
     return raw[i] && ['date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes']
@@ -862,7 +895,7 @@ function csvToObjects(text){
       fields.forEach(function(f, i){ obj[f] = (r[i] === undefined ? '' : String(r[i]).trim()); });
       return obj;
     });
-  return {headers: fields, rows: out, error: null,
+  return {headers: fields, rows: out, error: null, delimiter: delimiter,
     ignoredColumns: unknown.length ? unknown : null};
 }
 
@@ -1568,6 +1601,17 @@ const BULK_TEMPLATE_ROWS = [
   ['2026-09-05', '9G158ET', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '799.00']
 ];
 
+/* The template as a file. Same rows the Copy button puts on the
+   clipboard, so there is one definition of the right shape.
+
+   Note what is NOT in it: no title row, no blank line, no notes column
+   full of prose. The first line has to be the header or the parser has
+   nothing to work with, and a "helpful" preamble is the quickest way to
+   make a template that cannot be uploaded. */
+function templateCsv(){
+  return toCsv(BULK_TEMPLATE_ROWS);
+}
+
 function viewLedger(){
   const editable = STATE.perms.ledger;
   const v = STATE.views.ledger;
@@ -1653,8 +1697,11 @@ function viewBulkPanel(){
             '<td class="num">' + (r.fob ? esc(String(r.fob)) : '—') + '</td>' +
             '<td>' + esc([r.location, r.toLocation].filter(Boolean).join(' → ')) + '</td>' +
             '<td>' + esc(r.ref || '') + '</td>' +
-            '<td>' + (r.status === 'ok'
-              ? '<span style="color:var(--green)">OK</span>'
+            /* The reason has to be readable. Clipped to one line it is
+               just a red smear, and the whole point of the preview is
+               that somebody can act on what it says. */
+            '<td class="wrap" style="max-width:none;min-width:280px;">' + (r.status === 'ok'
+              ? '<span style="color:var(--green);font-weight:600;">OK</span>'
               : '<span style="color:var(--red)">' + esc(r.errors.join('; ')) + '</span>') + '</td></tr>';
         }).join('') +
         '</tbody></table></div>' +
@@ -1676,9 +1723,17 @@ function viewBulkPanel(){
       '<span>a day\'s sales report, a shipment manifest — checked against the position before anything is written</span></div></div>' +
     '<div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;align-items:start;">' +
       '<div class="field"><label>1. Get the template</label>' +
-        '<button class="btn secondary" id="copy-template" type="button">Copy CSV template</button></div>' +
-      '<div class="field"><label>2. Upload a .csv file</label>' +
-        '<input type="file" id="bulk-file" accept=".csv,text/csv"></div>' +
+        '<div class="btn-row">' +
+          '<button class="btn secondary" id="download-template" type="button">Download template</button>' +
+          '<button class="btn secondary" id="copy-template" type="button">Copy</button>' +
+        '</div></div>' +
+      '<div class="field"><label>2. Upload the filled-in file</label>' +
+        '<input type="file" id="bulk-file" accept=".csv,text/csv,text/plain,.txt">' +
+        (b.fileName
+          ? '<div style="font-size:11px;color:var(--text-dim);margin-top:4px;">read <b>' +
+            esc(b.fileName) + '</b>' + (b.delimiter ? ' · ' + esc(delimiterName(b.delimiter)) : '') + '</div>'
+          : '') +
+      '</div>' +
       '<div class="field"><label>3. Or paste rows below</label>' +
         '<button class="btn secondary" id="bulk-parse" type="button"' + (b.busy ? ' disabled' : '') + '>' +
           (b.busy ? 'Checking…' : 'Check pasted rows') + '</button></div>' +
@@ -1760,9 +1815,18 @@ function viewLedgerHistory(){
   return '<div class="panel">' +
     '<div class="panel-head"><div class="panel-title">Ledger History' +
       '<span>' + (d ? d.total + ' matching row' + (d.total === 1 ? '' : 's') : '') + '</span></div>' +
-      '<button class="btn secondary sm" id="export-ledger">Export CSV</button>' +
+      '<div class="btn-row">' +
+        (STATE.bulk.lastBatchId
+          ? '<button class="btn secondary sm" id="export-batch" data-batch="' +
+            attr(STATE.bulk.lastBatchId) + '">Download my last import</button>'
+          : '') +
+        '<button class="btn secondary sm" id="export-ledger">Export CSV</button>' +
+      '</div>' +
     '</div>' +
     filters + body +
+    '<div style="font-size:11px;color:var(--text-faint);margin-top:10px;">' +
+      'Export CSV downloads every row matching the filters above, not just this page.' +
+    '</div>' +
   '</div>';
 }
 
@@ -2972,10 +3036,17 @@ function bindLedger(){
     openModal({kind: 'reverse', txnId: id, row: row || {}});
   });
   on('#export-ledger', 'click', function(){ exportLedgerCsv(); });
+  on('#export-batch', 'click', function(e){
+    const id = e.currentTarget.dataset.batch;
+    exportLedgerCsv({batchId: id}, 'stockflow-import-' + id + '.csv');
+  });
 
   /* Bulk upload */
+  on('#download-template', 'click', function(){
+    download('stockflow-upload-template.csv', templateCsv());
+  });
   on('#copy-template', 'click', function(){
-    const csv = toCsv(BULK_TEMPLATE_ROWS);
+    const csv = templateCsv();
     const paste = document.getElementById('bulk-paste');
     if(navigator.clipboard && navigator.clipboard.writeText){
       navigator.clipboard.writeText(csv).then(
@@ -2991,12 +3062,15 @@ function bindLedger(){
     const file = e.target.files && e.target.files[0];
     if(!file) return;
     const reader = new FileReader();
-    reader.onload = function(){ checkBulk(String(reader.result || '')); };
+    reader.onload = function(){ checkBulk(String(reader.result || ''), file.name); };
     reader.onerror = function(){
       STATE.bulk.error = 'That file could not be read. If it is open in Excel, close it and try again.';
       render();
     };
-    reader.readAsText(file);
+    /* Read as UTF-8 explicitly. Left to the browser, a file Excel saved
+       on a Windows machine can come back in the system code page and
+       every accented product name arrives as mojibake. */
+    reader.readAsText(file, 'UTF-8');
   });
   on('#bulk-parse', 'click', function(){
     const paste = document.getElementById('bulk-paste');
@@ -3006,7 +3080,8 @@ function bindLedger(){
   });
   on('#bulk-skip', 'change', function(e){ STATE.bulk.skipInvalid = e.target.checked; });
   on('#bulk-cancel', 'click', function(){
-    STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null};
+    STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
+      ignored: null, fileName: null, delimiter: null, lastBatchId: null};
     const paste = document.getElementById('bulk-paste');
     if(paste) paste.value = '';
     render();
@@ -3022,10 +3097,13 @@ function bindLedger(){
   });
 }
 
-async function checkBulk(text){
+async function checkBulk(text, fileName){
   STATE.bulk.error = null; STATE.bulk.preview = null; STATE.bulk.ignored = null;
+  STATE.bulk.fileName = fileName || null;
+  STATE.bulk.delimiter = null;
   STATE.bulk.busy = true; render();
   const parsed = csvToObjects(text);
+  STATE.bulk.delimiter = parsed.delimiter;
   if(parsed.error){
     /* "Your file is malformed" and "Stockflow hit an internal error" are
        different problems and are reported differently. This is the first. */
@@ -3072,6 +3150,7 @@ async function commitBulk(force){
     STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true, ignored: null};
     const paste = document.getElementById('bulk-paste');
     if(paste) paste.value = '';
+    STATE.bulk.lastBatchId = res.batchId;
     toast(res.imported + ' movement(s) imported' + (res.skipped ? ', ' + res.skipped + ' skipped' : ''));
     await refreshData();
     await loadLedger();
@@ -3082,15 +3161,57 @@ async function commitBulk(force){
   }
 }
 
-function exportLedgerCsv(){
-  const d = STATE.views.ledger.data;
-  if(!d || !d.rows.length){ toast('Nothing to export with these filters', true); return; }
-  const header = ['txnId', 'date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation',
-    'ref', 'notes', 'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale', 'reversalOf',
-    'reversalReason', 'actor', 'voided'];
-  download('stockflow-ledger-page-' + d.page + '.csv', toCsv([header].concat(d.rows.map(function(r){
-    return header.map(function(h){ return r[h] === null || r[h] === undefined ? '' : r[h]; });
-  }))));
+const LEDGER_EXPORT_COLUMNS = ['txnId', 'date', 'item', 'type', 'qty', 'fob', 'location',
+  'toLocation', 'ref', 'notes', 'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale',
+  'reversalOf', 'reversalReason', 'batchId', 'actor', 'createdAt', 'voided'];
+
+function ledgerRowsToCsv(rows){
+  return toCsv([LEDGER_EXPORT_COLUMNS].concat(rows.map(function(r){
+    return LEDGER_EXPORT_COLUMNS.map(function(h){
+      return (r[h] === null || r[h] === undefined) ? '' : r[h];
+    });
+  })));
+}
+
+/* Everything matching the current filters, not the twenty-five on
+   screen. Exporting one visible page and calling it an export is the
+   sort of thing nobody notices until they are reconciling against it and
+   the totals are short. */
+async function exportLedgerCsv(overrides, filenameHint){
+  const v = STATE.views.ledger;
+  const query = Object.assign({
+    pageSize: 'all',
+    dateFrom: v.dateFrom, dateTo: v.dateTo, item: v.item, type: v.type,
+    search: v.search, sortBy: v.sortBy, sortDir: v.sortDir
+  }, overrides || {});
+
+  const btn = document.getElementById('export-ledger');
+  if(btn){ btn.disabled = true; btn.textContent = 'Preparing…'; }
+  try{
+    const all = await rpc('getLedger', query);
+    if(!all.rows.length){ toast('Nothing to export with these filters', true); return; }
+    if(all.truncated){
+      toast('That is ' + all.total + ' rows; the first ' + all.limit +
+        ' were exported. Narrow the date range to get the rest.', true);
+    }
+    download(filenameHint || ledgerExportName(query), ledgerRowsToCsv(all.rows));
+  }catch(err){
+    toast(diagnose(err).detail, true);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Export CSV'; }
+  }
+}
+
+/* A filename that says what is in it, so three exports in a downloads
+   folder are still tellable apart a week later. */
+function ledgerExportName(q){
+  const bits = ['stockflow-ledger'];
+  if(q.batchId) bits.push('import-' + q.batchId);
+  if(q.item) bits.push(String(q.item).toLowerCase());
+  if(q.type) bits.push(String(q.type).toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  if(q.dateFrom || q.dateTo) bits.push((q.dateFrom || 'start') + '_to_' + (q.dateTo || STATE.today));
+  if(bits.length === 1) bits.push('all');
+  return bits.join('-') + '.csv';
 }
 
 /* A download the page starts itself. Kept to a Blob URL and revoked
