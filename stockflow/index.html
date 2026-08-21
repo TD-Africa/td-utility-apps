@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = '2026-08-21.3';
+const STOCKFLOW_BUILD = '2026-08-21.4';
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -3361,10 +3361,18 @@ async function checkBulk(text, fileName){
     return;
   }
 
+  /* ONE staged set of rows, and both the preview and the commit send
+     exactly it. They were briefly allowed to differ — the preview went
+     on sending `parsed.rows` while the commit sent the date-converted
+     `dated.rows` — so every upload with a local-format date was refused
+     at the preview and never reached the commit that would have worked.
+     Whatever is previewed must be what is posted; nothing else may be
+     in scope to send by mistake. */
   STATE.bulk.rows = dated.rows;
   STATE.bulk.ignored = parsed.ignoredColumns;
   try{
-    const preview = await rpc('bulkPostTransactions', {rows: parsed.rows, dryRun: true, skipInvalid: true});
+    const preview = await rpc('bulkPostTransactions',
+      {rows: STATE.bulk.rows, dryRun: true, skipInvalid: true});
     STATE.bulk.preview = preview;
     STATE.bulk.busy = false;
     if(preview.duplicateBatch){
