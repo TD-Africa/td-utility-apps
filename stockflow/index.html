@@ -375,7 +375,7 @@ function backendUrl(){ return String(STOCKFLOW_BACKEND_URL || '').trim(); }
 
 const RETRYABLE_ACTIONS = {
   getBootstrap: true, getRevision: true, getLoginContext: true,
-  getLedger: true, getAudit: true, getItemDetail: true
+  getLedger: true, getAudit: true, getItemDetail: true, getImportBatches: true
 };
 
 /* Set once any call has succeeded. After that we know the deployment
@@ -658,6 +658,7 @@ const STATE = {
   views: {
     ledger: {page: 1, dateFrom: '', dateTo: '', item: '', type: '', search: '', sortBy: 'date', sortDir: 'desc', data: null, loading: false},
     audit:  {page: 1, dateFrom: '', dateTo: '', entity: '', search: '', data: null, loading: false},
+    imports: {page: 1, data: null, loading: false},
     git:      {page: 1, search: '', category: '', sortBy: 'gitOldestAge', sortDir: 'desc'},
     mainwh:   {page: 1, search: '', category: '', location: '', sortBy: 'mwOldestAge', sortDir: 'desc'},
     consolidated: {page: 1, search: '', category: '', sortBy: 'consolidatedValue', sortDir: 'desc'},
@@ -1666,7 +1667,7 @@ function viewLedger(){
     viewBulkPanel()
   ) : lockedNote('Your role can view every movement but not post one. Admin and Warehouse can post.');
 
-  return form + viewLedgerHistory();
+  return form + viewImports() + viewLedgerHistory();
 }
 
 function viewBulkPanel(){
@@ -1687,6 +1688,10 @@ function viewBulkPanel(){
         '<b>' + p.total + ' rows checked against the live position</b> — ' + p.valid + ' would import, ' +
         p.invalid + ' would be refused. Every row was simulated against the real stock, so an overselling ' +
         'row is caught here rather than after it has corrupted the position.' +
+        ((p.brands && p.brands.length)
+          ? '<br>This file covers <b>' + esc(p.brands.join(', ')) + '</b>, across ' +
+            p.itemCount + ' item' + (p.itemCount === 1 ? '' : 's') + '.'
+          : '') +
       '</div></div>' +
       '<div class="table-wrap" data-keep-scroll="bulk" style="max-height:300px;overflow-y:auto;margin-bottom:12px;">' +
         '<table><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Type</th><th class="num">Qty</th>' +
@@ -1751,6 +1756,46 @@ function viewBulkPanel(){
   '</div>';
 }
 
+/* Which uploads happened, who sent them, and which brands they touched.
+   The direct answer to "which brand was that file?" without joining
+   every row back to the item master. */
+function viewImports(){
+  const d = STATE.views.imports.data;
+  if(!d) return '';
+  if(!d.rows.length){
+    return '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Uploads' +
+        '<span>nothing has been bulk-uploaded yet</span></div></div>' +
+      '<div class="empty-state">Imports will be listed here, with the brands each one touched.</div>' +
+    '</div>';
+  }
+  return '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">Uploads' +
+      '<span>' + d.total + ' import' + (d.total === 1 ? '' : 's') + ', newest first</span></div></div>' +
+    '<div class="table-wrap"><table><thead><tr>' +
+      '<th>When</th><th>Who</th><th class="num">Rows</th><th class="num">Items</th>' +
+      '<th>Brands</th><th>Note</th><th></th>' +
+    '</tr></thead><tbody>' +
+    d.rows.map(function(b){
+      return '<tr>' +
+        '<td>' + esc(fmtDateTime(b.importedAt)) + '</td>' +
+        '<td>' + esc(b.importedBy) + '</td>' +
+        '<td class="num">' + fmtNum(b.rowCount) + '</td>' +
+        '<td class="num">' + fmtNum(b.itemCount) + '</td>' +
+        '<td>' + (b.brandsKnown
+          ? (b.brands.length
+              ? b.brands.map(function(x){ return '<span class="tag">' + esc(x) + '</span>'; }).join(' ')
+              : '<span class="unknown">no brand set</span>')
+          : '<span class="unknown">not recorded</span>') + '</td>' +
+        '<td class="wrap">' + esc(b.note) + '</td>' +
+        '<td><button class="btn secondary sm" data-batch-dl="' + attr(b.batchId) + '">Download</button></td>' +
+      '</tr>';
+    }).join('') +
+    '</tbody></table></div>' +
+    pagerServer('imports', d) +
+  '</div>';
+}
+
 function viewLedgerHistory(){
   const v = STATE.views.ledger;
   const d = v.data;
@@ -1761,7 +1806,7 @@ function viewLedgerHistory(){
     '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="lf-to" data-keep-value="1" value="' + attr(v.dateTo) + '"></div>' +
     '<div class="field"><label>Item</label><select id="lf-item" data-keep-value="1">' +
       '<option value="">All items</option>' +
-      ((STATE.data.items) || []).map(function(i){
+      visibleItems().map(function(i){
         return '<option value="' + attr(i.item) + '"' + (v.item === i.item ? ' selected' : '') + '>' + esc(i.item) + '</option>';
       }).join('') + '</select></div>' +
     '<div class="field"><label>Type</label><select id="lf-type" data-keep-value="1">' +
@@ -1784,7 +1829,8 @@ function viewLedgerHistory(){
   }else{
     body = '<div class="table-wrap" data-keep-scroll="ledger">' +
       '<table><thead><tr>' +
-        '<th>Date</th><th>Item</th><th>Type</th><th class="num">Qty</th><th class="num">FOB $</th>' +
+        '<th>Date</th><th>Item</th>' + (showBrandColumn() ? '<th>Brand</th>' : '') +
+        '<th>Type</th><th class="num">Qty</th><th class="num">FOB $</th>' +
         '<th>Where</th><th class="num">Sell $</th><th class="num">Cost of sale</th>' +
         '<th>Reference</th><th>Posted by</th><th></th>' +
       '</tr></thead><tbody>' +
@@ -1793,6 +1839,9 @@ function viewLedgerHistory(){
         return '<tr class="' + (r.voided ? 'voided' : '') + '">' +
           '<td>' + esc(r.date) + '</td>' +
           '<td><b>' + esc(r.item) + '</b></td>' +
+          (showBrandColumn()
+            ? '<td>' + (r.brand ? esc(r.brand) : '<span class="unknown">—</span>') + '</td>'
+            : '') +
           '<td>' + typePill(r.type) + '</td>' +
           '<td class="num">' + fmtNum(r.qty) + '</td>' +
           '<td class="num">' + (r.fob ? fmtMoney(r.fob) : '—') + '</td>' +
@@ -1828,6 +1877,14 @@ function viewLedgerHistory(){
       'Export CSV downloads every row matching the filters above, not just this page.' +
     '</div>' +
   '</div>';
+}
+
+/* Only worth a column when there is more than one brand loaded and no
+   single brand selected. With one brand, or with the switcher already
+   scoped to one, it would be the same word on every row. */
+function showBrandColumn(){
+  if(STATE.activeBrand) return false;
+  return Object.keys(brandsWithStock()).length > 1;
 }
 
 function pagerServer(viewId, d){
@@ -2786,7 +2843,7 @@ function bindHandlers(){
   on('.nav-item', 'click', function(e){
     STATE.tab = e.currentTarget.dataset.tab;
     render();
-    if(STATE.tab === 'ledger' && !STATE.views.ledger.data) loadLedger();
+    if(STATE.tab === 'ledger' && !STATE.views.ledger.data){ loadLedger(); loadImports(); }
     if(STATE.tab === 'audit' && !STATE.views.audit.data) loadAudit();
   });
   on('#sign-out', 'click', function(){
@@ -2810,6 +2867,10 @@ function bindHandlers(){
     Object.keys(STATE.views).forEach(function(k){ STATE.views[k].page = 1; });
     STATE.modal = null;
     render();
+    /* The movement views are filtered on the server, so they have to be
+       asked again; the position screens re-filter in place. */
+    if(STATE.views.ledger.data) loadLedger();
+    if(STATE.views.imports.data) loadImports();
     toast(brand ? 'Viewing ' + brand : 'Viewing every brand');
   });
   on('#foot-check, #access-check', 'click', async function(){
@@ -3028,7 +3089,13 @@ function bindLedger(){
   on('[data-spage]', 'click', function(e){
     const viewId = e.currentTarget.dataset.spage;
     STATE.views[viewId].page = Number(e.currentTarget.dataset.to);
-    if(viewId === 'ledger') loadLedger(); else loadAudit();
+    const loaders = {ledger: loadLedger, audit: loadAudit, imports: loadImports};
+    (loaders[viewId] || loadLedger)();
+  });
+  on('[data-batch-dl]', 'click', function(e){
+    const id = e.currentTarget.dataset.batchDl;
+    /* A specific import, whatever brand is currently selected. */
+    exportLedgerCsv({batchId: id, brand: ''}, 'stockflow-import-' + id + '.csv');
   });
   on('[data-reverse]', 'click', function(e){
     const id = e.currentTarget.dataset.reverse;
@@ -3154,6 +3221,7 @@ async function commitBulk(force){
     toast(res.imported + ' movement(s) imported' + (res.skipped ? ', ' + res.skipped + ' skipped' : ''));
     await refreshData();
     await loadLedger();
+    await loadImports();
   }catch(err){
     STATE.bulk.busy = false;
     STATE.bulk.error = diagnose(err).detail;
@@ -3161,7 +3229,7 @@ async function commitBulk(force){
   }
 }
 
-const LEDGER_EXPORT_COLUMNS = ['txnId', 'date', 'item', 'type', 'qty', 'fob', 'location',
+const LEDGER_EXPORT_COLUMNS = ['txnId', 'date', 'item', 'brand', 'type', 'qty', 'fob', 'location',
   'toLocation', 'ref', 'notes', 'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale',
   'reversalOf', 'reversalReason', 'batchId', 'actor', 'createdAt', 'voided'];
 
@@ -3181,6 +3249,7 @@ async function exportLedgerCsv(overrides, filenameHint){
   const v = STATE.views.ledger;
   const query = Object.assign({
     pageSize: 'all',
+    brand: STATE.activeBrand || '',
     dateFrom: v.dateFrom, dateTo: v.dateTo, item: v.item, type: v.type,
     search: v.search, sortBy: v.sortBy, sortDir: v.sortDir
   }, overrides || {});
@@ -3207,6 +3276,7 @@ async function exportLedgerCsv(overrides, filenameHint){
 function ledgerExportName(q){
   const bits = ['stockflow-ledger'];
   if(q.batchId) bits.push('import-' + q.batchId);
+  if(q.brand) bits.push(String(q.brand).toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if(q.item) bits.push(String(q.item).toLowerCase());
   if(q.type) bits.push(String(q.type).toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if(q.dateFrom || q.dateTo) bits.push((q.dateFrom || 'start') + '_to_' + (q.dateTo || STATE.today));
@@ -3409,7 +3479,8 @@ function bindAudit(){
   on('[data-spage]', 'click', function(e){
     const viewId = e.currentTarget.dataset.spage;
     STATE.views[viewId].page = Number(e.currentTarget.dataset.to);
-    if(viewId === 'audit') loadAudit(); else loadLedger();
+    const loaders = {ledger: loadLedger, audit: loadAudit, imports: loadImports};
+    (loaders[viewId] || loadAudit)();
   });
   on('#export-audit', 'click', function(){
     const d = STATE.views.audit.data;
@@ -3508,8 +3579,27 @@ async function loadLedger(){
   try{
     v.data = await rpc('getLedger', {
       page: v.page, pageSize: PAGE_SIZE,
+      /* The switcher scopes the movements too. Without this, selecting a
+         brand filtered every position screen and left the ledger showing
+         everything — which reads as a bug the moment a second brand is
+         loaded, and is invisible until then. */
+      brand: STATE.activeBrand || '',
       dateFrom: v.dateFrom, dateTo: v.dateTo, item: v.item, type: v.type,
       search: v.search, sortBy: v.sortBy, sortDir: v.sortDir
+    });
+  }catch(err){
+    if(!err.sessionInvalid) toast(diagnose(err).detail, true);
+  }
+  v.loading = false;
+  if(!STATE.modal) render();
+}
+
+async function loadImports(){
+  const v = STATE.views.imports;
+  v.loading = true;
+  try{
+    v.data = await rpc('getImportBatches', {
+      page: v.page, pageSize: 10, brand: STATE.activeBrand || ''
     });
   }catch(err){
     if(!err.sessionInvalid) toast(diagnose(err).detail, true);
@@ -3558,7 +3648,7 @@ async function loadApp(){
   applyBootstrap(data);
   STATE.phase = 'app';
   render();
-  if(STATE.tab === 'ledger') loadLedger();
+  if(STATE.tab === 'ledger'){ loadLedger(); loadImports(); }
   startPolling();
 }
 
