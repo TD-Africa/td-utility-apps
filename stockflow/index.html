@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = '2026-08-21.4';
+const STOCKFLOW_BUILD = '2026-08-28.3';
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -679,7 +679,8 @@ const STATE = {
   },
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
-         rawText: null, dateOrder: null, dateInfo: null}
+         rawText: null, dateOrder: null, dateInfo: null},
+  itemImport: {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true}
 };
 
 const PAGE_SIZE = 25;
@@ -718,6 +719,15 @@ function money0k(n){
   if(Math.abs(v) >= 1000000) return '$' + (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'm';
   if(Math.abs(v) >= 1000) return '$' + Math.round(v / 1000) + 'k';
   return '$' + v;
+}
+
+/* fmtNum returns markup for an unknown value, which is right in a table
+   cell and wrong inside textContent. */
+function fmtNumPlain(n){
+  if(!isNum(n)) return '—';
+  const v = Number(n);
+  return (Math.abs(v - Math.round(v)) < 0.0001 ? Math.round(v) : Math.round(v * 100) / 100)
+    .toLocaleString('en-US');
 }
 
 function fmtDays(n){
@@ -1447,10 +1457,7 @@ function viewApp(){
   /* Worth interrupting for: every symptom of a half-deploy looks like a
      bug in the thing that was just fixed. */
   const mismatch = buildsMatch() ? '' :
-    '<div class="stale-strip"><span>This page is build <b>' + esc(STOCKFLOW_BUILD) +
-    '</b> but the script is build <b>' + esc((STATE.data && STATE.data.build) || '?') +
-    '</b>. Re-upload stockflow.html, then hard-refresh — Ctrl+Shift+R, or Cmd+Shift+R on a Mac.' +
-    '</span></div>';
+    '<div class="stale-strip"><span>' + esc(skewMessage()) + '</span></div>';
 
   return '<div class="app">' +
     '<div class="sidebar">' +
@@ -1740,13 +1747,21 @@ function viewLedger(){
       '<div class="form-grid">' +
         '<div class="field"><label>Date</label>' +
           '<input type="date" id="f-date" data-keep-value="1" value="' + attr(STATE.today) + '"></div>' +
+        /* A text box, not a dropdown: with 76 part numbers, someone who
+           knows the code should be able to type it rather than scroll to
+           it. The datalist keeps the list available for anyone who does
+           not — typing part of a code or part of a description narrows
+           it — without forcing the choice through a menu. */
         '<div class="field"><label>Item Number</label>' +
-          '<select id="f-item" data-keep-value="1">' +
-            ((STATE.data.items) || []).map(function(i){
-              return '<option value="' + attr(i.item) + '">' + esc(i.item) +
-                (i.b2b ? ' (B2B)' : '') + '</option>';
+          '<input type="text" id="f-item" data-keep-value="1" list="f-item-options" ' +
+            'autocomplete="off" autocapitalize="characters" spellcheck="false" ' +
+            'placeholder="type or pick, e.g. 9G158ET">' +
+          '<datalist id="f-item-options">' +
+            visibleItems().map(function(i){
+              return '<option value="' + attr(i.item) + '">' + esc(i.name) +
+                (i.b2b ? ' · B2B' : '') + '</option>';
             }).join('') +
-          '</select></div>' +
+          '</datalist></div>' +
         '<div class="field"><label>Type</label>' +
           '<select id="f-type" data-keep-value="1">' +
             types.map(function(t){ return '<option value="' + attr(t) + '">' + esc(t) + '</option>'; }).join('') +
@@ -1766,6 +1781,11 @@ function viewLedger(){
         '<div class="field" style="grid-column:span 2;"><label>Notes</label>' +
           '<input type="text" id="f-notes" placeholder="optional"></div>' +
       '</div>' +
+      /* Outside the grid on purpose. The fields are bottom-aligned, so a
+         hint tucked inside one of them makes that column taller and
+         knocks the whole row out of line. */
+      '<div id="f-item-hint" style="font-size:11.5px;min-height:16px;margin:-6px 0 12px 0;' +
+        'color:var(--text-faint);"></div>' +
       '<div class="btn-row">' +
         '<button class="btn" id="log-btn"' + (STATE.busy === 'post' ? ' disabled' : '') + '>' +
           (STATE.busy === 'post' ? 'Posting…' : 'Log Transaction') + '</button>' +
@@ -2333,7 +2353,14 @@ function viewItemMaster(){
     '<div class="panel">' +
       '<div class="panel-head"><div class="panel-title">Item Master' +
         '<span>' + nonB2B().length + ' SKUs</span></div>' +
-        '<button class="btn secondary sm" id="export-items">Export CSV</button></div>' +
+        '<div class="btn-row">' +
+          (STATE.perms.items
+            ? '<button class="btn sm" id="add-item">Add an item</button>' +
+              '<button class="btn secondary sm" id="import-items">Add many from a file</button>'
+            : '') +
+          '<button class="btn secondary sm" id="export-items">Export CSV</button>' +
+        '</div></div>' +
+      viewItemImport() +
       filterBar('itemmaster', {search: true, category: true, flagged: true}) +
       '<div class="table-wrap" data-keep-scroll="itemmaster"><table><thead><tr>' +
         sortableTh('itemmaster', 'item', 'Item') +
@@ -2350,6 +2377,7 @@ function viewItemMaster(){
         sortableTh('itemmaster', 'mwQty', 'Main WH', true) +
         sortableTh('itemmaster', 'consolidatedQty', 'Consolidated', true) +
         sortableTh('itemmaster', 'consolidatedValue', 'Value', true) +
+        (STATE.perms.items ? '<th></th>' : '') +
       '</tr></thead><tbody>' +
       (res.rows.length ? res.rows.map(function(i){
         return '<tr>' +
@@ -2371,8 +2399,11 @@ function viewItemMaster(){
           '<td class="num">' + fmtNum(i.mwQty) + '</td>' +
           '<td class="num">' + fmtNum(i.consolidatedQty) + '</td>' +
           '<td class="num">' + fmtMoney0(i.consolidatedValue) + '</td>' +
+          (STATE.perms.items
+            ? '<td><button class="btn secondary sm" data-edititem="' + attr(i.item) + '">Edit</button></td>'
+            : '') +
         '</tr>';
-      }).join('') : emptyRow(14, 'No items match these filters.')) +
+      }).join('') : emptyRow(STATE.perms.items ? 15 : 14, 'No items match these filters.')) +
       '</tbody></table></div>' +
       pager('itemmaster', res) +
       (editable ? '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
@@ -2384,6 +2415,71 @@ function viewItemMaster(){
 /* ============================================================
    SCREEN: Selling Price Simulator
    ============================================================ */
+/* Adding a hundred SKUs one dialogue at a time is not a workflow, so the
+   item master gets the same preview-then-commit shape as a movement
+   upload — and reuses the same CSV reader, so the same spreadsheet
+   quirks are handled. */
+function viewItemImport(){
+  const s = STATE.itemImport;
+  if(!s.open) return '';
+  let preview = '';
+  if(s.error){
+    preview = '<div class="banner bad"><div>!</div><div>' + esc(s.error).replace(/\n/g, '<br>') + '</div></div>';
+  }else if(s.preview){
+    const p = s.preview;
+    preview =
+      '<div class="banner ' + (p.invalid ? '' : 'good') + '"><div>' + (p.invalid ? '!' : 'ok') + '</div><div>' +
+        '<b>' + p.total + ' rows checked</b> — ' + p.valid + ' would be added, ' + p.invalid +
+        ' would be refused. Nothing is created until you press Add.' +
+      '</div></div>' +
+      '<div class="table-wrap" data-keep-scroll="itemimport" style="max-height:280px;overflow-y:auto;margin-bottom:12px;">' +
+        '<table><thead><tr><th>#</th><th>Part number</th><th>Description</th><th>Category</th>' +
+        '<th>Brand</th><th>Status</th></tr></thead><tbody>' +
+        p.rows.map(function(r){
+          return '<tr><td>' + r.line + '</td><td><b>' + esc(r.item || '—') + '</b></td>' +
+            '<td class="wrap">' + esc(r.name || '') + '</td>' +
+            '<td>' + esc(r.category || '') + '</td><td>' + esc(r.brand || '') + '</td>' +
+            '<td class="wrap" style="max-width:none;min-width:260px;">' + (r.status === 'ok'
+              ? '<span style="color:var(--green);font-weight:600;">OK</span>'
+              : '<span style="color:var(--red)">' + esc(r.errors.join('; ')) + '</span>') + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+      '<div class="btn-row">' +
+        '<button class="btn" id="item-import-commit"' + ((!p.valid || s.busy) ? ' disabled' : '') + '>' +
+          (s.busy ? 'Adding…' : 'Add ' + p.valid + ' item' + (p.valid === 1 ? '' : 's')) + '</button>' +
+        (p.invalid
+          ? '<label style="font-size:11.5px;color:var(--text-faint);display:flex;align-items:center;gap:6px;">' +
+            '<input type="checkbox" id="item-import-skip" data-keep-value="1" style="width:auto;"' +
+            (s.skipInvalid ? ' checked' : '') + '> skip the ' + p.invalid + ' refused row(s)</label>'
+          : '') +
+      '</div>';
+  }
+
+  const cats = (STATE.data.categories || []).map(function(c){ return c.category; }).join(' / ');
+  return '<div class="panel" style="background:var(--panel-2);">' +
+    '<div class="panel-head"><div class="panel-title">Add many items' +
+      '<span>one row per new part number</span></div>' +
+      '<button class="btn secondary sm" id="item-import-close">Close</button></div>' +
+    '<div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;align-items:start;">' +
+      '<div class="field"><label>1. Get the template</label>' +
+        '<button class="btn secondary" id="item-template" type="button">Download template</button></div>' +
+      '<div class="field"><label>2. Upload a .csv file</label>' +
+        '<input type="file" id="item-file" accept=".csv,text/csv,text/plain,.txt"></div>' +
+      '<div class="field"><label>3. Or paste rows below</label>' +
+        '<button class="btn secondary" id="item-parse" type="button"' + (s.busy ? ' disabled' : '') + '>' +
+          (s.busy ? 'Checking…' : 'Check pasted rows') + '</button></div>' +
+    '</div>' +
+    '<textarea id="item-paste" data-keep-value="1" rows="4" ' +
+      'placeholder="item,name,category,brand,b2b"></textarea>' +
+    '<div style="font-size:11px;color:var(--text-faint);margin:10px 0 12px 0;">' +
+      'Columns: <b>item</b> (part number), <b>name</b> (description), <b>category</b> (' + esc(cats) + '), ' +
+      '<b>brand</b> (optional — defaults to the live brand), <b>b2b</b> (optional, yes/no). ' +
+      'A part number that already exists is refused rather than overwritten.' +
+    '</div>' +
+    preview +
+  '</div>';
+}
+
 function viewSimulator(){
   const editable = STATE.perms.pricing;
   const v = STATE.views.simulator;
@@ -2770,12 +2866,46 @@ function viewAudit(){
 /* ============================================================
    SCREEN: Access & Roles
    ============================================================ */
+/* Every permission area this page knows how to render. If the server's
+   reply does not mention one, the two halves are out of step — and the
+   symptom is a button that simply is not there, which looks like the
+   feature was never built rather than never deployed. */
+const EXPECTED_PERMS = ['ledger', 'pricing', 'category', 'b2b', 'items', 'directory'];
+
+function missingPerms(){
+  const p = STATE.data && STATE.data.perms;
+  if(!p) return [];
+  return EXPECTED_PERMS.filter(function(k){ return !(k in p); });
+}
+
 /* Both halves should be on the same build. They will not be, briefly,
-   during a deploy — and permanently if someone forgets the second half. */
+   during a deploy — and permanently if someone forgets the second half.
+
+   Checked two ways, because a build stamp alone is not enough: a script
+   old enough to predate the stamps reports none at all, and comparing
+   against nothing looks like agreement. What it cannot hide is not
+   knowing about a permission this page expects. */
 function buildsMatch(){
+  if(missingPerms().length) return false;
   const server = STATE.data && STATE.data.build;
-  if(!server) return true;   // an older script does not report one
+  if(!server) return true;   // an older script that is otherwise in step
   return server === STOCKFLOW_BUILD;
+}
+
+/* Says which of the two halves is behind, in words. */
+function skewMessage(){
+  const missing = missingPerms();
+  const server = (STATE.data && STATE.data.build) || null;
+  if(missing.length){
+    return 'The script (Code.gs) has not been updated — it does not know about: ' +
+      missing.join(', ') + '. Deploy a new version of Code.gs ' +
+      '(Deploy \u2192 Manage deployments \u2192 pencil \u2192 New version), not a new deployment.';
+  }
+  if(server && server !== STOCKFLOW_BUILD){
+    return 'This page is build ' + STOCKFLOW_BUILD + ' but the script is build ' + server + '. ' +
+      'Re-upload whichever is behind, then hard-refresh \u2014 Ctrl+Shift+R, or Cmd+Shift+R on a Mac.';
+  }
+  return '';
 }
 
 function viewAccess(){
@@ -2847,9 +2977,7 @@ function viewAccess(){
       '<tr><td>The script (Code.gs)</td><td><b>' +
         esc((STATE.data && STATE.data.build) || 'not reported') + '</b>' +
         (buildsMatch() ? '' :
-          ' <span style="color:var(--amber);">— these differ. One side was deployed and the other ' +
-          'was not, or this page came from the browser cache. Re-upload stockflow.html and ' +
-          'hard-refresh (Ctrl+Shift+R, or Cmd+Shift+R on a Mac).</span>') +
+          ' <span style="color:var(--amber);">— ' + esc(skewMessage()) + '</span>') +
       '</td></tr>' +
     '</tbody></table></div>' +
     '<div class="btn-row" style="margin-top:14px;">' +
@@ -2949,6 +3077,65 @@ function renderModal(){
         '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
         '<button class="btn" id="member-save"' + (m.busy ? ' disabled' : '') + '>' +
           (m.busy ? 'Saving…' : 'Save') + '</button>' +
+      '</div>';
+
+  }else if(m.kind === 'item'){
+    const editing = !!m.item;
+    const it = editing ? (itemByCode(m.item) || {}) : {};
+    const cats = STATE.data.categories || [];
+    const brands = (STATE.data.brands || []).filter(function(b){ return b.live; });
+    const allBrands = (STATE.data.brands || []);
+    const brandList = brands.length ? brands : allBrands;
+    inner =
+      '<div class="modal-head"><div class="modal-title">' +
+        (editing ? 'Edit ' + esc(m.item) : 'Add an item') + '</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="modal-sub">' + (editing
+        ? 'The part number itself cannot be changed — every movement on the ledger points at it. ' +
+          'If the code is wrong, deactivate this one and add the right one.'
+        : 'A part number has to exist before anything can be posted against it. Nothing is ' +
+          'created automatically by an upload: a mistyped code would quietly become a new SKU ' +
+          'and split the position for that product across two of them.') + '</div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Part number</label>' +
+        '<input type="text" id="item-code" autocapitalize="characters" spellcheck="false" ' +
+          'placeholder="e.g. 9G158ET" value="' + attr(editing ? m.item : '') + '"' +
+          (editing ? ' disabled' : '') + '></div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Description</label>' +
+        '<input type="text" id="item-name" placeholder="e.g. HP ProBook 440 G11 14 i7 16GB/512" ' +
+          'value="' + attr(it.name || '') + '"></div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Category</label>' +
+        '<select id="item-category">' +
+          cats.map(function(c){
+            return '<option value="' + attr(c.category) + '"' +
+              (it.category === c.category ? ' selected' : '') + '>' + esc(c.category) +
+              ' (' + (c.landedPct * 100).toFixed(1) + '% landed)</option>';
+          }).join('') +
+        '</select></div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Brand</label>' +
+        '<select id="item-brand">' +
+          brandList.map(function(b){
+            return '<option value="' + attr(b.brand) + '"' +
+              ((it.brand || (brandList.length === 1 ? brandList[0].brand : '')) === b.brand ? ' selected' : '') +
+              '>' + esc(b.brand) + ' · ' + esc(b.businessUnit) + '</option>';
+          }).join('') +
+        '</select></div>' +
+      '<label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:8px;">' +
+        '<input type="checkbox" id="item-b2b" style="width:auto;"' + (it.b2b ? ' checked' : '') + '> ' +
+        'Reseller-owned (B2B) — fixed cost and price, kept out of the weighted average</label>' +
+      (editing && it.consolidatedQty > 0
+        ? '<div class="banner" style="margin-top:14px;"><div>!</div><div>This item holds ' +
+          fmtNum(it.consolidatedQty) + ' units. Changing its category moves it onto a different ' +
+          'landed percentage and revalues all of it.</div></div>'
+        : '') +
+      (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error) + '</div>' : '') +
+      '<div class="modal-actions">' +
+        (editing
+          ? '<button class="btn secondary" id="item-toggle-active">' +
+            (it.active === false ? 'Reactivate' : 'Deactivate') + '</button>'
+          : '') +
+        '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
+        '<button class="btn" id="item-save"' + (m.busy ? ' disabled' : '') + '>' +
+          (m.busy ? 'Saving…' : (editing ? 'Save changes' : 'Add item')) + '</button>' +
       '</div>';
 
   }else if(m.kind === 'brand'){
@@ -3193,6 +3380,37 @@ function bindLedger(){
   };
   on('#f-type', 'change', syncFields);
   syncFields();
+
+  /* Confirms the code as it is typed, so a typo is caught here rather
+     than by a refused submission. Updates one element — re-rendering the
+     screen on every keystroke would throw the caret away. */
+  const showItemHint = function(){
+    const input = document.getElementById('f-item');
+    const hint = document.getElementById('f-item-hint');
+    if(!input || !hint) return;
+    const code = String(input.value || '').trim().toUpperCase();
+    if(!code){ hint.textContent = ''; hint.style.color = 'var(--text-faint)'; return; }
+    const match = itemByCode(code);
+    if(match){
+      hint.textContent = match.name + (match.b2b ? ' · B2B' : '') +
+        ' · ' + match.category + ' · ' + fmtNumPlain(match.mwQty) + ' in Main WH, ' +
+        fmtNumPlain(match.gitQty) + ' in GIT';
+      hint.style.color = 'var(--flow)';
+    }else{
+      hint.textContent = 'No item with that number. Check the code, or pick from the list.';
+      hint.style.color = 'var(--amber)';
+    }
+  };
+  on('#f-item', 'input', showItemHint);
+  on('#f-item', 'change', function(){
+    /* Part numbers are upper case; typing one in lower case should not
+       be a different thing. The server uppercases too — this is so the
+       person sees what will actually be posted. */
+    const input = document.getElementById('f-item');
+    if(input) input.value = String(input.value || '').trim().toUpperCase();
+    showItemHint();
+  });
+  showItemHint();
 
   on('#log-btn', 'click', async function(){
     const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
@@ -3489,7 +3707,21 @@ function download(filename, text){
 
 /* ---------------- Item Master ---------------- */
 function bindItemMaster(){
-  if(STATE.tab !== 'itemmaster' || !STATE.perms.category) return;
+  if(STATE.tab !== 'itemmaster') return;
+
+  if(STATE.perms.items){
+    on('#add-item', 'click', function(){ openModal({kind: 'item'}); });
+    on('[data-edititem]', 'click', function(e){
+      openModal({kind: 'item', item: e.currentTarget.dataset.edititem});
+    });
+    on('#import-items', 'click', function(){
+      STATE.itemImport.open = !STATE.itemImport.open;
+      render();
+    });
+    bindItemImport();
+  }
+
+  if(!STATE.perms.category) return;
   on('[data-fob]', 'change', async function(e){
     const item = e.currentTarget.dataset.fob;
     await saveCostInput('setFobOverride', item, e.currentTarget.value, 'FOB override');
@@ -3518,6 +3750,97 @@ async function saveCostInput(action, item, raw, label){
   }catch(err){
     toast(diagnose(err).detail, !err.probablySucceeded);
     await refreshData();
+  }
+}
+
+const ITEM_TEMPLATE_ROWS = [
+  ['item', 'name', 'category', 'brand', 'b2b'],
+  ['9G158ET', 'HP ProBook 440 G11 14 i7 16GB/512', 'Laptops', 'PSG', 'no'],
+  ['B11W5AT', 'HP P24h G5 23.8 Monitor', 'Monitors', 'PSG', 'no']
+];
+
+function bindItemImport(){
+  const s = STATE.itemImport;
+  on('#item-import-close', 'click', function(){
+    STATE.itemImport = {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true};
+    render();
+  });
+  on('#item-template', 'click', function(){
+    download('stockflow-new-items-template.csv', toCsv(ITEM_TEMPLATE_ROWS));
+  });
+  on('#item-file', 'change', function(e){
+    const file = e.target.files && e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = function(){ checkItemImport(String(reader.result || '')); };
+    reader.onerror = function(){
+      STATE.itemImport.error = 'That file could not be read. If it is open in Excel, close it and try again.';
+      render();
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
+  on('#item-parse', 'click', function(){
+    const box = document.getElementById('item-paste');
+    const text = box ? box.value.trim() : '';
+    if(!text){ toast('Paste some rows first', true); return; }
+    checkItemImport(text);
+  });
+  on('#item-import-skip', 'change', function(e){ STATE.itemImport.skipInvalid = e.target.checked; });
+  on('#item-import-commit', 'click', function(){ commitItemImport(); });
+}
+
+/* Reuses the movement reader, so a tab-separated paste out of Excel and
+   a byte-order mark are handled the same way here as there. */
+function checkItemImport(text){
+  const s = STATE.itemImport;
+  s.error = null; s.preview = null; s.busy = true; render();
+  const rows = parseCsv(text);
+  if(rows.length < 2){
+    s.busy = false;
+    s.error = 'That needs a header row and at least one item under it.';
+    render();
+    return;
+  }
+  const headers = rows[0].map(function(h){ return normaliseHeader(h); });
+  const map = {item: 'item', partnumber: 'item', partno: 'item', sku: 'item', code: 'item',
+    name: 'name', description: 'name', productdescription: 'name', product: 'name',
+    category: 'category', brand: 'brand', b2b: 'b2b'};
+  const fields = headers.map(function(h){ return map[h] || h; });
+  if(fields.indexOf('item') < 0 || fields.indexOf('name') < 0 || fields.indexOf('category') < 0){
+    s.busy = false;
+    s.error = 'The header row must include item, name and category. Found: ' +
+      rows[0].join(', ') + '. Download the template to get the right shape.';
+    render();
+    return;
+  }
+  s.rows = rows.slice(1)
+    .filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); })
+    .map(function(r){
+      const o = {};
+      fields.forEach(function(f, i){ o[f] = (r[i] === undefined ? '' : String(r[i]).trim()); });
+      return o;
+    });
+
+  rpc('bulkAddItems', {rows: s.rows, dryRun: true})
+    .then(function(preview){ s.preview = preview; s.busy = false; render(); })
+    .catch(function(err){ s.busy = false; s.error = diagnose(err).detail; render(); });
+}
+
+async function commitItemImport(){
+  const s = STATE.itemImport;
+  const skip = document.getElementById('item-import-skip');
+  s.busy = true; render();
+  try{
+    const res = await mutate('bulkAddItems', {
+      rows: s.rows, skipInvalid: skip ? skip.checked : s.skipInvalid
+    });
+    STATE.itemImport = {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true};
+    toast(res.added + ' item(s) added' + (res.skipped ? ', ' + res.skipped + ' skipped' : ''));
+    await refreshData();
+  }catch(err){
+    s.busy = false;
+    s.error = diagnose(err).detail;
+    render();
   }
 }
 
@@ -3728,6 +4051,37 @@ function bindModalActions(){
       await mutate('resolveItemFlag', {item: m.item, note: note.trim(), reopen: !!item.flagResolvedBy});
       STATE.modal = null;
       toast('Recorded against ' + m.item);
+      await refreshData();
+    }catch(err){
+      m.busy = false; m.error = diagnose(err).detail; render();
+    }
+  });
+
+  on('#item-save', 'click', async function(){
+    const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
+    const chk = function(id){ const el = document.getElementById(id); return !!(el && el.checked); };
+    const data = {name: val('item-name'), category: val('item-category'),
+      brand: val('item-brand'), b2b: chk('item-b2b')};
+    m.busy = true; m.error = null; render();
+    try{
+      if(m.item) await mutate('updateItem', {item: m.item, data: data});
+      else await mutate('addItem', {data: Object.assign({item: val('item-code')}, data)});
+      STATE.modal = null;
+      toast(m.item ? m.item + ' updated' : 'Item added — you can post against it now');
+      await refreshData();
+    }catch(err){
+      m.busy = false; m.error = diagnose(err).detail; render();
+    }
+  });
+
+  on('#item-toggle-active', 'click', async function(){
+    const it = itemByCode(m.item) || {};
+    const next = it.active === false;
+    m.busy = true; m.error = null; render();
+    try{
+      await mutate('setItemActive', {item: m.item, active: next});
+      STATE.modal = null;
+      toast(m.item + ' is now ' + (next ? 'active' : 'inactive'));
       await refreshData();
     }catch(err){
       m.busy = false; m.error = diagnose(err).detail; render();
