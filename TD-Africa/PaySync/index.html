@@ -1831,7 +1831,11 @@ function viewJournal(){
     selectHtml('jnl-size', [[100,'100 per page'],[200,'200'],[500,'500']], f.pageSize,
       {act:'filter:jnl:pageSize'}) +
     (can('exportJournal')
-      ? '<button class="btn btn-w" data-act="export-journal">Export CSV</button>' : '') +
+      ? '<button class="btn btn-w" data-act="export-journal">Export CSV</button>' +
+        '<button class="btn btn-g" data-act="export-d365" ' +
+        'title="The same postings in the column layout Dynamics 365 imports">' +
+        'Export to D365</button>'
+      : '') +
     '</div>';
 
   const banner = summary && summary.available
@@ -3636,14 +3640,18 @@ function modalDiagnostics(){
 
    A UTF-8 BOM is written so Excel renders ₦ rather than mojibake.
    ============================================================ */
-function downloadCsv(filename, rows){
+function downloadCsv(filename, rows, opts){
+  const o = opts || {};
   const csv = rows.map(function(r){
     return r.map(function(v){
       const s = (v === null || v === undefined) ? '' : String(v);
       return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     }).join(',');
   }).join('\r\n');
-  const blob = new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8'});
+  /* Excel needs the BOM to render ₦; a machine-read import does not want it
+     sitting inside the first column name. */
+  const blob = new Blob([(o.bom === false ? '' : '﻿') + csv],
+    {type:'text/csv;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -3726,6 +3734,40 @@ async function exportJournal(){
     });
     downloadCsv('PaySync_journal_' + stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.csv', out);
     toast(res.rows.length + ' postings exported' + (res.batchRef ? ' — batch ' + res.batchRef : ' as a draft') + '.');
+  }catch(err){
+    toast(String(err.message || err), true);
+  }finally{
+    STATE.busy = null;
+    render();
+  }
+}
+
+/* The same journal in the shape Dynamics 365's general journal import expects.
+   Its columns, their order and their spelling are fixed by D365, so the file is
+   built from the column list the server sends rather than assembled here — the
+   two cannot drift.
+
+   Deliberately written without a UTF-8 BOM, unlike the other exports. Those are
+   opened in Excel and need it for the naira sign; this one is read by an
+   importer, where a BOM would land inside the first column name. */
+async function exportD365(){
+  STATE.busy = 'Building the D365 file';
+  render();
+  try{
+    const f = STATE.jnl;
+    const res = await rpc('getD365Export', {
+      period: STATE.period,
+      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit}
+    });
+    const out = [res.columns];
+    res.rows.forEach(function(r){
+      out.push(res.columns.map(function(c){ return r[c]; }));
+    });
+    downloadCsv('D365_' + res.config.journalName.replace(/[^A-Za-z0-9-]/g, '') + '_' +
+      stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.csv', out, {bom:false});
+    toast(res.rows.length + ' line(s) exported for D365' +
+      (res.source === 'posted' ? ' — batch ' + res.batchRef : ' as a draft') + '.' +
+      (res.missingAccount ? ' ' + res.missingAccount + ' have no loan account.' : ''));
   }catch(err){
     toast(String(err.message || err), true);
   }finally{
@@ -4208,6 +4250,7 @@ async function handleAction(act, arg, ev, el){
       case 'export-register': return exportRegister(arg);
       case 'export-changes': return exportChanges();
       case 'export-journal': return exportJournal();
+      case 'export-d365': return exportD365();
       case 'export-history': return exportHistory();
       case 'export-schemes': return exportSchemes();
       case 'export-proration': return exportProration();
