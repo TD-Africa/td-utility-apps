@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = '2026-08-28.4';
+const STOCKFLOW_BUILD = '2026-08-28.5';
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -873,14 +873,20 @@ const CSV_FIELD_ALIASES = {
   item: 'item', itemnumber: 'item', partnumber: 'item', partno: 'item', sku: 'item', part: 'item',
   type: 'type', txntype: 'type', transactiontype: 'type', movement: 'type', movementtype: 'type',
   qty: 'qty', quantity: 'qty', units: 'qty',
-  fob: 'fob', fobprice: 'fob', unitfob: 'fob', unitfobprice: 'fob', costprice: 'fob',
+  fob: 'fob', fobprice: 'fob', unitfob: 'fob', unitfobprice: 'fob',
+  costprice: 'fob', cost: 'fob', unitcost: 'fob', unitcostprice: 'fob', buyingprice: 'fob',
+  name: 'name', description: 'name', productname: 'name', product: 'name', productdescription: 'name',
   location: 'location', warehouse: 'location', wh: 'location',
   fromlocation: 'location', fromwarehouse: 'location', from: 'location',
   tolocation: 'toLocation', towarehouse: 'toLocation', destination: 'toLocation',
   moveto: 'toLocation', to: 'toLocation',
-  ref: 'ref', reference: 'ref', po: 'ref', ponumber: 'ref', invoice: 'ref', invoiceno: 'ref',
+  ref: 'ref', reference: 'ref', remark: 'ref', remarks: 'ref',
+  po: 'ref', ponumber: 'ref', invoice: 'ref', invoiceno: 'ref',
+  /* No longer in the template — a sale row does not have to carry one.
+     Still read if a file includes it, because it is what makes achieved
+     margin reportable. */
   sellprice: 'sellPrice', sellingprice: 'sellPrice', unitsellingprice: 'sellPrice',
-  saleprice: 'sellPrice', unitprice: 'sellPrice',
+  saleprice: 'sellPrice',
   notes: 'notes', note: 'notes', comment: 'notes', comments: 'notes'
 };
 
@@ -908,8 +914,8 @@ function csvToObjects(text){
       '. Download the template to get the right shape.'};
   }
   const unknown = fields.filter(function(f, i){
-    return raw[i] && ['date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes']
-      .indexOf(f) < 0;
+    return raw[i] && ['date', 'item', 'name', 'type', 'qty', 'fob', 'location', 'toLocation',
+      'ref', 'sellPrice', 'notes'].indexOf(f) < 0;
   });
 
   const out = rows.slice(1)
@@ -1719,12 +1725,17 @@ function flowNode(cls, label, value, sub){
 /* ============================================================
    SCREEN: Transactions Ledger
    ============================================================ */
+/* `name` is here so whoever fills the file can see what they are typing
+   against — it is checked against the item master and never used to
+   change it. `cost price` is the unit FOB under a plainer name, and
+   `remark` is the reference. Both are aliases; the stored columns are
+   unchanged, so every row already on the ledger still reads correctly. */
 const BULK_TEMPLATE_ROWS = [
-  ['date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'sellPrice'],
-  ['2026-08-25', '9G158ET', 'Ship-to-GIT', '20', '', '', '', 'PO-4471', ''],
-  ['2026-08-25', 'D79E6EA', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', ''],
-  ['2026-09-02', '9G158ET', 'Receive-to-MainWH', '20', '', 'TD MW', '', 'ASN-1123', ''],
-  ['2026-09-05', '9G158ET', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '799.00']
+  ['date', 'item', 'name', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231'],
+  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123'],
+  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981']
 ];
 
 /* The template as a file. Same rows the Copy button puts on the
@@ -1775,9 +1786,9 @@ function viewLedger(){
           '</select></div>' +
         '<div class="field"><label>Qty</label>' +
           '<input type="number" id="f-qty" min="0" step="any" placeholder="e.g. 10"></div>' +
-        '<div class="field" id="f-fob-wrap"><label>Unit FOB $</label>' +
+        '<div class="field" id="f-fob-wrap"><label>Cost price $ (unit FOB)</label>' +
           '<input type="number" id="f-fob" min="0" step="any" placeholder="e.g. 750.00"></div>' +
-        '<div class="field"><label>Reference</label>' +
+        '<div class="field"><label>Remark</label>' +
           '<input type="text" id="f-ref" placeholder="PO / ASN / Invoice #"></div>' +
         '<div class="field" id="f-loc-wrap"><label>Warehouse</label>' +
           '<select id="f-location" data-keep-value="1">' + locationOptions('', 'Not specified') + '</select></div>' +
@@ -1834,12 +1845,19 @@ function viewBulkPanel(){
           ? '<br>This file covers <b>' + esc(p.brands.join(', ')) + '</b>, across ' +
             p.itemCount + ' item' + (p.itemCount === 1 ? '' : 's') + '.'
           : '') +
+        (p.warningCount
+          ? '<br><span style="color:var(--amber);">' + p.warningCount + ' row' +
+            (p.warningCount === 1 ? '' : 's') + ' name a product that does not match the part ' +
+            'number. They will still import — check them below first.</span>'
+          : '') +
       '</div></div>' +
       '<div class="table-wrap" data-keep-scroll="bulk" style="max-height:300px;overflow-y:auto;margin-bottom:12px;">' +
-        '<table><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Type</th><th class="num">Qty</th>' +
-        '<th class="num">FOB</th><th>Where</th><th>Ref</th><th>Status</th></tr></thead><tbody>' +
+        '<table><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Product</th><th>Type</th>' +
+        '<th class="num">Qty</th><th class="num">Cost</th><th>Where</th><th>Remark</th>' +
+        '<th>Status</th></tr></thead><tbody>' +
         p.rows.map(function(r){
           return '<tr><td>' + r.line + '</td><td>' + esc(r.date || '—') + '</td><td><b>' + esc(r.item || '—') + '</b></td>' +
+            '<td class="wrap">' + esc(r.name || '') + '</td>' +
             '<td>' + esc(r.type || '—') + '</td><td class="num">' + esc(String(r.qty || '—')) + '</td>' +
             '<td class="num">' + (r.fob ? esc(String(r.fob)) : '—') + '</td>' +
             '<td>' + esc([r.location, r.toLocation].filter(Boolean).join(' → ')) + '</td>' +
@@ -1849,7 +1867,15 @@ function viewBulkPanel(){
                that somebody can act on what it says. */
             '<td class="wrap" style="max-width:none;min-width:280px;">' + (r.status === 'ok'
               ? '<span style="color:var(--green);font-weight:600;">OK</span>'
-              : '<span style="color:var(--red)">' + esc(r.errors.join('; ')) + '</span>') + '</td></tr>';
+              : '<span style="color:var(--red)">' + esc(r.errors.join('; ')) + '</span>') +
+              /* A description that does not match is not a reason to refuse
+                 the row — but it is very often a transposed part number,
+                 so it is put in front of someone before they commit. */
+              ((r.warnings && r.warnings.length)
+                ? '<div style="color:var(--amber);margin-top:4px;">' +
+                  esc(r.warnings.join('; ')) + '</div>'
+                : '') +
+            '</td></tr>';
         }).join('') +
         '</tbody></table></div>' +
       '<div class="btn-row">' +
@@ -1888,10 +1914,11 @@ function viewBulkPanel(){
     '<textarea id="bulk-paste" data-keep-value="1" rows="4" ' +
       'placeholder="date,item,type,qty,fob,location,toLocation,ref,sellPrice"></textarea>' +
     '<div style="font-size:11px;color:var(--text-faint);margin:10px 0 12px 0;">' +
-      'Columns: <b>date</b> (YYYY-MM-DD), <b>item</b>, <b>type</b> (' +
-      esc((STATE.data.txnTypes || []).join(' / ')) + '), <b>qty</b>, ' +
-      '<b>fob</b> (required for Purchase-Backlog and Opening Balance-MainWH), ' +
-      '<b>location</b> / <b>toLocation</b> (warehouse codes), <b>ref</b>, <b>sellPrice</b> (sales only). ' +
+      'Columns: <b>date</b> (YYYY-MM-DD), <b>item</b> (part number), <b>name</b> (the product — ' +
+      'checked against the item master, never used to change it), <b>type</b>, <b>qty</b>, ' +
+      '<b>cost price</b> (the unit cost — required for a purchase or an opening balance), ' +
+      '<b>location</b> / <b>toLocation</b> (warehouse codes), <b>remark</b>. ' +
+      'Add a <b>sellPrice</b> column on sales if you want achieved margin reported. ' +
       'Column order does not matter; the header row does.' +
     '</div>' +
     preview +
@@ -1977,7 +2004,7 @@ function viewLedgerHistory(){
       types.map(function(t){
         return '<option value="' + attr(t) + '"' + (v.type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
       }).join('') + '</select></div>' +
-    '<div class="field"><label>Search reference, notes, who</label>' +
+    '<div class="field"><label>Search remark, notes, who</label>' +
       '<input type="text" id="lf-search" data-keep-value="1" placeholder="PO-4471, INV-, a name…" value="' + attr(v.search) + '"></div>' +
     '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="lf-clear">Clear</button></div>' +
   '</div>';
@@ -1993,9 +2020,9 @@ function viewLedgerHistory(){
     body = '<div class="table-wrap" data-keep-scroll="ledger">' +
       '<table><thead><tr>' +
         '<th>Date</th><th>Item</th>' + (showBrandColumn() ? '<th>Brand</th>' : '') +
-        '<th>Type</th><th class="num">Qty</th><th class="num">FOB $</th>' +
+        '<th>Type</th><th class="num">Qty</th><th class="num">Cost $</th>' +
         '<th>Where</th><th class="num">Sell $</th><th class="num">Cost of sale</th>' +
-        '<th>Reference</th><th>Posted by</th><th></th>' +
+        '<th>Remark</th><th>Posted by</th><th></th>' +
       '</tr></thead><tbody>' +
       d.rows.map(function(r){
         const canReverse = STATE.perms.ledger && !r.voided && r.type !== 'Reversal';
@@ -2373,7 +2400,7 @@ function viewItemMaster(){
         sortableTh('itemmaster', 'item', 'Item') +
         '<th>Product</th>' +
         sortableTh('itemmaster', 'category', 'Category') +
-        sortableTh('itemmaster', 'weightedFob', 'Weighted avg FOB', true) +
+        sortableTh('itemmaster', 'weightedFob', 'Weighted avg cost (FOB)', true) +
         '<th class="num">FOB override</th>' +
         sortableTh('itemmaster', 'effectiveFob', 'Effective FOB', true) +
         sortableTh('itemmaster', 'landedPct', 'Landed %', true) +
@@ -3669,9 +3696,11 @@ function bindLedger(){
   on('#bulk-export-errors', 'click', function(){
     const rows = ((STATE.bulk.preview || {}).rows || []).filter(function(r){ return r.status !== 'ok'; });
     download('stockflow-refused-rows.csv', toCsv(
-      [['line', 'date', 'item', 'type', 'qty', 'fob', 'location', 'toLocation', 'ref', 'why it was refused']]
+      [['line', 'date', 'item', 'name', 'type', 'qty', 'cost price', 'location', 'toLocation',
+        'remark', 'why it was refused']]
         .concat(rows.map(function(r){
-          return [r.line, r.date, r.item, r.type, r.qty, r.fob, r.location, r.toLocation, r.ref, r.errors.join('; ')];
+          return [r.line, r.date, r.item, r.name, r.type, r.qty, r.fob, r.location, r.toLocation,
+            r.ref, r.errors.join('; ')];
         }))));
   });
 }
