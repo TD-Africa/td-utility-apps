@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = '2026-08-28.6';
+const STOCKFLOW_BUILD = "2026-08-28.7";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -679,7 +679,7 @@ const STATE = {
   },
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
-         rawText: null, dateOrder: null, dateInfo: null, createMissingItems: false},
+         rawText: null, dateOrder: null, dateInfo: null, createMissingItems: null},
   itemImport: {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true}
 };
 
@@ -1924,14 +1924,15 @@ function viewBulkPanel(){
     '<label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:8px;' +
       'margin:2px 0 10px 0;">' +
       '<input type="checkbox" id="bulk-create-items" data-keep-value="1" style="width:auto;"' +
-      (b.createMissingItems ? ' checked' : '') + '> ' +
-      'Create part numbers that are not in the item master yet' +
+      (autoCreateItems() ? ' checked' : '') + '> ' +
+      'Create part numbers that are new' +
     '</label>' +
     '<div style="font-size:11px;color:var(--text-faint);margin:0 0 12px 0;">' +
-      'Off by default, because a mistyped part number would become a new SKU and split that ' +
-      'product\'s stock across two codes. With it on, a new code needs a <b>name</b> and a ' +
-      '<b>category</b> in the file — the category is what decides its landed cost — and the ' +
-      'preview lists every one before anything is created. They are flagged for review afterwards.' +
+      'On, so a movement is never blocked because the part number has not been set up yet. ' +
+      'Include <b>name</b> and <b>category</b> columns and they are used; leave them out and the ' +
+      'item is still created, flagged for review, and costed at 0% landed until an Admin sets its ' +
+      'category. The preview lists every code it will create. Untick this to have unknown codes ' +
+      'refused instead.' +
     '</div>' +
     '<div style="font-size:11px;color:var(--text-faint);margin:10px 0 12px 0;">' +
       'Columns: <b>date</b> (YYYY-MM-DD), <b>item</b> (part number), <b>name</b> (the product — ' +
@@ -2005,6 +2006,16 @@ function dateNotice(b){
       ' <button class="link-btn" id="flip-date-order">Read them as ' +
       esc(dateOrderLabel(other)) + ' instead</button>' +
     '</div></div>';
+}
+
+/* null in state means "whatever the workbook is set to"; ticking or
+   unticking on this upload overrides it for this upload only. */
+function autoCreateItems(){
+  if(STATE.bulk.createMissingItems !== null && STATE.bulk.createMissingItems !== undefined){
+    return !!STATE.bulk.createMissingItems;
+  }
+  const s = (STATE.data && STATE.data.settings) || {};
+  return s.autoCreateItems !== false;
 }
 
 function viewLedgerHistory(){
@@ -3784,7 +3795,7 @@ async function checkBulk(text, fileName){
   try{
     const preview = await rpc('bulkPostTransactions', {
       rows: STATE.bulk.rows, dryRun: true, skipInvalid: true,
-      createMissingItems: !!STATE.bulk.createMissingItems
+      createMissingItems: autoCreateItems()
     });
     STATE.bulk.preview = preview;
     STATE.bulk.busy = false;
@@ -3809,7 +3820,7 @@ async function commitBulk(force){
     const res = await mutate('bulkPostTransactions', {
       rows: STATE.bulk.rows,
       skipInvalid: skipEl ? skipEl.checked : STATE.bulk.skipInvalid,
-      createMissingItems: !!STATE.bulk.createMissingItems,
+      createMissingItems: autoCreateItems(),
       force: !!force || !!(STATE.bulk.preview && STATE.bulk.preview.duplicateBatch)
     });
     STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
