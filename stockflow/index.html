@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = '2026-08-28.5';
+const STOCKFLOW_BUILD = '2026-08-28.6';
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -679,7 +679,7 @@ const STATE = {
   },
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
-         rawText: null, dateOrder: null, dateInfo: null},
+         rawText: null, dateOrder: null, dateInfo: null, createMissingItems: false},
   itemImport: {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true}
 };
 
@@ -876,6 +876,7 @@ const CSV_FIELD_ALIASES = {
   fob: 'fob', fobprice: 'fob', unitfob: 'fob', unitfobprice: 'fob',
   costprice: 'fob', cost: 'fob', unitcost: 'fob', unitcostprice: 'fob', buyingprice: 'fob',
   name: 'name', description: 'name', productname: 'name', product: 'name', productdescription: 'name',
+  category: 'category', productcategory: 'category', brand: 'brand', b2b: 'b2b',
   location: 'location', warehouse: 'location', wh: 'location',
   fromlocation: 'location', fromwarehouse: 'location', from: 'location',
   tolocation: 'toLocation', towarehouse: 'toLocation', destination: 'toLocation',
@@ -914,8 +915,8 @@ function csvToObjects(text){
       '. Download the template to get the right shape.'};
   }
   const unknown = fields.filter(function(f, i){
-    return raw[i] && ['date', 'item', 'name', 'type', 'qty', 'fob', 'location', 'toLocation',
-      'ref', 'sellPrice', 'notes'].indexOf(f) < 0;
+    return raw[i] && ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty', 'fob',
+      'location', 'toLocation', 'ref', 'sellPrice', 'notes'].indexOf(f) < 0;
   });
 
   const out = rows.slice(1)
@@ -1731,11 +1732,11 @@ function flowNode(cls, label, value, sub){
    `remark` is the reference. Both are aliases; the stored columns are
    unchanged, so every row already on the ledger still reads correctly. */
 const BULK_TEMPLATE_ROWS = [
-  ['date', 'item', 'name', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark'],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472'],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231'],
-  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123'],
-  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981']
+  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231'],
+  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123'],
+  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981']
 ];
 
 /* The template as a file. Same rows the Copy button puts on the
@@ -1845,6 +1846,13 @@ function viewBulkPanel(){
           ? '<br>This file covers <b>' + esc(p.brands.join(', ')) + '</b>, across ' +
             p.itemCount + ' item' + (p.itemCount === 1 ? '' : 's') + '.'
           : '') +
+        ((p.newItems && p.newItems.length)
+          ? '<br><span style="color:var(--amber);">' + p.newItems.length +
+            ' new part number' + (p.newItems.length === 1 ? '' : 's') +
+            ' will be created: <b>' +
+            esc(p.newItems.map(function(n){ return n.item; }).join(', ')) +
+            '</b>. They are flagged for review once added.</span>'
+          : '') +
         (p.warningCount
           ? '<br><span style="color:var(--amber);">' + p.warningCount + ' row' +
             (p.warningCount === 1 ? '' : 's') + ' name a product that does not match the part ' +
@@ -1912,10 +1920,23 @@ function viewBulkPanel(){
           (b.busy ? 'Checking…' : 'Check pasted rows') + '</button></div>' +
     '</div>' +
     '<textarea id="bulk-paste" data-keep-value="1" rows="4" ' +
-      'placeholder="date,item,type,qty,fob,location,toLocation,ref,sellPrice"></textarea>' +
+      'placeholder="date,item,name,category,type,qty,cost price,location,toLocation,remark"></textarea>' +
+    '<label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:8px;' +
+      'margin:2px 0 10px 0;">' +
+      '<input type="checkbox" id="bulk-create-items" data-keep-value="1" style="width:auto;"' +
+      (b.createMissingItems ? ' checked' : '') + '> ' +
+      'Create part numbers that are not in the item master yet' +
+    '</label>' +
+    '<div style="font-size:11px;color:var(--text-faint);margin:0 0 12px 0;">' +
+      'Off by default, because a mistyped part number would become a new SKU and split that ' +
+      'product\'s stock across two codes. With it on, a new code needs a <b>name</b> and a ' +
+      '<b>category</b> in the file — the category is what decides its landed cost — and the ' +
+      'preview lists every one before anything is created. They are flagged for review afterwards.' +
+    '</div>' +
     '<div style="font-size:11px;color:var(--text-faint);margin:10px 0 12px 0;">' +
       'Columns: <b>date</b> (YYYY-MM-DD), <b>item</b> (part number), <b>name</b> (the product — ' +
       'checked against the item master, never used to change it), <b>type</b>, <b>qty</b>, ' +
+      '<b>category</b> (only needed for a part number that is new), <b>type</b>, <b>qty</b>, ' +
       '<b>cost price</b> (the unit cost — required for a purchase or an opening balance), ' +
       '<b>location</b> / <b>toLocation</b> (warehouse codes), <b>remark</b>. ' +
       'Add a <b>sellPrice</b> column on sales if you want achieved margin reported. ' +
@@ -3684,6 +3705,13 @@ function bindLedger(){
     if(STATE.bulk.rawText) checkBulk(STATE.bulk.rawText);
   });
   on('#bulk-skip', 'change', function(e){ STATE.bulk.skipInvalid = e.target.checked; });
+  on('#bulk-create-items', 'change', function(e){
+    STATE.bulk.createMissingItems = e.target.checked;
+    /* Re-check straight away: what the preview says is valid changes
+       entirely with this on, and a stale preview is worse than none. */
+    if(STATE.bulk.rawText) checkBulk(STATE.bulk.rawText);
+    else render();
+  });
   on('#bulk-cancel', 'click', function(){
     STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
       ignored: null, fileName: null, delimiter: null, lastBatchId: null,
@@ -3754,8 +3782,10 @@ async function checkBulk(text, fileName){
   STATE.bulk.rows = dated.rows;
   STATE.bulk.ignored = parsed.ignoredColumns;
   try{
-    const preview = await rpc('bulkPostTransactions',
-      {rows: STATE.bulk.rows, dryRun: true, skipInvalid: true});
+    const preview = await rpc('bulkPostTransactions', {
+      rows: STATE.bulk.rows, dryRun: true, skipInvalid: true,
+      createMissingItems: !!STATE.bulk.createMissingItems
+    });
     STATE.bulk.preview = preview;
     STATE.bulk.busy = false;
     if(preview.duplicateBatch){
@@ -3779,6 +3809,7 @@ async function commitBulk(force){
     const res = await mutate('bulkPostTransactions', {
       rows: STATE.bulk.rows,
       skipInvalid: skipEl ? skipEl.checked : STATE.bulk.skipInvalid,
+      createMissingItems: !!STATE.bulk.createMissingItems,
       force: !!force || !!(STATE.bulk.preview && STATE.bulk.preview.duplicateBatch)
     });
     STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
@@ -3787,7 +3818,10 @@ async function commitBulk(force){
     const paste = document.getElementById('bulk-paste');
     if(paste) paste.value = '';
     STATE.bulk.lastBatchId = res.batchId;
-    toast(res.imported + ' movement(s) imported' + (res.skipped ? ', ' + res.skipped + ' skipped' : ''));
+    toast(res.imported + ' movement(s) imported' +
+      ((res.createdItems && res.createdItems.length)
+        ? ', ' + res.createdItems.length + ' new part number(s) created' : '') +
+      (res.skipped ? ', ' + res.skipped + ' skipped' : ''));
     await refreshData();
     await loadLedger();
     await loadImports();
