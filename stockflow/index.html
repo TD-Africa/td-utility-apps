@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = '2026-08-28.3';
+const STOCKFLOW_BUILD = '2026-08-28.4';
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -1419,7 +1419,8 @@ const NAV = [
   {group: 'Cost & Pricing', items: [
     {id: 'itemmaster', label: 'Item Master'},
     {id: 'simulator', label: 'Selling Price Simulator'},
-    {id: 'category', label: 'Category Settings'}
+    {id: 'category', label: 'Category Settings'},
+    {id: 'types', label: 'Movement Types'}
   ]},
   {group: 'Other', items: [
     {id: 'b2b', label: 'B2B Stock'},
@@ -1438,6 +1439,7 @@ const TAB_META = {
   itemmaster: {title: 'Item Master', sub: 'Category, cost build-up and live quantities per part number'},
   simulator: {title: 'Selling Price Simulator', sub: 'Global, category or SKU-level margin scenarios'},
   category: {title: 'Category Settings', sub: 'Landed cost % applied per category'},
+  types: {title: 'Movement Types', sub: 'What kinds of stock movement can be recorded, and what each does'},
   b2b: {title: 'B2B Stock', sub: 'Reseller-owned, fixed cost & price — excluded from averaging'},
   analytics: {title: 'Analytics', sub: 'Value, mix and ageing across the whole position'},
   audit: {title: 'Audit Trail', sub: 'Who changed which cost or price, when, and from what to what'},
@@ -1571,7 +1573,8 @@ function renderTab(){
   const renderers = {
     overview: viewOverview, ledger: viewLedger, git: viewGit, mainwh: viewMainWh,
     consolidated: viewConsolidated, itemmaster: viewItemMaster, simulator: viewSimulator,
-    category: viewCategory, b2b: viewB2B, analytics: viewAnalytics, audit: viewAudit, access: viewAccess
+    category: viewCategory, types: viewTypes, b2b: viewB2B,
+    analytics: viewAnalytics, audit: viewAudit, access: viewAccess
   };
   const fn = renderers[STATE.tab] || viewOverview;
   try{
@@ -1764,7 +1767,11 @@ function viewLedger(){
           '</datalist></div>' +
         '<div class="field"><label>Type</label>' +
           '<select id="f-type" data-keep-value="1">' +
-            types.map(function(t){ return '<option value="' + attr(t) + '">' + esc(t) + '</option>'; }).join('') +
+            types.map(function(code){
+              const def = ((STATE.data.movementTypes || [])
+                .filter(function(t){ return t.code === code; })[0]) || {};
+              return '<option value="' + attr(code) + '">' + esc(def.label || code) + '</option>';
+            }).join('') +
           '</select></div>' +
         '<div class="field"><label>Qty</label>' +
           '<input type="number" id="f-qty" min="0" step="any" placeholder="e.g. 10"></div>' +
@@ -2647,6 +2654,81 @@ function viewCategory(){
 }
 
 /* ============================================================
+   SCREEN: Movement Types
+   ============================================================ */
+function viewTypes(){
+  const editable = STATE.perms.items;
+  const types = STATE.data.movementTypes || [];
+  const behaviours = STATE.data.behaviours || [];
+
+  return '<div class="banner info"><div>i</div><div><b>A movement type is not just a label — it is ' +
+    'behaviour.</b> Each one says what happens to stock: goes on order, ships, lands, leaves, moves ' +
+    'between warehouses. You can add as many as you need, but each has to be one of the seven things ' +
+    'the engine can actually do, because that is what makes it safe to add one without touching the ' +
+    'stock calculations.</div></div>' +
+
+    (editable ? '' : lockedNote('Only an Admin can add or change a movement type.')) +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">Movement Types' +
+        '<span>' + types.filter(function(t){ return t.active; }).length + ' in use' +
+        (types.some(function(t){ return !t.active; })
+          ? ', ' + types.filter(function(t){ return !t.active; }).length + ' retired' : '') +
+        '</span></div>' +
+        (editable ? '<button class="btn sm" id="add-type">Add a type</button>' : '') +
+      '</div>' +
+      '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Shown as</th><th>Code</th><th>What it does to stock</th>' +
+        '<th>Counts as a sale</th><th>Needs</th><th>Status</th>' + (editable ? '<th></th>' : '') +
+      '</tr></thead><tbody>' +
+      (types.length ? types.map(function(t){
+        const needs = [];
+        if(t.requiresFob) needs.push('FOB price');
+        if(t.requiresLocation) needs.push(t.requiresToLocation ? 'from-warehouse' : 'warehouse');
+        if(t.requiresToLocation) needs.push('to-warehouse');
+        return '<tr' + (t.active ? '' : ' style="opacity:.55;"') + '>' +
+          '<td><b>' + esc(t.label) + '</b></td>' +
+          '<td><span class="unknown">' + esc(t.code) + '</span></td>' +
+          '<td class="wrap" style="max-width:none;min-width:260px;">' + esc(t.behaviourLabel) + '</td>' +
+          '<td>' + (t.isSale
+            ? '<span style="color:var(--green);font-weight:600;">yes</span>'
+            : '<span class="unknown">no</span>') + '</td>' +
+          '<td class="wrap">' + (needs.length ? esc(needs.join(', ')) : '<span class="unknown">—</span>') + '</td>' +
+          '<td>' + (t.active
+            ? '<span style="color:var(--green)">in use</span>'
+            : '<span style="color:var(--amber)">retired</span>') +
+            (t.builtIn ? ' <span class="tag">built in</span>' : '') + '</td>' +
+          (editable
+            ? '<td><button class="btn secondary sm" data-edittype="' + attr(t.code) + '">Edit</button></td>'
+            : '') +
+        '</tr>';
+      }).join('') : emptyRow(editable ? 7 : 6, 'No movement types.')) +
+      '</tbody></table></div>' +
+      '<div style="font-size:11.5px;color:var(--text-faint);margin-top:12px;">' +
+        'The seven built-in movements can be reworded but not re-behaved or removed — every row already ' +
+        'on the ledger was recorded under them. A type you have added can be deleted while nothing has ' +
+        'used it; once it has, retire it instead and the history stays intact.' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<div class="panel-head"><div class="panel-title">The seven things the engine can do' +
+        '<span>every type is one of these</span></div></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Behaviour</th><th>What happens</th>' +
+      '<th>Used by</th></tr></thead><tbody>' +
+      behaviours.map(function(b){
+        const users = types.filter(function(t){ return t.behaviour === b.id; })
+          .map(function(t){ return t.label; });
+        return '<tr><td><span class="unknown">' + esc(b.id) + '</span></td>' +
+          '<td class="wrap" style="max-width:none;">' + esc(b.label) + '</td>' +
+          '<td class="wrap">' + (users.length ? esc(users.join(', ')) : '<span class="unknown">nothing yet</span>') +
+          '</td></tr>';
+      }).join('') +
+      '</tbody></table></div>' +
+    '</div>';
+}
+
+/* ============================================================
    SCREEN: B2B
    ============================================================ */
 function viewB2B(){
@@ -3138,6 +3220,59 @@ function renderModal(){
           (m.busy ? 'Saving…' : (editing ? 'Save changes' : 'Add item')) + '</button>' +
       '</div>';
 
+  }else if(m.kind === 'type'){
+    const editing = !!m.code;
+    const t = editing
+      ? ((STATE.data.movementTypes || []).filter(function(x){ return x.code === m.code; })[0] || {})
+      : {};
+    const behaviours = STATE.data.behaviours || [];
+    const chosen = m.behaviour || t.behaviour || 'out-mainwh';
+    const consumes = (chosen === 'out-mainwh' || chosen === 'out-git');
+    inner =
+      '<div class="modal-head"><div class="modal-title">' +
+        (editing ? 'Edit ' + esc(t.label || m.code) : 'Add a movement type') + '</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="modal-sub">' + (editing && t.builtIn
+        ? 'This is one of the seven movements Stockflow is built on. You can change how it is worded; ' +
+          'what it does to stock is fixed, because every row already on the ledger was recorded under it.'
+        : 'A type has to say what it does to stock. That is what lets you add one without anyone ' +
+          'touching the stock calculations — and what stops a movement nothing knows how to apply.') +
+      '</div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Code (what appears on the ledger)</label>' +
+        '<input type="text" id="type-code" placeholder="e.g. Write-off-Damaged" ' +
+          'value="' + attr(editing ? m.code : '') + '"' + (editing ? ' disabled' : '') + '></div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Shown as (what people pick from the list)</label>' +
+        '<input type="text" id="type-label" placeholder="e.g. Write-off — damaged" ' +
+          'value="' + attr(t.label || '') + '"></div>' +
+      '<div class="field" style="margin-bottom:6px;"><label>What does it do to stock?</label>' +
+        '<select id="type-behaviour"' + ((editing && t.builtIn) ? ' disabled' : '') + '>' +
+          behaviours.map(function(b){
+            return '<option value="' + attr(b.id) + '"' + (chosen === b.id ? ' selected' : '') + '>' +
+              esc(b.label) + '</option>';
+          }).join('') +
+        '</select></div>' +
+      (consumes
+        ? '<label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:8px;margin-top:10px;">' +
+          '<input type="checkbox" id="type-issale" style="width:auto;"' + (t.isSale ? ' checked' : '') + '> ' +
+          'This is a sale — it should count towards sold units, revenue and achieved margin</label>' +
+          '<div style="font-size:11px;color:var(--text-faint);margin-top:6px;">' +
+          'Leave it unticked for a write-off, damage or a count shortfall: the stock leaves, but ' +
+          'counting it as sold would flatter the sold figure with stock nobody paid for. ' +
+          'It is reported as written off instead.</div>'
+        : '<div style="font-size:11px;color:var(--text-faint);margin-top:6px;">' +
+          'Only a movement that takes stock out can be a sale.</div>') +
+      (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error) + '</div>' : '') +
+      '<div class="modal-actions">' +
+        (editing && !t.builtIn
+          ? '<button class="btn danger" id="type-delete">Delete</button>' +
+            '<button class="btn secondary" id="type-retire">' +
+            (t.active ? 'Retire' : 'Put back in use') + '</button>'
+          : '') +
+        '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
+        '<button class="btn" id="type-save"' + (m.busy ? ' disabled' : '') + '>' +
+          (m.busy ? 'Saving…' : (editing ? 'Save' : 'Add type')) + '</button>' +
+      '</div>';
+
   }else if(m.kind === 'brand'){
     inner = brandModal();
 
@@ -3255,6 +3390,7 @@ function bindHandlers(){
   bindItemMaster();
   bindSimulator();
   bindCategory();
+  bindTypes();
   bindB2B();
   bindAnalytics();
   bindAudit();
@@ -3943,6 +4079,15 @@ function bindCategory(){
   });
 }
 
+/* ---------------- Movement types ---------------- */
+function bindTypes(){
+  if(STATE.tab !== 'types' || !STATE.perms.items) return;
+  on('#add-type', 'click', function(){ openModal({kind: 'type'}); });
+  on('[data-edittype]', 'click', function(e){
+    openModal({kind: 'type', code: e.currentTarget.dataset.edittype});
+  });
+}
+
 /* ---------------- B2B ---------------- */
 function bindB2B(){
   if(STATE.tab !== 'b2b' || !STATE.perms.b2b) return;
@@ -4055,6 +4200,51 @@ function bindModalActions(){
     }catch(err){
       m.busy = false; m.error = diagnose(err).detail; render();
     }
+  });
+
+  on('#type-behaviour', 'change', function(e){
+    /* The sale question only applies to a movement that takes stock out,
+       so the form has to redraw when the behaviour changes. */
+    m.behaviour = e.target.value;
+    render();
+  });
+
+  on('#type-save', 'click', async function(){
+    const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
+    const chk = function(id){ const el = document.getElementById(id); return !!(el && el.checked); };
+    const data = {label: val('type-label'), behaviour: val('type-behaviour'), isSale: chk('type-issale')};
+    m.busy = true; m.error = null; render();
+    try{
+      if(m.code) await mutate('updateMovementType', {code: m.code, data: data});
+      else await mutate('addMovementType', {data: Object.assign({code: val('type-code')}, data)});
+      STATE.modal = null;
+      toast(m.code ? 'Movement type updated' : 'Movement type added — it is in the list now');
+      await refreshData();
+    }catch(err){
+      m.busy = false; m.error = diagnose(err).detail; render();
+    }
+  });
+
+  on('#type-retire', 'click', async function(){
+    const t = ((STATE.data.movementTypes || []).filter(function(x){ return x.code === m.code; })[0] || {});
+    m.busy = true; m.error = null; render();
+    try{
+      await mutate('updateMovementType', {code: m.code, data: {active: !t.active}});
+      STATE.modal = null;
+      toast(t.active ? m.code + ' retired — history is untouched' : m.code + ' is back in use');
+      await refreshData();
+    }catch(err){ m.busy = false; m.error = diagnose(err).detail; render(); }
+  });
+
+  on('#type-delete', 'click', async function(){
+    if(!confirm('Delete ' + m.code + '? This only works while nothing has ever been recorded under it.')) return;
+    m.busy = true; m.error = null; render();
+    try{
+      await mutate('deleteMovementType', {code: m.code});
+      STATE.modal = null;
+      toast(m.code + ' deleted');
+      await refreshData();
+    }catch(err){ m.busy = false; m.error = diagnose(err).detail; render(); }
   });
 
   on('#item-save', 'click', async function(){
