@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-29.1";
+const STOCKFLOW_BUILD = "2026-08-29.3";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -677,6 +677,9 @@ const STATE = {
     itemmaster:   {page: 1, search: '', category: '', flagged: false, sortBy: 'item', sortDir: 'asc'},
     simulator:    {page: 1, search: '', category: '', sortBy: 'item', sortDir: 'asc'}
   },
+  /* Shared by Overview and Analytics: one filter, so switching between
+     the two screens does not silently change the period being read. */
+  activity: {from: '', to: '', item: '', type: '', data: null, loading: false},
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
          rawText: null, dateOrder: null, dateInfo: null, createMissingItems: null},
@@ -1354,6 +1357,19 @@ function locationOptions(selected, allLabel){
   }).join('');
 }
 
+/* Which fields a movement type actually uses. Shared by the entry form
+   and the edit dialog: two copies of this rule would drift, and the one
+   that drifted would be the dialog nobody uses every day. */
+function txnFieldsFor(type){
+  return {
+    fob: type === 'Purchase-Backlog' || type === 'Opening Balance-MainWH',
+    location: type !== 'Purchase-Backlog' && type !== 'Ship-to-GIT',
+    toLocation: type === 'Transfer-MainWH',
+    sellPrice: type === 'Sale-from-GIT' || type === 'Sale-from-MainWH',
+    locLabel: type === 'Transfer-MainWH' ? 'Move from' : 'Warehouse'
+  };
+}
+
 function lockedNote(msg){
   return '<div class="locked-note">🔒 ' + esc(msg) + '</div>';
 }
@@ -1627,8 +1643,8 @@ function renderTab(){
 }
 
 /* Totals used by more than one screen. */
-function totals(){
-  const items = visibleItems();
+function totals(list){
+  const items = list || visibleItems();
   const t = {gitQty: 0, mwQty: 0, backlogQty: 0, soldQty: 0,
     gitValue: 0, mwValue: 0, consolidatedValue: 0, soldValue: 0, costOfSale: 0, skus: 0, b2bSkus: 0};
   items.forEach(function(i){
@@ -1675,13 +1691,15 @@ function brandsWithStock(){
    SCREEN: Overview
    ============================================================ */
 function viewOverview(){
-  const t = totals();
+  const scoped = scopedItems();
+  const scopedNonB2B = scoped.filter(function(i){ return !i.b2b; });
+  const t = totals(scoped);
   const cats = (STATE.data.categories || []).map(function(c){ return c.category; });
   const catValues = cats.map(function(cat){
-    return nonB2B().filter(function(i){ return i.category === cat; })
+    return scopedNonB2B.filter(function(i){ return i.category === cat; })
       .reduce(function(s, i){ return s + i.consolidatedValue; }, 0);
   });
-  const flagged = nonB2B().filter(function(i){ return i.flag && !i.flagResolvedBy; }).length;
+  const flagged = scopedNonB2B.filter(function(i){ return i.flag && !i.flagResolvedBy; }).length;
 
   const dataQuality = [];
   const unknownCost = ((STATE.data.items) || []).filter(function(i){ return i.costUnknown && i.consolidatedQty > 0; });
@@ -1699,6 +1717,8 @@ function viewOverview(){
       ? '<div class="banner"><div>⚠</div><div><b>Worth a look.</b> ' +
         dataQuality.map(esc).join('<br>') + '</div></div>'
       : '') +
+
+    activityFilterBar() +
 
     '<div class="kpi-grid">' +
       kpi('Consolidated Stock Value', fmtMoney0(t.consolidatedValue),
@@ -1741,7 +1761,226 @@ function viewOverview(){
           ['#E3A23D', '#2FBEB0'], {px: 262, centre: '$' + Math.round(t.consolidatedValue / 1000) + 'k',
             fmt: function(v){ return '$' + Math.round(v).toLocaleString('en-US'); }}) + '</div>' +
       '</div>' +
-    '</div>';
+    '</div>' +
+
+    activityPanel({full: false});
+}
+
+/* ============================================================
+   THE MOVEMENT FILTER — Overview and Analytics
+   ------------------------------------------------------------
+   Both screens are a position: what is held right now. A date
+   range and a movement type cannot filter that — there is no
+   such quantity as "Main Warehouse stock, filtered to sales",
+   and a stock level is a point in time rather than a period.
+
+   What they CAN filter is what moved. So the bar drives a
+   movement panel, aggregated on the server over the ledger, and
+   says plainly which part of the screen it governs. An item is
+   the exception: a position for one part number is a real thing,
+   so choosing one scopes the cards as well.
+   ============================================================ */
+
+/* The part numbers the position panels should count. Only the item
+   filter reaches this far, for the reason above. */
+function scopedItems(){
+  const chosen = STATE.activity.item;
+  const all = visibleItems();
+  if(!chosen) return all;
+  return all.filter(function(i){ return i.item === chosen; });
+}
+
+function activityFilterBar(){
+  const a = STATE.activity;
+  /* Every type that exists, not only the postable ones: a type an
+     Admin has since retired still has history, and history you cannot
+     filter to is history you cannot check. */
+  const types = (STATE.data.movementTypes || []);
+  const note = a.item
+    ? 'Date and type filter the movement panel below. The cards and charts show the position ' +
+      'of ' + a.item + ' as at today — a stock level is a point in time, not a period.'
+    : 'Date and type filter the movement panel below. The cards and charts show the position as ' +
+      'at today, for every item — choose an item to narrow those too.';
+
+  return '<div class="filter-bar">' +
+    '<div class="field narrow"><label>From</label>' +
+      '<input type="date" id="af-from" data-keep-value="1" value="' + attr(a.from) + '"></div>' +
+    '<div class="field narrow"><label>To (inclusive)</label>' +
+      '<input type="date" id="af-to" data-keep-value="1" value="' + attr(a.to) + '"></div>' +
+    '<div class="field"><label>Item</label><select id="af-item" data-keep-value="1">' +
+      '<option value="">All items</option>' +
+      visibleItems().map(function(i){
+        return '<option value="' + attr(i.item) + '"' + (a.item === i.item ? ' selected' : '') + '>' +
+          esc(i.item) + (i.name ? ' — ' + esc(i.name) : '') + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="field"><label>Movement type</label><select id="af-type" data-keep-value="1">' +
+      '<option value="">All types</option>' +
+      types.map(function(t){
+        return '<option value="' + attr(t.code) + '"' + (a.type === t.code ? ' selected' : '') + '>' +
+          esc(t.label || t.code) + (t.active === false ? ' (retired)' : '') + '</option>';
+      }).join('') + '</select></div>' +
+    '<div class="field narrow"><label>&nbsp;</label>' +
+      '<button class="btn secondary" id="af-clear">Clear</button></div>' +
+    '<div style="flex:1 1 100%;font-size:11.5px;color:var(--text-faint);margin-top:-2px;">' +
+      esc(note) + '</div>' +
+  '</div>';
+}
+
+/* "1 Aug – 31 Aug 2026", or an honest word when an end is open. */
+function periodLabel(){
+  const a = STATE.activity;
+  if(a.from && a.to) return a.from + ' – ' + a.to;
+  if(a.from) return 'from ' + a.from;
+  if(a.to) return 'up to ' + a.to;
+  return 'all time';
+}
+
+function directionTag(direction){
+  const map = {
+    ordered: ['ordered', 'var(--text-dim)'],
+    in: ['into stock', 'var(--flow)'],
+    out: ['out of stock', 'var(--red)'],
+    move: ['internal move', 'var(--amber)']
+  };
+  const d = map[direction] || map.move;
+  return '<span style="font-size:10.5px;color:' + d[1] + '">' + esc(d[0]) + '</span>';
+}
+
+/* opts.full adds the per-item table; the Overview shows the compact
+   version and Analytics the whole thing. */
+function activityPanel(opts){
+  const o = opts || {};
+  const a = STATE.activity;
+  const d = a.data;
+
+  let body;
+  if(a.loading && !d){
+    body = '<div class="empty-state">Loading…</div>';
+  }else if(!d){
+    body = '<div class="empty-state">No movements loaded yet.</div>';
+  }else if(!d.movements){
+    body = '<div class="empty-state">No movements match these filters.</div>';
+  }else{
+    const chartLabels = d.byPeriod.map(function(p){
+      return d.grouping === 'month' ? p.period : String(p.period).slice(5);
+    });
+    /* Units moved, of every kind — a volume-of-activity chart, not a
+       position. Leaving purchases out made a day on which only orders
+       were placed draw an empty bar, which reads as "nothing happened"
+       on the one screen meant to show that something did. */
+    const chartValues = d.byPeriod.map(function(p){
+      return p.in + p.out + p.moved + p.ordered;
+    });
+
+    body =
+      '<div class="kpi-grid">' +
+        kpi('Movements', fmtNum(d.movements),
+          d.itemsTouched + ' item' + (d.itemsTouched === 1 ? '' : 's') + ' touched', 'var(--flow)') +
+        kpi('Units in', fmtNum(d.unitsIn),
+          d.unitsOrdered ? fmtNum(d.unitsOrdered) + ' more ordered, not yet owned' : 'became owned stock',
+          'var(--flow)') +
+        kpi('Units out', fmtNum(d.unitsOut),
+          d.saleValue ? fmtMoney0(d.saleValue) + ' sold' : 'sold, written off or returned', 'var(--red)') +
+        kpi('Net into stock', (d.netUnits >= 0 ? '+' : '') + fmtNum(d.netUnits),
+          d.margin === null
+            ? (d.unitsMoved ? fmtNum(d.unitsMoved) + ' units moved internally' : 'in less out')
+            : fmtPct(d.margin) + ' margin on what was sold',
+          d.netUnits >= 0 ? 'var(--green)' : 'var(--amber)') +
+      '</div>' +
+
+      (d.byPeriod.length > 1
+        ? '<div style="font-size:11.5px;color:var(--text-faint);margin:2px 0 6px 0;">' +
+            'Units moved per ' + esc(d.grouping) + ', every kind of movement counted once</div>' +
+          '<div class="chart-box" style="margin-bottom:16px;">' +
+          chartBar(chartLabels, chartValues, null,
+            {px: 170, fmt: function(v){ return fmtNum(v) + ' units'; }}) + '</div>'
+        : '') +
+
+      '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Movement type</th><th></th><th class="num">Movements</th>' +
+        '<th class="num">Units</th><th class="num">Value</th>' +
+      '</tr></thead><tbody>' +
+        d.byType.map(function(t){
+          return '<tr>' +
+            '<td><b>' + esc(t.label) + '</b>' +
+              (t.label !== t.type ? '<br><span class="unknown">' + esc(t.type) + '</span>' : '') + '</td>' +
+            '<td>' + directionTag(t.direction) + '</td>' +
+            '<td class="num">' + fmtNum(t.count) + '</td>' +
+            '<td class="num">' + fmtNum(t.qty) + '</td>' +
+            /* A shipment records no money. Showing $0 would read as a
+               loss rather than as a figure that was never captured. */
+            '<td class="num">' + (t.saleValue
+              ? fmtMoney0(t.saleValue) + '<br><span class="unknown">cost ' + fmtMoney0(t.costOfSale) + '</span>'
+              : (t.value === null
+                ? '<span class="unknown">not priced</span>'
+                : fmtMoney0(t.value))) + '</td>' +
+          '</tr>';
+        }).join('') +
+      '</tbody></table></div>' +
+
+      (d.valueUnknownRows
+        ? '<div style="font-size:11.5px;color:var(--text-faint);margin-top:10px;">' +
+          fmtNum(d.valueUnknownRows) + ' of these movements carry no price of their own — a ' +
+          'shipment, a receipt or a transfer moves stock at the cost already on the lot, which ' +
+          'is why they are shown as not priced rather than as zero.</div>'
+        : '') +
+
+      (o.full && d.topItems.length
+        ? '<div class="table-wrap" style="margin-top:18px;"><table><thead><tr>' +
+            '<th>#</th><th>Item</th><th>Product</th><th class="num">Movements</th><th class="num">Units</th>' +
+          '</tr></thead><tbody>' +
+          d.topItems.map(function(i, n){
+            return '<tr><td>' + (n + 1) + '</td><td><b>' + esc(i.item) + '</b></td>' +
+              '<td class="wrap">' + (i.name ? esc(i.name) : '<span class="unknown">—</span>') + '</td>' +
+              '<td class="num">' + fmtNum(i.count) + '</td>' +
+              '<td class="num">' + fmtNum(i.qty) + '</td></tr>';
+          }).join('') +
+          '</tbody></table></div>'
+        : '');
+  }
+
+  return '<div class="panel">' +
+    '<div class="panel-head"><div class="panel-title">Movement' +
+      '<span>' + esc(periodLabel()) +
+        (a.item ? ' · ' + esc(a.item) : '') +
+        (a.type ? ' · ' + esc(a.type) : '') +
+        ' — reversed movements excluded</span></div></div>' +
+    body +
+  '</div>';
+}
+
+async function loadActivity(){
+  const a = STATE.activity;
+  a.loading = true;
+  try{
+    a.data = await rpc('getMovementSummary', {
+      dateFrom: a.from, dateTo: a.to, item: a.item, type: a.type,
+      brand: STATE.activeBrand || ''
+    });
+  }catch(err){
+    if(!err.sessionInvalid) toast(diagnose(err).detail, true);
+  }
+  a.loading = false;
+  if(!STATE.modal) render();
+}
+
+function bindActivity(){
+  if(STATE.tab !== 'overview' && STATE.tab !== 'analytics') return;
+  const set = function(key, value){
+    STATE.activity[key] = value;
+    loadActivity();
+  };
+  on('#af-from', 'change', function(e){ set('from', e.target.value); });
+  on('#af-to', 'change', function(e){ set('to', e.target.value); });
+  /* Item re-renders as well as reloads: it scopes the position cards,
+     which are drawn from data already in the page. */
+  on('#af-item', 'change', function(e){ set('item', e.target.value); render(); });
+  on('#af-type', 'change', function(e){ set('type', e.target.value); });
+  on('#af-clear', 'click', function(){
+    STATE.activity.from = ''; STATE.activity.to = '';
+    STATE.activity.item = ''; STATE.activity.type = '';
+    loadActivity(); render();
+  });
 }
 
 function kpi(label, value, delta, accent){
@@ -2090,6 +2329,7 @@ function viewLedgerHistory(){
       '</tr></thead><tbody>' +
       d.rows.map(function(r){
         const canReverse = STATE.perms.ledger && !r.voided && r.type !== 'Reversal';
+        const canEdit = STATE.perms.editLedger && !r.voided && r.type !== 'Reversal';
         return '<tr class="' + (r.voided ? 'voided' : '') + '">' +
           '<td>' + esc(r.date) + '</td>' +
           '<td><b>' + esc(r.item) + '</b></td>' +
@@ -2104,11 +2344,15 @@ function viewLedgerHistory(){
           '<td class="num">' + (r.costOfSale ? fmtMoney0(r.costOfSale) : '—') + '</td>' +
           '<td class="wrap">' + esc(r.ref) +
             (r.reversalOf ? '<br><span class="unknown">reverses ' + esc(r.reversalOf) + ' — ' + esc(r.reversalReason) + '</span>' : '') +
+            (r.correctsTxnId ? '<br><span class="unknown">corrected version of ' + esc(r.correctsTxnId) + '</span>' : '') +
             (r.notes ? '<br><span class="unknown">' + esc(r.notes) + '</span>' : '') + '</td>' +
           '<td class="wrap">' + esc(r.actor) + '</td>' +
-          '<td>' + (canReverse
-            ? '<button class="btn secondary sm" data-reverse="' + attr(r.txnId) + '">Reverse</button>'
-            : (r.voided ? '<span class="unknown">reversed</span>' : '')) + '</td>' +
+          '<td class="btn-row">' +
+            (canEdit ? '<button class="btn secondary sm" data-edittxn="' + attr(r.txnId) + '">Edit</button>' : '') +
+            (canReverse ? '<button class="btn secondary sm" data-reverse="' + attr(r.txnId) + '">Reverse</button>' : '') +
+            (r.voided
+              ? '<span class="unknown">' + (r.correctedBy ? 'edited' : 'reversed') + '</span>'
+              : '') + '</td>' +
         '</tr>';
       }).join('') +
       '</tbody></table></div>' +
@@ -2880,8 +3124,9 @@ function viewB2B(){
    SCREEN: Analytics
    ============================================================ */
 function viewAnalytics(){
-  const items = nonB2B();
-  const t = totals();
+  const scoped = scopedItems();
+  const items = scoped.filter(function(i){ return !i.b2b; });
+  const t = totals(scoped);
   const cats = (STATE.data.categories || []).map(function(c){ return c.category; });
   const catValues = cats.map(function(c){
     return items.filter(function(i){ return i.category === c; })
@@ -2913,7 +3158,8 @@ function viewAnalytics(){
   const openFlags = items.filter(function(i){ return i.flag && !i.flagResolvedBy; });
   const resolvedFlags = items.filter(function(i){ return i.flag && i.flagResolvedBy; });
 
-  return '<div class="kpi-grid">' +
+  return activityFilterBar() +
+    '<div class="kpi-grid">' +
       kpi('Total SKUs', String(items.length), t.b2bSkus + ' B2B held separately', 'var(--flow)') +
       kpi('Consolidated Value', fmtMoney0(t.consolidatedValue), fmtNum(t.consolidatedQty) + ' units', 'var(--flow)') +
       kpi('Achieved Margin', achievedMargin === null ? '<span class="unknown">no sales yet</span>' : fmtPct(achievedMargin),
@@ -2929,6 +3175,8 @@ function viewAnalytics(){
       '<div class="panel"><div class="panel-head"><div class="panel-title">Units by Category</div></div>' +
         '<div class="chart-box">' + chartBar(cats, catUnits, null, {px: 230, fmt: function(v){ return Math.round(v).toLocaleString('en-US'); }}) + '</div></div>' +
     '</div>' +
+
+    activityPanel({full: true}) +
 
     '<div class="panel">' +
       '<div class="panel-head"><div class="panel-title">Top 10 Items by Value</div></div>' +
@@ -3043,7 +3291,7 @@ function viewAudit(){
    reply does not mention one, the two halves are out of step — and the
    symptom is a button that simply is not there, which looks like the
    feature was never built rather than never deployed. */
-const EXPECTED_PERMS = ['ledger', 'pricing', 'category', 'b2b', 'items', 'directory'];
+const EXPECTED_PERMS = ['ledger', 'pricing', 'category', 'b2b', 'items', 'directory', 'editLedger'];
 
 function missingPerms(){
   const p = STATE.data && STATE.data.perms;
@@ -3199,6 +3447,82 @@ function renderModal(){
         '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
         '<button class="btn danger" id="reverse-confirm"' + (m.busy ? ' disabled' : '') + '>' +
           (m.busy ? 'Reversing…' : 'Post the reversal') + '</button>' +
+      '</div>';
+
+  }else if(m.kind === 'edit'){
+    const r = m.row || {};
+    const type = m.type || r.type || '';
+    const need = txnFieldsFor(type);
+    /* The postable list, plus this row's own type if it is no longer on
+       it. A dialog that quietly re-labelled an old row because its type
+       has since been retired would be the type-substitution bug again,
+       this time with a human pressing the button. */
+    const codes = (STATE.data.txnTypes || []).slice();
+    if(type && codes.indexOf(type) < 0) codes.unshift(type);
+    const labelOf = function(code){
+      const def = ((STATE.data.movementTypes || [])
+        .filter(function(t){ return t.code === code; })[0]) || {};
+      return def.label || code;
+    };
+    const box = function(label, id, control, on){
+      return '<div class="field" style="' + (on === false ? 'display:none;' : '') + '">' +
+        '<label>' + esc(label) + '</label>' + control + '</div>';
+    };
+    const num = function(id, v){
+      return '<input type="number" id="' + id + '" min="0" step="any" data-keep-value="1" value="' +
+        attr(v === null || v === undefined || v === '' ? '' : v) + '">';
+    };
+    inner =
+      '<div class="modal-head"><div class="modal-title">Edit a movement</div>' +
+        '<button class="modal-close" data-modalclose="1">&times;</button></div>' +
+      '<div class="modal-sub">The ledger is never rewritten, so this does the correction properly: ' +
+        'the original row is reversed and a corrected row is posted beside it, both at once. Nothing ' +
+        'is lost and the trail shows what changed and why. The corrected row is checked exactly like ' +
+        'a new posting — if the stock will not support it, or if something recorded later depends on ' +
+        'the original, this is refused and says what is blocking it.</div>' +
+      '<div class="form-grid" style="grid-template-columns:repeat(3,1fr);">' +
+        box('Date', 'e-date',
+          '<input type="date" id="e-date" data-keep-value="1" value="' + attr(r.date || '') + '">') +
+        box('Item Number', 'e-item',
+          '<input type="text" id="e-item" data-keep-value="1" list="e-item-options" ' +
+            'autocomplete="off" autocapitalize="characters" spellcheck="false" value="' +
+            attr(r.item || '') + '">' +
+          /* Its own id: the entry form behind the dialog already owns
+             f-item-options, and two datalists with one id is a coin toss. */
+          '<datalist id="e-item-options">' +
+            visibleItems().map(function(i){
+              return '<option value="' + attr(i.item) + '">' + esc(i.name) + '</option>';
+            }).join('') +
+          '</datalist>') +
+        box('Type', 'e-type',
+          '<select id="e-type">' +
+            codes.map(function(code){
+              return '<option value="' + attr(code) + '"' + (code === type ? ' selected' : '') + '>' +
+                esc(labelOf(code)) + '</option>';
+            }).join('') +
+          '</select>') +
+        box('Qty', 'e-qty', num('e-qty', r.qty)) +
+        box('Cost price $ (unit FOB)', 'e-fob', num('e-fob', r.fob || ''), need.fob) +
+        box('Unit selling price $', 'e-sellprice', num('e-sellprice', r.sellPrice), need.sellPrice) +
+        box(need.locLabel, 'e-location',
+          '<select id="e-location" data-keep-value="1">' +
+            locationOptions(r.location || '', 'Not specified') + '</select>', need.location) +
+        box('Move to', 'e-tolocation',
+          '<select id="e-tolocation" data-keep-value="1">' +
+            locationOptions(r.toLocation || '', 'Choose…') + '</select>', need.toLocation) +
+        box('Remark', 'e-ref',
+          '<input type="text" id="e-ref" data-keep-value="1" value="' + attr(r.ref || '') + '">') +
+        box('Notes', 'e-notes',
+          '<input type="text" id="e-notes" data-keep-value="1" value="' + attr(r.notes || '') + '">') +
+      '</div>' +
+      '<div class="field"><label>What is being corrected, and why?</label>' +
+        '<input type="text" id="edit-reason" data-keep-value="1" ' +
+          'placeholder="e.g. OEM invoice showed 9 units, not 999"></div>' +
+      (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error).replace(/\n/g, '<br>') + '</div>' : '') +
+      '<div class="modal-actions">' +
+        '<button class="btn secondary" data-modalclose="1">Cancel</button>' +
+        '<button class="btn" id="edit-confirm"' + (m.busy ? ' disabled' : '') + '>' +
+          (m.busy ? 'Correcting…' : 'Post the correction') + '</button>' +
       '</div>';
 
   }else if(m.kind === 'flag'){
@@ -3410,6 +3734,7 @@ function bindHandlers(){
     render();
     if(STATE.tab === 'ledger' && !STATE.views.ledger.data){ loadLedger(); loadImports(); }
     if(STATE.tab === 'audit' && !STATE.views.audit.data) loadAudit();
+    if((STATE.tab === 'overview' || STATE.tab === 'analytics') && !STATE.activity.data) loadActivity();
   });
   on('#sign-out', 'click', function(){
     setSessionToken('');
@@ -3484,6 +3809,7 @@ function bindHandlers(){
   bindTypes();
   bindB2B();
   bindAnalytics();
+  bindActivity();
   bindAudit();
   bindAccess();
   bindModalActions();
@@ -3598,12 +3924,13 @@ function bindLedger(){
       const el = document.getElementById(id);
       if(el) el.style.display = on ? 'flex' : 'none';
     };
-    show('f-fob-wrap', type === 'Purchase-Backlog' || type === 'Opening Balance-MainWH');
-    show('f-loc-wrap', type !== 'Purchase-Backlog' && type !== 'Ship-to-GIT');
-    show('f-toloc-wrap', type === 'Transfer-MainWH');
-    show('f-sell-wrap', type === 'Sale-from-GIT' || type === 'Sale-from-MainWH');
+    const need = txnFieldsFor(type);
+    show('f-fob-wrap', need.fob);
+    show('f-loc-wrap', need.location);
+    show('f-toloc-wrap', need.toLocation);
+    show('f-sell-wrap', need.sellPrice);
     const locLabel = document.querySelector('#f-loc-wrap label');
-    if(locLabel) locLabel.textContent = type === 'Transfer-MainWH' ? 'Move from' : 'Warehouse';
+    if(locLabel) locLabel.textContent = need.locLabel;
   };
   on('#f-type', 'change', syncFields);
   syncFields();
@@ -3693,6 +4020,11 @@ function bindLedger(){
     const id = e.currentTarget.dataset.batchDl;
     /* A specific import, whatever brand is currently selected. */
     exportLedgerCsv({batchId: id, brand: ''}, 'stockflow-import-' + id + '.csv');
+  });
+  on('[data-edittxn]', 'click', function(e){
+    const id = e.currentTarget.dataset.edittxn;
+    const row = ((STATE.views.ledger.data || {}).rows || []).filter(function(r){ return r.txnId === id; })[0];
+    openModal({kind: 'edit', txnId: id, row: row || {}, type: (row || {}).type || ''});
   });
   on('[data-reverse]', 'click', function(e){
     const id = e.currentTarget.dataset.reverse;
@@ -4294,6 +4626,52 @@ function bindModalActions(){
     }
   });
 
+  /* Changing the type changes which fields matter, so the dialog
+     re-renders — and remembers what was typed, because losing a
+     half-filled correction to a dropdown would be maddening. */
+  on('#e-type', 'change', function(e){
+    m.type = e.target.value;
+    m.error = null;
+    render();
+  });
+
+  on('#edit-confirm', 'click', async function(){
+    const val = function(id){
+      const el = document.getElementById(id);
+      return el ? String(el.value || '').trim() : '';
+    };
+    const reason = val('edit-reason');
+    const type = val('e-type');
+    const need = txnFieldsFor(type);
+    /* Fields the new type does not use are sent empty rather than left
+       out, so changing a purchase into a transfer clears the cost price
+       instead of carrying it silently. */
+    const data = {
+      date: val('e-date'),
+      item: val('e-item'),
+      type: type,
+      qty: val('e-qty'),
+      ref: val('e-ref'),
+      notes: val('e-notes'),
+      fob: need.fob ? val('e-fob') : '',
+      location: need.location ? val('e-location') : '',
+      toLocation: need.toLocation ? val('e-tolocation') : '',
+      sellPrice: need.sellPrice ? val('e-sellprice') : ''
+    };
+    m.busy = true; m.error = null; render();
+    try{
+      const res = await mutate('editTransaction', {txnId: m.txnId, data: data, reason: reason});
+      STATE.modal = null;
+      toast('Corrected' + (res && res.summary ? ' — ' + res.summary : '') + '. Both rows stay on the ledger.');
+      await refreshData();
+      await loadLedger();
+    }catch(err){
+      m.busy = false;
+      m.error = diagnose(err).detail;
+      render();
+    }
+  });
+
   on('#flag-confirm', 'click', async function(){
     const note = (document.getElementById('flag-note') || {}).value || '';
     const item = itemByCode(m.item) || {};
@@ -4465,6 +4843,9 @@ async function refreshData(){
     applyBootstrap(data);
     STATE.stale = false;
     if(!STATE.modal) render();
+    /* The movement panel is read from the ledger, so it goes stale with
+       everything else a write changes. */
+    if(STATE.activity.data) loadActivity();
   }catch(err){
     if(!err.sessionInvalid) toast(diagnose(err).detail, true);
   }
@@ -4485,6 +4866,7 @@ async function loadApp(){
   STATE.phase = 'app';
   render();
   if(STATE.tab === 'ledger'){ loadLedger(); loadImports(); }
+  if(STATE.tab === 'overview' || STATE.tab === 'analytics') loadActivity();
   startPolling();
 }
 
