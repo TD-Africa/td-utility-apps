@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-28.7";
+const STOCKFLOW_BUILD = "2026-08-29.1";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -898,6 +898,11 @@ function normaliseHeader(h){
 /* Turns parsed rows into objects keyed by the field names the server
    reads, so "Date", "date", " DATE " and "Transaction Date" all work —
    and so do "toLocation", "To Location" and "Destination". */
+/* Everything an upload can carry. Anything else in the file is ignored
+   and reported as ignored. */
+const KNOWN_CSV_FIELDS = ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty',
+  'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes'];
+
 function csvToObjects(text){
   const delimiter = detectDelimiter(text);
   const rows = parseCsv(text, delimiter);
@@ -918,6 +923,33 @@ function csvToObjects(text){
     return raw[i] && ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty', 'fob',
       'location', 'toLocation', 'ref', 'sellPrice', 'notes'].indexOf(f) < 0;
   });
+
+  /* TWO COLUMNS THAT MEAN THE SAME THING.
+
+     "Type" and "Movement Type" both mean type; "Remark" and "Reference"
+     both mean ref. Reading them in order let the second silently
+     overwrite the first, so a file could show one movement type in the
+     column a person was looking at and import an entirely different one
+     from a column they had forgotten was there. That is not a warning —
+     the file is ambiguous and there is no honest way to pick. */
+  const collisions = [];
+  const firstAt = {};
+  fields.forEach(function(f, i){
+    if(!raw[i]) return;                      // an unnamed trailing column
+    if(KNOWN_CSV_FIELDS.indexOf(f) < 0) return;   // extras are ignored anyway
+    if(firstAt[f] === undefined){ firstAt[f] = i; return; }
+    collisions.push({
+      field: f,
+      headers: [String(rows[0][firstAt[f]]).trim(), String(rows[0][i]).trim()]
+    });
+  });
+  if(collisions.length){
+    return {headers: fields, rows: [], delimiter: delimiter,
+      error: 'Two columns mean the same thing, so it is not clear which to use: ' +
+        collisions.map(function(c){
+          return '"' + c.headers[0] + '" and "' + c.headers[1] + '" both mean ' + c.field;
+        }).join('; ') + '. Rename or remove one of each pair and try again.'};
+  }
 
   const out = rows.slice(1)
     .filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); })
