@@ -79,6 +79,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;font-size:13px;color:var(
 .nav{background:var(--sf);border-bottom:2px solid var(--bdr);display:flex;padding:0 22px;position:sticky;top:54px;z-index:300;overflow-x:auto}
 .nb{padding:13px 15px;border:none;background:transparent;cursor:pointer;font-size:12.5px;color:var(--t2);border-bottom:3px solid transparent;font-weight:500;white-space:nowrap;transition:all .13s;position:relative;font-family:inherit}
 .nb:hover{background:var(--lt);color:var(--t1)}.nb.on{color:var(--accent-ink);border-bottom-color:var(--w);font-weight:700}
+.nb.waiting{opacity:.45}
 .nb-dot{position:absolute;top:9px;right:8px;min-width:7px;height:7px;padding:0 3px;background:var(--red);border-radius:6px;color:#fff;font-size:8px;line-height:7px;font-weight:700}
 .content{padding:20px 22px;max-width:1600px;margin:0 auto}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
@@ -862,7 +863,7 @@ function render(){
   app.innerHTML = renderTopBar() + renderNav() +
     '<div class="content">' +
       renderAlerts() +
-      (STATE.needsSetup ? renderSetupNotice() : renderView()) +
+      renderView() +
     '</div>';
 
   renderOverlay();
@@ -1041,7 +1042,12 @@ function renderNav(){
   }).map(function(v){
     const dot = (v === 'changes' && pending)
       ? '<span class="nb-dot">' + pending + '</span>' : '';
-    return '<button class="nb' + (STATE.view === v ? ' on' : '') + '" data-nav="' + v + '">' +
+    /* Still clickable when there is no period — clicking explains why the
+       screen is empty, which is more use than an unresponsive button. */
+    const waiting = STATE.needsSetup && v !== 'admin';
+    return '<button class="nb' + (STATE.view === v ? ' on' : '') + (waiting ? ' waiting' : '') +
+      '" data-nav="' + v + '"' +
+      (waiting ? ' title="Needs a payroll period first"' : '') + '>' +
       esc(VIEW_LABELS[v]) + dot + '</button>';
   }).join('') + '</div>';
 }
@@ -1085,12 +1091,27 @@ function renderMonthBar(){
 }
 
 function renderSetupNotice(){
-  return '<div class="note amber" style="line-height:1.7">' +
-    '<strong>This PaySync Sheet has no payroll period yet.</strong><br>' + esc(STATE.setupMessage) +
-    '</div>' +
-    (can('createPeriod')
-      ? '<button class="btn btn-f" data-act="new-period">Create the first period</button>'
-      : '<div class="note grey">Ask an Administrator to set it up.</div>');
+  const where = VIEW_LABELS[STATE.view] || 'This screen';
+  return '<div class="sec-title">' + esc(where) + '</div>' +
+    '<div class="note amber" style="line-height:1.7">' +
+      '<strong>' + esc(where) + ' has nothing to show until this Sheet has a payroll period.' +
+      '</strong><br>' + esc(STATE.setupMessage) + '</div>' +
+    (can('createPeriod') || can('manageDirectory')
+      ? '<div class="card"><div class="card-h">Getting started</div>' +
+        '<ol style="margin-left:18px;line-height:1.9;font-size:13px">' +
+          (can('manageDirectory')
+            ? '<li>Add the people who will use this Sheet — HR, Finance, anyone who needs to see ' +
+              'it. <button class="btn btn-sm btn-w" data-nav="admin">Go to Administration</button></li>'
+            : '') +
+          '<li>Load this company\u2019s staff onto the <strong>Staff</strong> tab of the Sheet, and ' +
+            'its reference data onto <strong>RefData</strong>, <strong>AcctRef</strong> and ' +
+            '<strong>SalaryStruct</strong>. See DEPLOYMENT.md step 5.</li>' +
+          (can('createPeriod')
+            ? '<li>Create the first payroll period. ' +
+              '<button class="btn btn-sm btn-f" data-act="new-period">Create a period</button></li>'
+            : '') +
+        '</ol></div>'
+      : '<div class="note grey">Ask an Administrator to finish setting this Sheet up.</div>');
 }
 
 /* ============================================================
@@ -1181,6 +1202,14 @@ function renderView(){
     history: viewHistory, structure: viewStructure, proration: viewProration,
     recon: viewReconciliation, admin: viewAdmin
   }[STATE.view];
+  /* With no payroll period there is nothing for the payroll screens to show.
+     Administration is the exception, and the important one: it is where the
+     people who will use this Sheet get added and where the first period is
+     created. Rendering the same notice on every tab made clicking one look
+     like nothing had happened. */
+  if(STATE.needsSetup && STATE.view !== 'admin'){
+    return renderSetupNotice();
+  }
   return renderMonthBar() + (body ? body() : '<div class="empty">Unknown view.</div>');
 }
 
