@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-29.4";
+const STOCKFLOW_BUILD = "2026-08-29.5";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -385,7 +385,8 @@ function backendUrl(){ return String(STOCKFLOW_BACKEND_URL || '').trim(); }
 
 const RETRYABLE_ACTIONS = {
   getBootstrap: true, getRevision: true, getLoginContext: true,
-  getLedger: true, getAudit: true, getItemDetail: true, getImportBatches: true
+  getLedger: true, getAudit: true, getItemDetail: true, getImportBatches: true,
+  getDashboard: true
 };
 
 /* Set once any call has succeeded. After that we know the deployment
@@ -679,7 +680,7 @@ const STATE = {
   },
   /* Shared by Overview and Analytics: one filter, so switching between
      the two screens does not silently change the period being read. */
-  activity: {from: '', to: '', item: '', type: '', data: null, loading: false},
+  activity: {from: '', to: '', item: '', type: '', data: null, position: null, loading: false},
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
          rawText: null, dateOrder: null, dateInfo: null, createMissingItems: null},
@@ -1702,14 +1703,20 @@ function brandsWithStock(){
    SCREEN: Overview
    ============================================================ */
 function viewOverview(){
-  const scoped = scopedItems();
-  const scopedNonB2B = scoped.filter(function(i){ return !i.b2b; });
-  const t = totals(scoped);
-  const cats = (STATE.data.categories || []).map(function(c){ return c.category; });
-  const catValues = cats.map(function(cat){
-    return scopedNonB2B.filter(function(i){ return i.category === cat; })
-      .reduce(function(s, i){ return s + i.consolidatedValue; }, 0);
-  });
+  const t = positionFigures();
+  const scopedNonB2B = scopedItems().filter(function(i){ return !i.b2b; });
+  /* Categories come from the filtered position when there is one, so a
+     bar chart beside a filtered card cannot describe a wider set of
+     stock than the card does. */
+  const catRows = t.filtered
+    ? t.byCategory
+    : (STATE.data.categories || []).map(function(c){
+        return {category: c.category, value: scopedNonB2B
+          .filter(function(i){ return i.category === c.category; })
+          .reduce(function(s, i){ return s + i.consolidatedValue; }, 0)};
+      });
+  const cats = catRows.map(function(c){ return c.category; });
+  const catValues = catRows.map(function(c){ return c.value; });
   const flagged = scopedNonB2B.filter(function(i){ return i.flag && !i.flagResolvedBy; }).length;
 
   const dataQuality = [];
@@ -1741,11 +1748,12 @@ function viewOverview(){
 
     '<div class="kpi-grid">' +
       kpi('Consolidated Stock Value', fmtMoney0(t.consolidatedValue),
-        fmtNum(t.consolidatedQty) + ' units across ' + (t.skus + t.b2bSkus) + ' SKUs' +
+        fmtNum(t.consolidatedQty) + ' units across ' + (t.skus + t.b2bSkus) +
+        ((t.skus + t.b2bSkus) === 1 ? ' SKU' : ' SKUs') +
         (t.b2bSkus ? ' (' + t.b2bSkus + ' B2B)' : ''), 'var(--flow)') +
       kpi('GIT Value', fmtMoney0(t.gitValue), fmtNum(t.gitQty) + ' units in transit', 'var(--amber)') +
       kpi('Main Warehouse Value', fmtMoney0(t.mwValue), fmtNum(t.mwQty) + ' units on ground', 'var(--flow)') +
-      kpi('Sold (all time)', fmtMoney0(t.soldValue),
+      kpi(t.filtered ? 'Sold (these movements)' : 'Sold (all time)', fmtMoney0(t.soldValue),
         fmtNum(t.soldQty) + ' units · cost of sale ' + fmtMoney0(t.costOfSale), 'var(--green)') +
     '</div>' +
 
@@ -1813,14 +1821,11 @@ function activityFilterBar(){
      Admin has since retired still has history, and history you cannot
      filter to is history you cannot check. */
   const types = (STATE.data.movementTypes || []);
-  /* Short on purpose: when a date or type IS chosen, the banner over
-     the position half carries the full explanation, and saying it twice
-     buries the filter under its own caveat. */
-  const note = a.item
-    ? 'Date and movement type filter the Movement panel. The cards below show the position of ' +
-      a.item + ' as at today.'
-    : 'Date and movement type filter the Movement panel. Choose an item to narrow the cards ' +
-      'below as well.';
+  /* Short on purpose: once a filter is on, the banner over the position
+     half carries the full explanation, and saying it twice buries the
+     filter under its own caveat. */
+  const note = 'Filters everything on this screen. The Movement panel shows what happened; the ' +
+    'cards and charts show the stock still held that those movements put there.';
 
   return '<div class="filter-bar">' +
     '<div class="field narrow"><label>From</label>' +
@@ -1866,25 +1871,52 @@ function directionTag(direction){
   return '<span style="font-size:10.5px;color:' + d[1] + '">' + esc(d[0]) + '</span>';
 }
 
-/* Is a filter on that the position panels cannot honour? */
 function periodFilterOn(){
   const a = STATE.activity;
   return !!(a.from || a.to || a.type);
 }
 
-/* Shown above the position half of the screen whenever a date or type
-   filter is on. Without it those panels look broken: the boxes move and
-   the big numbers do not, and nothing on screen says that is correct. */
+/* The figures the cards, the flow and the charts are drawn from.
+
+   With no filter this is the whole position, summed in the page from
+   the item list the page already holds — unchanged, and no extra work.
+   With a filter it is the server's answer to a narrower question: the
+   stock still held that the SELECTED MOVEMENTS put there. Every open
+   lot records the movement that created it, which is what makes "the
+   Main Warehouse, filtered to Opening balance B2B-MainWH" a real
+   quantity rather than a phrase.
+
+   The two agree to the penny when nothing is filtered — the server
+   rounds per item exactly as this does — so applying a filter narrows
+   the numbers without also nudging them. */
+function positionFigures(){
+  const p = STATE.activity.position;
+  if(p && p.filtered) return p;
+  const t = totals(visibleItems());
+  t.filtered = false;
+  return t;
+}
+
+/* Says what the cards are counting whenever that is not "everything",
+   because four narrowed figures with nothing above them read as the
+   whole position. */
 function positionMarker(){
-  if(!periodFilterOn()) return '';
+  const p = STATE.activity.position;
+  if(!p || !p.filtered) return '';
   const a = STATE.activity;
-  return '<div class="banner"><div>📅</div><div>' +
-    '<b>Everything below is the position as at ' + esc(STATE.today || 'today') + '.</b> ' +
-    'A stock level is a point in time, so ' +
-    esc([a.from || a.to ? 'the date range' : '', a.type ? 'the movement type' : '']
-      .filter(Boolean).join(' and ')) +
-    ' cannot change it — ' + (a.item ? 'only the item does. ' : 'only the item filter does. ') +
-    'What they change is the Movement panel above.' +
+  const parts = [];
+  if(a.from || a.to) parts.push('arrived ' + periodLabel());
+  if(a.type) parts.push('through ' + a.type);
+  if(a.item) parts.push('for ' + a.item);
+  return '<div class="banner"><div>🔎</div><div>' +
+    '<b>Showing the stock still held that these movements put there</b> — ' +
+    esc(parts.join(', ')) + '. ' +
+    'Valued at each item\'s net cost, exactly as the unfiltered figures are. ' +
+    'Sold is the sales among the same movements.' +
+    (p.lotsUnattributed
+      ? ' ' + fmtNum(p.lotsUnattributed) + ' lot(s) predate the movement log and are ' +
+        'excluded while a filter is on.'
+      : '') +
   '</div></div>';
 }
 
@@ -1995,10 +2027,14 @@ async function loadActivity(){
   const a = STATE.activity;
   a.loading = true;
   try{
-    a.data = await rpc('getMovementSummary', {
+    /* One request for both halves. Two would let the cards and the
+       movement panel be drawn from two different moments. */
+    const res = await rpc('getDashboard', {
       dateFrom: a.from, dateTo: a.to, item: a.item, type: a.type,
       brand: STATE.activeBrand || ''
     });
+    a.data = res.movement;
+    a.position = res.position;
   }catch(err){
     if(!err.sessionInvalid) toast(diagnose(err).detail, true);
   }
@@ -3166,29 +3202,54 @@ function viewB2B(){
    SCREEN: Analytics
    ============================================================ */
 function viewAnalytics(){
-  const scoped = scopedItems();
-  const items = scoped.filter(function(i){ return !i.b2b; });
-  const t = totals(scoped);
-  const cats = (STATE.data.categories || []).map(function(c){ return c.category; });
-  const catValues = cats.map(function(c){
-    return items.filter(function(i){ return i.category === c; })
-      .reduce(function(s, i){ return s + i.consolidatedValue; }, 0);
-  });
-  const catUnits = cats.map(function(c){
-    return items.filter(function(i){ return i.category === c; })
-      .reduce(function(s, i){ return s + i.consolidatedQty; }, 0);
-  });
-  const top10 = items.slice().sort(function(a, b){ return b.consolidatedValue - a.consolidatedValue; }).slice(0, 10);
+  const t = positionFigures();
+  const items = scopedItems().filter(function(i){ return !i.b2b; });
 
-  const labels = ageBucketLabels();
-  const buckets = {};
-  labels.forEach(function(l){ buckets[l] = 0; });
-  items.forEach(function(i){
-    (i.lots || []).forEach(function(lot){
-      const bucket = ageBucket(lot.age);
-      if(bucket) buckets[bucket] += lot.qty * (i.costUnknown ? 0 : i.netCost);
+  /* Every chart on this screen describes held stock, so each of them
+     follows the filter the cards follow. A filtered card beside an
+     unfiltered chart is the worst of both. */
+  const catRows = t.filtered
+    ? t.byCategory
+    : (STATE.data.categories || []).map(function(c){
+        const mine = items.filter(function(i){ return i.category === c.category; });
+        return {
+          category: c.category,
+          value: mine.reduce(function(s, i){ return s + i.consolidatedValue; }, 0),
+          qty: mine.reduce(function(s, i){ return s + i.consolidatedQty; }, 0)
+        };
+      });
+  const cats = catRows.map(function(c){ return c.category; });
+  const catValues = catRows.map(function(c){ return c.value; });
+  const catUnits = catRows.map(function(c){ return c.qty; });
+
+  const top10 = t.filtered
+    ? t.topItems
+    : items.slice()
+        .sort(function(a, b){ return b.consolidatedValue - a.consolidatedValue; })
+        .slice(0, 10)
+        .map(function(i){
+          const ages = [i.gitOldestAge, i.mwOldestAge].filter(isNum);
+          return {item: i.item, name: i.name, category: i.category,
+            qty: i.consolidatedQty, value: i.consolidatedValue,
+            oldest: ages.length ? Math.max.apply(null, ages) : null};
+        });
+
+  let labels, bucketValues;
+  if(t.filtered){
+    labels = t.ageBuckets.map(function(b){ return b.label; });
+    bucketValues = t.ageBuckets.map(function(b){ return b.value; });
+  }else{
+    labels = ageBucketLabels();
+    const buckets = {};
+    labels.forEach(function(l){ buckets[l] = 0; });
+    items.forEach(function(i){
+      (i.lots || []).forEach(function(lot){
+        const bucket = ageBucket(lot.age);
+        if(bucket) buckets[bucket] += lot.qty * (i.costUnknown ? 0 : i.netCost);
+      });
     });
-  });
+    bucketValues = labels.map(function(l){ return buckets[l]; });
+  }
 
   /* Achieved margin — impossible in the prototype, because a sale
      recorded no selling price at all. */
@@ -3214,7 +3275,9 @@ function viewAnalytics(){
     activityPanel({full: true}) +
     positionMarker() +
     '<div class="kpi-grid">' +
-      kpi('Total SKUs', String(items.length), t.b2bSkus + ' B2B held separately', 'var(--flow)') +
+      kpi(t.filtered ? 'SKUs holding this stock' : 'Total SKUs',
+        String(t.filtered ? t.skus : items.length),
+        t.b2bSkus + ' B2B held separately', 'var(--flow)') +
       kpi('Consolidated Value', fmtMoney0(t.consolidatedValue), fmtNum(t.consolidatedQty) + ' units', 'var(--flow)') +
       kpi('Achieved Margin' + (scopedMargin ? ' — ' + periodLabel() : ''),
         marginValue === null || marginValue === undefined
@@ -3240,13 +3303,12 @@ function viewAnalytics(){
       '<th>Category</th><th class="num">Qty</th><th class="num">Oldest age</th><th class="num">Value</th>' +
       '</tr></thead><tbody>' +
       (top10.length ? top10.map(function(i, n){
-        const ages = [i.gitOldestAge, i.mwOldestAge].filter(isNum);
-        const oldest = ages.length ? Math.max.apply(null, ages) : null;
+        const oldest = i.oldest === undefined ? null : i.oldest;
         return '<tr><td>' + (n + 1) + '</td><td><b>' + esc(i.item) + '</b></td>' +
           '<td class="wrap">' + esc(i.name) + '</td><td>' + catTag(i.category) + '</td>' +
-          '<td class="num">' + fmtNum(i.consolidatedQty) + '</td>' +
+          '<td class="num">' + fmtNum(i.qty) + '</td>' +
           '<td class="num" style="color:' + ageColour(oldest) + '">' + fmtDays(oldest) + '</td>' +
-          '<td class="num">' + fmtMoney0(i.consolidatedValue) + '</td></tr>';
+          '<td class="num">' + fmtMoney0(i.value) + '</td></tr>';
       }).join('') : emptyRow(7, 'No stock held.')) +
       '</tbody></table></div>' +
     '</div>' +
@@ -3254,7 +3316,7 @@ function viewAnalytics(){
     '<div class="panel">' +
       '<div class="panel-head"><div class="panel-title">Inventory Ageing (value)' +
         '<span>GIT + Main Warehouse, from GIT entry or upload date</span></div></div>' +
-      '<div class="chart-box">' + chartBar(labels, labels.map(function(l){ return buckets[l]; }),
+      '<div class="chart-box">' + chartBar(labels, bucketValues,
         ['#5FE0BE', '#2FBEB0', '#E3A23D', '#E0654F'], {px: 220, fmt: money0k}) + '</div>' +
     '</div>' +
 
