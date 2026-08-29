@@ -354,7 +354,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-29.3";
+const STOCKFLOW_BUILD = "2026-08-29.4";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -1210,9 +1210,20 @@ function restoreUiState(snap){
     /* Only restore a field the new markup left empty — otherwise a value
        the server just corrected would be overwritten by the stale one
        the user was looking at. */
+    /* A control whose value is rendered FROM state owns its own value,
+       and restoring the DOM over it puts back what the state no longer
+       says. Every filter is one of these, and marking them is not
+       optional: "the markup left it empty" and "the markup deliberately
+       rendered it empty" look identical here, so without the mark the
+       empty-field branch below refills a filter the moment it is
+       cleared. That is what made Clear appear to do nothing. */
+    if(field.dataset.stateValue === '1') return;
     if(field.type === 'checkbox'){
       if(field.dataset.keepValue === '1') field.checked = snap.values[id];
     }else if(field.dataset.keepValue === '1' || field.value === ''){
+      /* keepValue is the opposite case: a control whose value lives
+         ONLY in the DOM, like the entry form, which is not held in
+         STATE between renders. */
       field.value = snap.values[id];
     }
   });
@@ -1720,6 +1731,14 @@ function viewOverview(){
 
     activityFilterBar() +
 
+    /* The panel the filter actually governs, directly under the filter.
+       It used to sit below the charts, which meant changing a date moved
+       numbers a screen and a half further down and the page looked
+       inert. */
+    activityPanel({full: false}) +
+
+    positionMarker() +
+
     '<div class="kpi-grid">' +
       kpi('Consolidated Stock Value', fmtMoney0(t.consolidatedValue),
         fmtNum(t.consolidatedQty) + ' units across ' + (t.skus + t.b2bSkus) + ' SKUs' +
@@ -1761,9 +1780,7 @@ function viewOverview(){
           ['#E3A23D', '#2FBEB0'], {px: 262, centre: '$' + Math.round(t.consolidatedValue / 1000) + 'k',
             fmt: function(v){ return '$' + Math.round(v).toLocaleString('en-US'); }}) + '</div>' +
       '</div>' +
-    '</div>' +
-
-    activityPanel({full: false});
+    '</div>';
 }
 
 /* ============================================================
@@ -1796,31 +1813,34 @@ function activityFilterBar(){
      Admin has since retired still has history, and history you cannot
      filter to is history you cannot check. */
   const types = (STATE.data.movementTypes || []);
+  /* Short on purpose: when a date or type IS chosen, the banner over
+     the position half carries the full explanation, and saying it twice
+     buries the filter under its own caveat. */
   const note = a.item
-    ? 'Date and type filter the movement panel below. The cards and charts show the position ' +
-      'of ' + a.item + ' as at today — a stock level is a point in time, not a period.'
-    : 'Date and type filter the movement panel below. The cards and charts show the position as ' +
-      'at today, for every item — choose an item to narrow those too.';
+    ? 'Date and movement type filter the Movement panel. The cards below show the position of ' +
+      a.item + ' as at today.'
+    : 'Date and movement type filter the Movement panel. Choose an item to narrow the cards ' +
+      'below as well.';
 
   return '<div class="filter-bar">' +
     '<div class="field narrow"><label>From</label>' +
-      '<input type="date" id="af-from" data-keep-value="1" value="' + attr(a.from) + '"></div>' +
+      '<input type="date" id="mf-from" data-state-value="1" value="' + attr(a.from) + '"></div>' +
     '<div class="field narrow"><label>To (inclusive)</label>' +
-      '<input type="date" id="af-to" data-keep-value="1" value="' + attr(a.to) + '"></div>' +
-    '<div class="field"><label>Item</label><select id="af-item" data-keep-value="1">' +
+      '<input type="date" id="mf-to" data-state-value="1" value="' + attr(a.to) + '"></div>' +
+    '<div class="field"><label>Item</label><select id="mf-item" data-state-value="1">' +
       '<option value="">All items</option>' +
       visibleItems().map(function(i){
         return '<option value="' + attr(i.item) + '"' + (a.item === i.item ? ' selected' : '') + '>' +
           esc(i.item) + (i.name ? ' — ' + esc(i.name) : '') + '</option>';
       }).join('') + '</select></div>' +
-    '<div class="field"><label>Movement type</label><select id="af-type" data-keep-value="1">' +
+    '<div class="field"><label>Movement type</label><select id="mf-type" data-state-value="1">' +
       '<option value="">All types</option>' +
       types.map(function(t){
         return '<option value="' + attr(t.code) + '"' + (a.type === t.code ? ' selected' : '') + '>' +
           esc(t.label || t.code) + (t.active === false ? ' (retired)' : '') + '</option>';
       }).join('') + '</select></div>' +
     '<div class="field narrow"><label>&nbsp;</label>' +
-      '<button class="btn secondary" id="af-clear">Clear</button></div>' +
+      '<button class="btn secondary" id="mf-clear">Clear</button></div>' +
     '<div style="flex:1 1 100%;font-size:11.5px;color:var(--text-faint);margin-top:-2px;">' +
       esc(note) + '</div>' +
   '</div>';
@@ -1844,6 +1864,28 @@ function directionTag(direction){
   };
   const d = map[direction] || map.move;
   return '<span style="font-size:10.5px;color:' + d[1] + '">' + esc(d[0]) + '</span>';
+}
+
+/* Is a filter on that the position panels cannot honour? */
+function periodFilterOn(){
+  const a = STATE.activity;
+  return !!(a.from || a.to || a.type);
+}
+
+/* Shown above the position half of the screen whenever a date or type
+   filter is on. Without it those panels look broken: the boxes move and
+   the big numbers do not, and nothing on screen says that is correct. */
+function positionMarker(){
+  if(!periodFilterOn()) return '';
+  const a = STATE.activity;
+  return '<div class="banner"><div>📅</div><div>' +
+    '<b>Everything below is the position as at ' + esc(STATE.today || 'today') + '.</b> ' +
+    'A stock level is a point in time, so ' +
+    esc([a.from || a.to ? 'the date range' : '', a.type ? 'the movement type' : '']
+      .filter(Boolean).join(' and ')) +
+    ' cannot change it — ' + (a.item ? 'only the item does. ' : 'only the item filter does. ') +
+    'What they change is the Movement panel above.' +
+  '</div></div>';
 }
 
 /* opts.full adds the per-item table; the Overview shows the compact
@@ -1970,13 +2012,13 @@ function bindActivity(){
     STATE.activity[key] = value;
     loadActivity();
   };
-  on('#af-from', 'change', function(e){ set('from', e.target.value); });
-  on('#af-to', 'change', function(e){ set('to', e.target.value); });
+  on('#mf-from', 'change', function(e){ set('from', e.target.value); });
+  on('#mf-to', 'change', function(e){ set('to', e.target.value); });
   /* Item re-renders as well as reloads: it scopes the position cards,
      which are drawn from data already in the page. */
-  on('#af-item', 'change', function(e){ set('item', e.target.value); render(); });
-  on('#af-type', 'change', function(e){ set('type', e.target.value); });
-  on('#af-clear', 'click', function(){
+  on('#mf-item', 'change', function(e){ set('item', e.target.value); render(); });
+  on('#mf-type', 'change', function(e){ set('type', e.target.value); });
+  on('#mf-clear', 'click', function(){
     STATE.activity.from = ''; STATE.activity.to = '';
     STATE.activity.item = ''; STATE.activity.type = '';
     loadActivity(); render();
@@ -2295,20 +2337,20 @@ function viewLedgerHistory(){
   const types = ['Opening Balance-MainWH'].concat(STATE.data.txnTypes || []).concat(['Reversal']);
 
   const filters = '<div class="filter-bar">' +
-    '<div class="field narrow"><label>From</label><input type="date" id="lf-from" data-keep-value="1" value="' + attr(v.dateFrom) + '"></div>' +
-    '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="lf-to" data-keep-value="1" value="' + attr(v.dateTo) + '"></div>' +
-    '<div class="field"><label>Item</label><select id="lf-item" data-keep-value="1">' +
+    '<div class="field narrow"><label>From</label><input type="date" id="lf-from" data-state-value="1" value="' + attr(v.dateFrom) + '"></div>' +
+    '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="lf-to" data-state-value="1" value="' + attr(v.dateTo) + '"></div>' +
+    '<div class="field"><label>Item</label><select id="lf-item" data-state-value="1">' +
       '<option value="">All items</option>' +
       visibleItems().map(function(i){
         return '<option value="' + attr(i.item) + '"' + (v.item === i.item ? ' selected' : '') + '>' + esc(i.item) + '</option>';
       }).join('') + '</select></div>' +
-    '<div class="field"><label>Type</label><select id="lf-type" data-keep-value="1">' +
+    '<div class="field"><label>Type</label><select id="lf-type" data-state-value="1">' +
       '<option value="">All types</option>' +
       types.map(function(t){
         return '<option value="' + attr(t) + '"' + (v.type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
       }).join('') + '</select></div>' +
     '<div class="field"><label>Search remark, notes, who</label>' +
-      '<input type="text" id="lf-search" data-keep-value="1" placeholder="PO-4471, INV-, a name…" value="' + attr(v.search) + '"></div>' +
+      '<input type="text" id="lf-search" data-state-value="1" placeholder="PO-4471, INV-, a name…" value="' + attr(v.search) + '"></div>' +
     '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="lf-clear">Clear</button></div>' +
   '</div>';
 
@@ -3158,13 +3200,29 @@ function viewAnalytics(){
   const openFlags = items.filter(function(i){ return i.flag && !i.flagResolvedBy; });
   const resolvedFlags = items.filter(function(i){ return i.flag && i.flagResolvedBy; });
 
+  /* Achieved margin is the one card here that a period CAN restate —
+     it is a figure about sales, not about stock held — so when a filter
+     is on it shows the margin on the sales in that period, and says so
+     rather than quietly meaning something different. */
+  const scopedMargin = periodFilterOn() && STATE.activity.data;
+  const m = STATE.activity.data || {};
+  const marginValue = scopedMargin ? m.margin : achievedMargin;
+  const marginRevenue = scopedMargin ? m.saleValue : achievedRevenue;
+  const marginCost = scopedMargin ? m.costOfSale : achievedCost;
+
   return activityFilterBar() +
+    activityPanel({full: true}) +
+    positionMarker() +
     '<div class="kpi-grid">' +
       kpi('Total SKUs', String(items.length), t.b2bSkus + ' B2B held separately', 'var(--flow)') +
       kpi('Consolidated Value', fmtMoney0(t.consolidatedValue), fmtNum(t.consolidatedQty) + ' units', 'var(--flow)') +
-      kpi('Achieved Margin', achievedMargin === null ? '<span class="unknown">no sales yet</span>' : fmtPct(achievedMargin),
-        achievedRevenue > 0 ? fmtMoney0(achievedRevenue) + ' revenue less ' + fmtMoney0(achievedCost) + ' cost' :
-        'record a selling price on a sale to populate this', 'var(--green)') +
+      kpi('Achieved Margin' + (scopedMargin ? ' — ' + periodLabel() : ''),
+        marginValue === null || marginValue === undefined
+          ? '<span class="unknown">' + (scopedMargin ? 'no sales in this period' : 'no sales yet') + '</span>'
+          : fmtPct(marginValue),
+        marginRevenue > 0 ? fmtMoney0(marginRevenue) + ' revenue less ' + fmtMoney0(marginCost) + ' cost' :
+        (scopedMargin ? 'nothing was sold in this period' : 'record a selling price on a sale to populate this'),
+        'var(--green)') +
       kpi('Open data-quality flags', String(openFlags.length),
         resolvedFlags.length + ' resolved', openFlags.length ? 'var(--red)' : 'var(--flow)') +
     '</div>' +
@@ -3175,8 +3233,6 @@ function viewAnalytics(){
       '<div class="panel"><div class="panel-head"><div class="panel-title">Units by Category</div></div>' +
         '<div class="chart-box">' + chartBar(cats, catUnits, null, {px: 230, fmt: function(v){ return Math.round(v).toLocaleString('en-US'); }}) + '</div></div>' +
     '</div>' +
-
-    activityPanel({full: true}) +
 
     '<div class="panel">' +
       '<div class="panel-head"><div class="panel-title">Top 10 Items by Value</div></div>' +
@@ -3238,15 +3294,15 @@ function viewAudit(){
   const entities = ['Costing', 'Categories', 'Pricing', 'B2B', 'Items', 'Ledger', 'Directory', 'Settings'];
 
   const filters = '<div class="filter-bar">' +
-    '<div class="field narrow"><label>From</label><input type="date" id="af-from" data-keep-value="1" value="' + attr(v.dateFrom) + '"></div>' +
-    '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="af-to" data-keep-value="1" value="' + attr(v.dateTo) + '"></div>' +
-    '<div class="field narrow"><label>What changed</label><select id="af-entity" data-keep-value="1">' +
+    '<div class="field narrow"><label>From</label><input type="date" id="af-from" data-state-value="1" value="' + attr(v.dateFrom) + '"></div>' +
+    '<div class="field narrow"><label>To (inclusive)</label><input type="date" id="af-to" data-state-value="1" value="' + attr(v.dateTo) + '"></div>' +
+    '<div class="field narrow"><label>What changed</label><select id="af-entity" data-state-value="1">' +
       '<option value="">Everything</option>' +
       entities.map(function(e){
         return '<option value="' + attr(e) + '"' + (v.entity === e ? ' selected' : '') + '>' + esc(e) + '</option>';
       }).join('') + '</select></div>' +
     '<div class="field"><label>Search</label>' +
-      '<input type="text" id="af-search" data-keep-value="1" placeholder="an item, a name, a reason…" value="' + attr(v.search) + '"></div>' +
+      '<input type="text" id="af-search" data-state-value="1" placeholder="an item, a name, a reason…" value="' + attr(v.search) + '"></div>' +
     '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="af-clear">Clear</button></div>' +
   '</div>';
 
