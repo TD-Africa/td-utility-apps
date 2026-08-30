@@ -197,6 +197,20 @@ select,input[type=text],input[type=number],input[type=date],input[type=email],te
   padding:8px 10px;font-size:12.5px;font-family:var(--font-body);outline:none;width:100%;
 }
 textarea{font-family:var(--font-mono);font-size:12px;resize:vertical;}
+
+/* ---------- Child items on a transaction ----------
+   Indented and rule-marked on the left so a child reads as belonging to
+   the movement above it rather than as another movement in its own
+   right. It IS its own movement in the ledger — but on the form, what
+   matters is that nobody posts an accessory thinking it is a laptop. */
+.child-block{border:1px solid var(--border-soft);border-left:3px solid var(--flow);
+  border-radius:8px;padding:12px 14px 2px 14px;margin:0 0 10px 22px;background:var(--panel-2);}
+.child-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.child-head .child-n{font-size:11px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--flow);}
+.child-head .child-of{font-size:11.5px;color:var(--text-faint);}
+.child-head .child-drop{margin-left:auto;}
+.child-block .form-grid{margin-bottom:8px;}
 select:focus,input:focus,textarea:focus{border-color:var(--flow);}
 input::placeholder,textarea::placeholder{color:var(--text-faint);}
 input:disabled,select:disabled,textarea:disabled{opacity:.5;cursor:not-allowed;}
@@ -354,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-29.5";
+const STOCKFLOW_BUILD = "2026-08-30.2";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -684,7 +698,15 @@ const STATE = {
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
          rawText: null, dateOrder: null, dateInfo: null, createMissingItems: null},
-  itemImport: {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true}
+  itemImport: {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true},
+
+  /* Child items on the transaction currently being typed — a laptop's
+     accessories, each with its own part number and its own cost. Held
+     here rather than read off the DOM because the whole screen is
+     rebuilt on every render, and a half-typed accessory must survive a
+     background refresh landing mid-sentence. */
+  txnChildren: [],
+  txnRef: ''
 };
 
 const PAGE_SIZE = 25;
@@ -887,6 +909,16 @@ const CSV_FIELD_ALIASES = {
   moveto: 'toLocation', to: 'toLocation',
   ref: 'ref', reference: 'ref', remark: 'ref', remarks: 'ref',
   po: 'ref', ponumber: 'ref', invoice: 'ref', invoiceno: 'ref',
+  /* The group key, and deliberately NOT an alias of ref. A PO number is
+     shared by every line on the order; the thing that marries an
+     accessory to the machine it ships inside has to identify one
+     transaction and nothing else. */
+  txnref: 'txnRef', transactionref: 'txnRef', transactionreference: 'txnRef',
+  txref: 'txnRef', groupref: 'txnRef', transactiongroup: 'txnRef',
+  bundle: 'txnRef', bundleref: 'txnRef',
+  parentitem: 'parentItem', parent: 'parentItem', parentpart: 'parentItem',
+  parentpartnumber: 'parentItem', parentitemnumber: 'parentItem',
+  parentsku: 'parentItem', parentcode: 'parentItem', childof: 'parentItem',
   /* No longer in the template — a sale row does not have to carry one.
      Still read if a file includes it, because it is what makes achieved
      margin reportable. */
@@ -905,7 +937,7 @@ function normaliseHeader(h){
 /* Everything an upload can carry. Anything else in the file is ignored
    and reported as ignored. */
 const KNOWN_CSV_FIELDS = ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty',
-  'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes'];
+  'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes', 'txnRef', 'parentItem'];
 
 function csvToObjects(text){
   const delimiter = detectDelimiter(text);
@@ -924,8 +956,7 @@ function csvToObjects(text){
       '. Download the template to get the right shape.'};
   }
   const unknown = fields.filter(function(f, i){
-    return raw[i] && ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty', 'fob',
-      'location', 'toLocation', 'ref', 'sellPrice', 'notes'].indexOf(f) < 0;
+    return raw[i] && KNOWN_CSV_FIELDS.indexOf(f) < 0;
   });
 
   /* TWO COLUMNS THAT MEAN THE SAME THING.
@@ -1369,10 +1400,38 @@ function locationOptions(selected, allLabel){
   }).join('');
 }
 
-/* Which fields a movement type actually uses. Shared by the entry form
-   and the edit dialog: two copies of this rule would drift, and the one
-   that drifted would be the dialog nobody uses every day. */
+/* Which fields a movement type actually uses. Shared by the entry form,
+   the child-item rows and the edit dialog: three copies of this rule
+   would drift, and the one that drifted would be the dialog nobody uses
+   every day.
+
+   Answered from the type's own definition, which the server sends with
+   requiresFob / requiresLocation / requiresToLocation / isSale already
+   worked out from its behaviour. Matching on the seven built-in CODES
+   instead — as this did — meant a type an Admin added showed the wrong
+   boxes: "Opening balance B2B-MainWH" is an opening balance in every
+   respect except its spelling, and the form hid the cost price box on
+   the one movement that cannot be posted without one.
+
+   The literals remain as the fallback for a type the client has not
+   been told about, so a stale page degrades to the old behaviour rather
+   than to a form with no fields at all. */
 function txnFieldsFor(type){
+  const def = ((STATE.data && STATE.data.movementTypes) || [])
+    .filter(function(t){ return t.code === type; })[0];
+  /* `behaviour` is the tell that this is a real definition from the
+     server rather than a stub. A half-populated one would read as "this
+     type needs no cost price and no warehouse", which is not a
+     degradation — it is a form that silently drops what was typed. */
+  if(def && def.behaviour){
+    return {
+      fob: !!def.requiresFob,
+      location: !!def.requiresLocation,
+      toLocation: !!def.requiresToLocation,
+      sellPrice: !!def.isSale,
+      locLabel: def.behaviour === 'move-mainwh' ? 'Move from' : 'Warehouse'
+    };
+  }
   return {
     fob: type === 'Purchase-Backlog' || type === 'Opening Balance-MainWH',
     location: type !== 'Purchase-Backlog' && type !== 'Ship-to-GIT',
@@ -2080,12 +2139,19 @@ function flowNode(cls, label, value, sub){
    change it. `cost price` is the unit FOB under a plainer name, and
    `remark` is the reference. Both are aliases; the stored columns are
    unchanged, so every row already on the ledger still reads correctly. */
+/* The last two columns are how a transaction that carries child items
+   is expressed. Rows sharing a txnRef are one transaction; the row with
+   a blank parentItem is the parent and the rest hang off it. The two
+   worked examples at the bottom are there because "leave parentItem
+   blank on the parent" is far easier to copy than to read. */
 const BULK_TEMPLATE_ROWS = [
-  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark'],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472'],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231'],
-  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123'],
-  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981']
+  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark', 'txnRef', 'parentItem'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', '', ''],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231', '', ''],
+  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123', '', ''],
+  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '', ''],
+  ['2026-09-08', 'AP6J2AV-B2B', 'HP EliteBook 8 G1i 14 AI', 'Laptops', 'Opening Balance-MainWH', '45', '742252.143', 'TD MW', '', 'Opening stock', 'TXN-1001', ''],
+  ['2026-09-08', '1Y629AV-B2B', 'Electronic Energy Star labeling (EStar)', 'Integrated Components', 'Opening Balance-MainWH', '45', '1.081333', 'TD MW', '', 'Opening stock', 'TXN-1001', 'AP6J2AV-B2B']
 ];
 
 /* The template as a file. Same rows the Copy button puts on the
@@ -2097,6 +2163,99 @@ const BULK_TEMPLATE_ROWS = [
    make a template that cannot be uploaded. */
 function templateCsv(){
   return toCsv(BULK_TEMPLATE_ROWS);
+}
+
+/* The movement-type dropdown, used by the main form and by every child
+   item. One definition, so a type an Admin adds appears in both. */
+function txnTypeOptions(selected){
+  return (STATE.data.txnTypes || []).map(function(code){
+    const def = ((STATE.data.movementTypes || [])
+      .filter(function(t){ return t.code === code; })[0]) || {};
+    return '<option value="' + attr(code) + '"' +
+      (code === selected ? ' selected' : '') + '>' + esc(def.label || code) + '</option>';
+  }).join('');
+}
+
+/* ---------------- Child items ----------------
+
+   A laptop that ships with an integrated accessory is one transaction
+   and several movements: the accessory has its own part number, its own
+   unit cost and its own lots, and folding it into the laptop's row would
+   lose that cost entirely. So it gets its own row here, with the same
+   fields the parent has — and the server ties the two together with a
+   transaction ref.
+
+   The date is not repeated on a child. One transaction happens on one
+   day; offering a second date box would only invite the two to disagree,
+   and the server refuses a group that carries more than one date. */
+function viewTxnChildren(){
+  const kids = STATE.txnChildren || [];
+
+  const blocks = kids.map(function(c, i){
+    const need = txnFieldsFor(c.type || '');
+    const hidden = function(on){ return on ? '' : 'display:none;'; };
+    return '<div class="child-block" data-child-block="' + i + '">' +
+      '<div class="child-head">' +
+        '<span class="child-n">Child item ' + (i + 1) + '</span>' +
+        '<span class="child-of">ships inside the movement above — its own part ' +
+          'number, its own cost, its own lots</span>' +
+        '<button class="btn secondary child-drop" type="button" data-child-remove="' + i + '">' +
+          'Remove</button>' +
+      '</div>' +
+      '<div class="form-grid">' +
+        '<div class="field"><label>Item Number</label>' +
+          '<input type="text" data-ci="' + i + '" data-cf="item" list="f-item-options" ' +
+            'autocomplete="off" autocapitalize="characters" spellcheck="false" ' +
+            'value="' + attr(c.item || '') + '" placeholder="e.g. 1Y629AV-B2B"></div>' +
+        '<div class="field"><label>Type</label>' +
+          '<select data-ci="' + i + '" data-cf="type">' + txnTypeOptions(c.type || '') +
+          '</select></div>' +
+        '<div class="field"><label>Qty</label>' +
+          '<input type="number" min="0" step="any" data-ci="' + i + '" data-cf="qty" ' +
+            'value="' + attr(c.qty || '') + '" placeholder="e.g. 45"></div>' +
+        '<div class="field" style="' + hidden(need.fob) + '"><label>Cost price $ (unit FOB)</label>' +
+          '<input type="number" min="0" step="any" data-ci="' + i + '" data-cf="fob" ' +
+            'value="' + attr(c.fob || '') + '" placeholder="e.g. 1.081333"></div>' +
+        '<div class="field"><label>Remark</label>' +
+          '<input type="text" data-ci="' + i + '" data-cf="ref" ' +
+            'value="' + attr(c.ref || '') + '" placeholder="PO / ASN / Invoice #"></div>' +
+        '<div class="field" style="' + hidden(need.location) + '"><label>' + esc(need.locLabel) + '</label>' +
+          '<select data-ci="' + i + '" data-cf="location">' +
+            locationOptions(c.location || '', 'Not specified') + '</select></div>' +
+        '<div class="field" style="' + hidden(need.toLocation) + '"><label>Move to</label>' +
+          '<select data-ci="' + i + '" data-cf="toLocation">' +
+            locationOptions(c.toLocation || '', 'Choose…') + '</select></div>' +
+        '<div class="field" style="' + hidden(need.sellPrice) + '"><label>Unit selling price $</label>' +
+          '<input type="number" min="0" step="any" data-ci="' + i + '" data-cf="sellPrice" ' +
+            'value="' + attr(c.sellPrice || '') + '"></div>' +
+        '<div class="field" style="grid-column:span 2;"><label>Notes</label>' +
+          '<input type="text" data-ci="' + i + '" data-cf="notes" ' +
+            'value="' + attr(c.notes || '') + '" placeholder="optional"></div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  return '<div id="txn-children">' +
+    blocks +
+    '<div class="btn-row" style="margin-bottom:12px;">' +
+      '<button class="btn secondary" id="txn-add-child" type="button">+ Add child item</button>' +
+      (kids.length
+        ? '<div class="field" style="max-width:230px;margin-left:6px;">' +
+            '<label>Transaction ref</label>' +
+            '<input type="text" id="f-txnref" value="' + attr(STATE.txnRef || '') + '" ' +
+              'placeholder="generated if left blank"></div>'
+        : '<span style="font-size:11.5px;color:var(--text-faint);align-self:center;">' +
+          'for stock that ships inside the item above — an accessory, a licence, a labelling line' +
+          '</span>') +
+    '</div>' +
+    (kids.length
+      ? '<div style="font-size:11px;color:var(--text-faint);margin:-4px 0 12px 0;">' +
+        'These ' + kids.length + ' child item' + (kids.length === 1 ? '' : 's') +
+        ' post with the parent on the parent\'s date, under one transaction ref. ' +
+        'They go in together or not at all, and reversing the parent later reverses them too.' +
+        '</div>'
+      : '') +
+    '</div>';
 }
 
 function viewLedger(){
@@ -2127,13 +2286,7 @@ function viewLedger(){
             }).join('') +
           '</datalist></div>' +
         '<div class="field"><label>Type</label>' +
-          '<select id="f-type" data-keep-value="1">' +
-            types.map(function(code){
-              const def = ((STATE.data.movementTypes || [])
-                .filter(function(t){ return t.code === code; })[0]) || {};
-              return '<option value="' + attr(code) + '">' + esc(def.label || code) + '</option>';
-            }).join('') +
-          '</select></div>' +
+          '<select id="f-type" data-keep-value="1">' + txnTypeOptions('') + '</select></div>' +
         '<div class="field"><label>Qty</label>' +
           '<input type="number" id="f-qty" min="0" step="any" placeholder="e.g. 10"></div>' +
         '<div class="field" id="f-fob-wrap"><label>Cost price $ (unit FOB)</label>' +
@@ -2154,6 +2307,7 @@ function viewLedger(){
          knocks the whole row out of line. */
       '<div id="f-item-hint" style="font-size:11.5px;min-height:16px;margin:-6px 0 12px 0;' +
         'color:var(--text-faint);"></div>' +
+      viewTxnChildren() +
       '<div class="btn-row">' +
         '<button class="btn" id="log-btn"' + (STATE.busy === 'post' ? ' disabled' : '') + '>' +
           (STATE.busy === 'post' ? 'Posting…' : 'Log Transaction') + '</button>' +
@@ -2211,14 +2365,29 @@ function viewBulkPanel(){
       '<div class="table-wrap" data-keep-scroll="bulk" style="max-height:300px;overflow-y:auto;margin-bottom:12px;">' +
         '<table><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Product</th><th>Type</th>' +
         '<th class="num">Qty</th><th class="num">Cost</th><th>Where</th><th>Remark</th>' +
-        '<th>Status</th></tr></thead><tbody>' +
+        '<th>Transaction</th><th>Status</th></tr></thead><tbody>' +
         p.rows.map(function(r){
-          return '<tr><td>' + r.line + '</td><td>' + esc(r.date || '—') + '</td><td><b>' + esc(r.item || '—') + '</b></td>' +
+          /* A child is shown indented and pointing at the row it belongs
+             to. Without it the two are just adjacent rows with a shared
+             reference, and "why was this refused?" means matching up
+             refs by eye down a 300-row preview. */
+          const child = !!r.parentItem;
+          return '<tr><td>' + r.line + '</td><td>' + esc(r.date || '—') + '</td>' +
+            '<td' + (child ? ' style="padding-left:22px;"' : '') + '>' +
+            (child ? '<span style="color:var(--flow);">↳ </span>' : '') +
+            '<b>' + esc(r.item || '—') + '</b>' +
+            (child
+              ? '<div style="font-size:10.5px;color:var(--text-faint);">child of ' +
+                esc(r.parentItem) + (r.parentLine ? ' on row ' + r.parentLine : '') + '</div>'
+              : '') +
+            '</td>' +
             '<td class="wrap">' + esc(r.name || '') + '</td>' +
             '<td>' + esc(r.type || '—') + '</td><td class="num">' + esc(String(r.qty || '—')) + '</td>' +
             '<td class="num">' + (r.fob ? esc(String(r.fob)) : '—') + '</td>' +
             '<td>' + esc([r.location, r.toLocation].filter(Boolean).join(' → ')) + '</td>' +
             '<td>' + esc(r.ref || '') + '</td>' +
+            '<td style="font-family:var(--font-mono);font-size:11px;">' +
+              esc(r.txnRef || '') + '</td>' +
             /* The reason has to be readable. Clipped to one line it is
                just a red smear, and the whole point of the preview is
                that somebody can act on what it says. */
@@ -2410,7 +2579,21 @@ function viewLedgerHistory(){
         const canEdit = STATE.perms.editLedger && !r.voided && r.type !== 'Reversal';
         return '<tr class="' + (r.voided ? 'voided' : '') + '">' +
           '<td>' + esc(r.date) + '</td>' +
-          '<td><b>' + esc(r.item) + '</b></td>' +
+          /* A movement that is part of a transaction says so on the row
+             itself. A child is indented and names its parent; a parent
+             says how many rows go with it — which is the thing somebody
+             needs to know BEFORE pressing Reverse. */
+          '<td' + (r.parentItem ? ' style="padding-left:20px;"' : '') + '>' +
+            (r.parentItem ? '<span style="color:var(--flow);">↳ </span>' : '') +
+            '<b>' + esc(r.item) + '</b>' +
+            (r.parentItem
+              ? '<div class="unknown" style="font-size:10.5px;">child of ' +
+                esc(r.parentItem) + '</div>'
+              : (r.childCount
+                  ? '<div style="font-size:10.5px;color:var(--flow);">+ ' + r.childCount +
+                    ' child item' + (r.childCount === 1 ? '' : 's') + '</div>'
+                  : '')) +
+          '</td>' +
           (showBrandColumn()
             ? '<td>' + (r.brand ? esc(r.brand) : '<span class="unknown">—</span>') + '</td>'
             : '') +
@@ -2421,6 +2604,7 @@ function viewLedgerHistory(){
           '<td class="num">' + (isNum(r.sellPrice) ? fmtMoney(r.sellPrice) : '—') + '</td>' +
           '<td class="num">' + (r.costOfSale ? fmtMoney0(r.costOfSale) : '—') + '</td>' +
           '<td class="wrap">' + esc(r.ref) +
+            (r.txnRef ? '<br><span class="unknown">txn ' + esc(r.txnRef) + '</span>' : '') +
             (r.reversalOf ? '<br><span class="unknown">reverses ' + esc(r.reversalOf) + ' — ' + esc(r.reversalReason) + '</span>' : '') +
             (r.correctsTxnId ? '<br><span class="unknown">corrected version of ' + esc(r.correctsTxnId) + '</span>' : '') +
             (r.notes ? '<br><span class="unknown">' + esc(r.notes) + '</span>' : '') + '</td>' +
@@ -3556,8 +3740,28 @@ function renderModal(){
         '<tr><td>Type</td><td>' + typePill(r.type) + '</td></tr>' +
         '<tr><td>Quantity</td><td><b>' + fmtNum(r.qty) + '</b></td></tr>' +
         '<tr><td>Reference</td><td>' + esc(r.ref || '—') + '</td></tr>' +
+        (r.txnRef ? '<tr><td>Transaction</td><td>' + esc(r.txnRef) + '</td></tr>' : '') +
         '<tr><td>Posted by</td><td>' + esc(r.actor) + '</td></tr>' +
       '</tbody></table></div>' +
+      /* Said before the button, not after. This reversal posts more rows
+         than the one on screen, and finding that out from the toast
+         afterwards is finding out too late. */
+      (r.childCount
+        ? '<div class="banner" style="margin-bottom:16px;"><div>i</div><div>' +
+          '<b>This movement carries ' + r.childCount + ' child item' +
+          (r.childCount === 1 ? '' : 's') + ', and they will be reversed with it.</b> ' +
+          'They ship inside ' + esc(r.item) + ' and are part of the same transaction' +
+          (r.txnRef ? ' (' + esc(r.txnRef) + ')' : '') + ', so leaving them behind would ' +
+          'put stock in the warehouse that nothing accounts for. Your reason goes on ' +
+          'every one of them.</div></div>'
+        : '') +
+      (r.parentItem
+        ? '<div class="banner" style="margin-bottom:16px;"><div>i</div><div>' +
+          'This is a child item of <b>' + esc(r.parentItem) + '</b>. Reversing it takes out ' +
+          'this line only and leaves ' + esc(r.parentItem) + ' standing — which is right if ' +
+          'the accessory was never part of the shipment. To undo the whole transaction, ' +
+          'reverse the ' + esc(r.parentItem) + ' row instead.</div></div>'
+        : '') +
       '<div class="field"><label>Why is this being reversed?</label>' +
         '<input type="text" id="reverse-reason" placeholder="e.g. quantity typed as 999 instead of 9"></div>' +
       (m.error ? '<div class="auth-msg err" style="margin-top:12px;">' + esc(m.error).replace(/\n/g, '<br>') + '</div>' : '') +
@@ -4084,6 +4288,45 @@ function bindLedger(){
   });
   showItemHint();
 
+  /* ---- Child items ----
+     Every keystroke is written straight into STATE rather than left on
+     the element. The screen is rebuilt whenever anything else lands —
+     a background refresh, another user's write — and a half-typed
+     accessory sitting only in the DOM would go with it. */
+  on('[data-cf]', 'input', function(e){
+    const el = e.currentTarget;
+    const kid = (STATE.txnChildren || [])[Number(el.dataset.ci)];
+    if(kid) kid[el.dataset.cf] = el.value;
+  });
+  on('[data-cf]', 'change', function(e){
+    const el = e.currentTarget;
+    const kid = (STATE.txnChildren || [])[Number(el.dataset.ci)];
+    if(!kid) return;
+    if(el.dataset.cf === 'item') el.value = String(el.value || '').trim().toUpperCase();
+    kid[el.dataset.cf] = el.value;
+    /* A type change moves which boxes that child shows, so this one has
+       to redraw. Nothing else does. */
+    if(el.dataset.cf === 'type') render();
+  });
+  on('#f-txnref', 'input', function(e){ STATE.txnRef = e.currentTarget.value; });
+  on('#txn-add-child', 'click', function(){
+    /* Seeded from the parent, because an accessory almost always
+       arrives the same way and into the same warehouse as the machine
+       it ships inside. Every one of them is still editable. */
+    const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
+    STATE.txnChildren = (STATE.txnChildren || []).concat([{
+      item: '', type: val('f-type'), qty: val('f-qty'), fob: '',
+      ref: val('f-ref'), notes: '',
+      location: val('f-location'), toLocation: val('f-tolocation'), sellPrice: ''
+    }]);
+    render();
+  });
+  on('[data-child-remove]', 'click', function(e){
+    const i = Number(e.currentTarget.dataset.childRemove);
+    STATE.txnChildren = (STATE.txnChildren || []).filter(function(_, n){ return n !== i; });
+    render();
+  });
+
   on('#log-btn', 'click', async function(){
     const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
     const data = {
@@ -4091,16 +4334,36 @@ function bindLedger(){
       qty: val('f-qty'), fob: val('f-fob'), ref: val('f-ref'), notes: val('f-notes'),
       location: val('f-location'), toLocation: val('f-tolocation'), sellPrice: val('f-sellprice')
     };
+    const kids = (STATE.txnChildren || []).slice();
+    if(kids.length) data.txnRef = String(STATE.txnRef || '').trim();
     const dup = document.getElementById('f-allow-dup');
     if(!data.qty){ toast('Enter a quantity greater than 0', true); return; }
+    /* Caught here rather than by the server, only because "child item 2
+       has no part number" is a more useful sentence than a refusal
+       naming a row the person cannot see. */
+    const blank = kids.map(function(c, i){ return {c: c, n: i + 1}; })
+      .filter(function(x){ return !String(x.c.item || '').trim() || !String(x.c.qty || '').trim(); });
+    if(blank.length){
+      toast('Child item ' + blank[0].n + ' needs a part number and a quantity', true);
+      return;
+    }
     STATE.busy = 'post'; render();
     try{
-      await mutate('postTransaction', {data: data, allowDuplicate: !!(dup && dup.checked)});
-      toast('Logged: ' + data.type + ' — ' + data.item + ' × ' + data.qty);
+      const res = await mutate('postTransaction', {
+        data: data, children: kids, allowDuplicate: !!(dup && dup.checked)
+      });
+      toast('Logged: ' + data.type + ' — ' + data.item + ' × ' + data.qty +
+        (kids.length ? ' with ' + kids.length + ' child item' + (kids.length === 1 ? '' : 's') +
+          ' (' + ((res && res.txnRef) || '') + ')' : ''));
       ['f-qty', 'f-fob', 'f-ref', 'f-notes', 'f-sellprice'].forEach(function(id){
         const el = document.getElementById(id); if(el) el.value = '';
       });
       const d = document.getElementById('f-allow-dup'); if(d) d.checked = false;
+      /* The whole transaction went in; leaving its children on the form
+         is how the next one gets posted with somebody else's
+         accessories attached. */
+      STATE.txnChildren = [];
+      STATE.txnRef = '';
       STATE.busy = null;
       await refreshData();
       await loadLedger();
@@ -4732,9 +4995,13 @@ function bindModalActions(){
     const reason = (document.getElementById('reverse-reason') || {}).value || '';
     m.busy = true; m.error = null; render();
     try{
-      await mutate('reverseTransaction', {txnId: m.txnId, reason: reason.trim()});
+      const res = await mutate('reverseTransaction', {txnId: m.txnId, reason: reason.trim()});
+      const kids = ((res && res.reversedChildren) || []).length;
       STATE.modal = null;
-      toast('Reversed. Both rows stay on the ledger.');
+      toast(kids
+        ? 'Reversed, with its ' + kids + ' child item' + (kids === 1 ? '' : 's') +
+          '. Every row stays on the ledger.'
+        : 'Reversed. Both rows stay on the ledger.');
       await refreshData();
       await loadLedger();
     }catch(err){
