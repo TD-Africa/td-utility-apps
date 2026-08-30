@@ -368,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-30.2";
+const STOCKFLOW_BUILD = "2026-08-30.3";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -1400,6 +1400,13 @@ function locationOptions(selected, allLabel){
   }).join('');
 }
 
+/* The three behaviours that bring stock into existence, as opposed to
+   moving it or taking it out. Mirrors behaviourCreatesStock_ on the
+   server; the two are checked against each other in wiring.test.js,
+   because a split between them would show up as a form quietly not
+   asking for a cost. */
+const BEHAVIOURS_THAT_CREATE_STOCK = ['in-backlog', 'in-mainwh', 'in-git'];
+
 /* Which fields a movement type actually uses. Shared by the entry form,
    the child-item rows and the edit dialog: three copies of this rule
    would drift, and the one that drifted would be the dialog nobody uses
@@ -1424,16 +1431,29 @@ function txnFieldsFor(type){
      type needs no cost price and no warehouse", which is not a
      degradation — it is a form that silently drops what was typed. */
   if(def && def.behaviour){
+    /* SHOWN and REQUIRED are two different questions, and conflating
+       them hid the cost price box the moment an opening balance stopped
+       demanding one. A price is still the most useful thing you can put
+       on an opening balance — it is simply not compulsory, because the
+       cost of stock bought years ago is often not to hand. So the box
+       appears on every movement that CREATES stock, and says whether it
+       has to be filled in. */
+    const creates = BEHAVIOURS_THAT_CREATE_STOCK.indexOf(def.behaviour) >= 0;
     return {
-      fob: !!def.requiresFob,
+      fob: creates,
+      fobRequired: !!def.requiresFob,
+      fobLabel: 'Cost price $ (unit FOB)' + (def.requiresFob ? '' : ' — optional'),
       location: !!def.requiresLocation,
       toLocation: !!def.requiresToLocation,
       sellPrice: !!def.isSale,
       locLabel: def.behaviour === 'move-mainwh' ? 'Move from' : 'Warehouse'
     };
   }
+  const legacyFob = type === 'Purchase-Backlog' || type === 'Opening Balance-MainWH';
   return {
-    fob: type === 'Purchase-Backlog' || type === 'Opening Balance-MainWH',
+    fob: legacyFob,
+    fobRequired: legacyFob,
+    fobLabel: 'Cost price $ (unit FOB)',
     location: type !== 'Purchase-Backlog' && type !== 'Ship-to-GIT',
     toLocation: type === 'Transfer-MainWH',
     sellPrice: type === 'Sale-from-GIT' || type === 'Sale-from-MainWH',
@@ -2213,7 +2233,7 @@ function viewTxnChildren(){
         '<div class="field"><label>Qty</label>' +
           '<input type="number" min="0" step="any" data-ci="' + i + '" data-cf="qty" ' +
             'value="' + attr(c.qty || '') + '" placeholder="e.g. 45"></div>' +
-        '<div class="field" style="' + hidden(need.fob) + '"><label>Cost price $ (unit FOB)</label>' +
+        '<div class="field" style="' + hidden(need.fob) + '"><label>' + esc(need.fobLabel) + '</label>' +
           '<input type="number" min="0" step="any" data-ci="' + i + '" data-cf="fob" ' +
             'value="' + attr(c.fob || '') + '" placeholder="e.g. 1.081333"></div>' +
         '<div class="field"><label>Remark</label>' +
@@ -3824,7 +3844,7 @@ function renderModal(){
             }).join('') +
           '</select>') +
         box('Qty', 'e-qty', num('e-qty', r.qty)) +
-        box('Cost price $ (unit FOB)', 'e-fob', num('e-fob', r.fob || ''), need.fob) +
+        box(need.fobLabel, 'e-fob', num('e-fob', r.fob || ''), need.fob) +
         box('Unit selling price $', 'e-sellprice', num('e-sellprice', r.sellPrice), need.sellPrice) +
         box(need.locLabel, 'e-location',
           '<select id="e-location" data-keep-value="1">' +
@@ -4248,6 +4268,8 @@ function bindLedger(){
     };
     const need = txnFieldsFor(type);
     show('f-fob-wrap', need.fob);
+    const fobLabel = document.querySelector('#f-fob-wrap label');
+    if(fobLabel) fobLabel.textContent = need.fobLabel;
     show('f-loc-wrap', need.location);
     show('f-toloc-wrap', need.toLocation);
     show('f-sell-wrap', need.sellPrice);
