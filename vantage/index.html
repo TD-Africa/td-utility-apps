@@ -49,6 +49,7 @@
     --p1:#1D8A5F; --p1-soft:#E4F5EC; --p1-line:#B9E4CE;
     --p2:#2563EB; --p2-soft:#E8EEFE; --p2-line:#C2D3FB;
     --p3:#C6790E; --p3-soft:#FBF0DD; --p3-line:#F0D6A4;
+    --p4:#5B4B8A; --p4-soft:#EFEBF7; --p4-line:#CFC4E6;
     --danger:#C0362C; --danger-soft:#FBE9E7;
     --won:#1D8A5F;
     --radius:12px;
@@ -167,7 +168,8 @@
   .kpi .value{font-family:'Sora';font-size:24px;font-weight:700;letter-spacing:-.01em;}
   .kpi .delta{font-size:11.5px;color:var(--text-soft);margin-top:5px;line-height:1.45;}
   .kpi .bar{position:absolute;left:0;bottom:0;height:4px;width:100%;}
-  .kpi.p1 .bar{background:var(--p1);} .kpi.p2 .bar{background:var(--p2);} .kpi.p3 .bar{background:var(--p3);} .kpi.gold .bar{background:var(--gold);}
+  .kpi.p1 .bar{background:var(--p1);} .kpi.p2 .bar{background:var(--p2);} .kpi.p3 .bar{background:var(--p3);}
+  .kpi.p4 .bar{background:var(--p4);} .kpi.gold .bar{background:var(--gold);}
   .kpi.danger .bar{background:var(--danger);}
 
   .section-title{display:flex;align-items:center;justify-content:space-between;margin:26px 0 12px 0;gap:12px;flex-wrap:wrap;}
@@ -186,7 +188,8 @@
   .leg-dot{width:9px;height:9px;border-radius:3px;flex:none;}
 
   /* Pipeline board */
-  .board{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start;}
+  .board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;align-items:start;}
+  @media (max-width:1400px){ .board{grid-template-columns:repeat(2,minmax(0,1fr));} }
   .col{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
   .col-head{padding:14px 15px 12px 15px;border-bottom:1px solid var(--border);}
   .col-head .num{
@@ -196,6 +199,7 @@
   .col1 .num{background:var(--p1-soft);color:var(--p1);}
   .col2 .num{background:var(--p2-soft);color:var(--p2);}
   .col3 .num{background:var(--p3-soft);color:var(--p3);}
+  .col4 .num{background:var(--p4-soft);color:var(--p4);}
   .col-head .title{font-family:'Sora';font-size:13.5px;font-weight:700;}
   .col-head .desc{font-size:11px;color:var(--text-faint);margin-top:4px;margin-left:28px;}
   .col-head .meta{display:flex;justify-content:space-between;margin-top:10px;font-size:11.5px;color:var(--text-soft);gap:8px;}
@@ -480,15 +484,22 @@ const STATE = {
   busy: null                // label shown in the busy pill while a write is in flight
 };
 
+/* Pipeline 1 used to mean "Sales Order raised". That state is now Logged, and
+   Pipeline 1 is the stage before a quote goes out. Records created before the
+   split keep pipeline 1 with a Sales Order against them, so never infer "no
+   quote" from the number alone — check quoteSent. */
+const PIPELINE_LOGGED = 4;
 const PIPELINE_META = {
-  1: {label:'Pipeline 1', sub:'Sales Order raised, awaiting invoice', color:'p1'},
-  2: {label:'Pipeline 2', sub:'Quotes sent · fresh', color:'p2'},
-  3: {label:'Pipeline 3', sub:'Quotes sent · aging', color:'p3'}
+  1: {label:'Pipeline 1', sub:'Booked · no quote sent yet', color:'p1', short:'P1'},
+  2: {label:'Pipeline 2', sub:'Quotes sent · fresh', color:'p2', short:'P2'},
+  3: {label:'Pipeline 3', sub:'Quotes sent · aging', color:'p3', short:'P3'},
+  4: {label:'Logged', sub:'Sales Order raised, awaiting invoice', color:'p4', short:'LOG'}
 };
+const BOARD_STAGES = [1, 2, 3, PIPELINE_LOGGED];
 
 const VIEW_TITLES = {
   dashboard: ['Dashboard', 'Live view of every opportunity in motion'],
-  board:     ['Pipeline Board', 'Sales orders raised, fresh quotes, and aging quotes'],
+  board:     ['Pipeline Board', 'Booked leads, quotes in play, and orders logged awaiting invoice'],
   list:      ['All Opportunities', 'Search, sort and export the full book'],
   analytics: ['Analytics', 'Pipeline health across Business Groups and reps'],
   orders:    ['Orders & Invoices', 'Record the Dynamics 365 references against each quote'],
@@ -1154,6 +1165,10 @@ function computeAnalytics(list){
   const p1Value = sumUSD(dedupedOpen.filter(function(o){ return Number(o.pipeline) === 1; }));
   const p2Value = sumUSD(dedupedOpen.filter(function(o){ return Number(o.pipeline) === 2; }));
   const p3Value = sumUSD(dedupedOpen.filter(function(o){ return Number(o.pipeline) === 3; }));
+  /* Logged is every order awaiting an invoice, whichever stage number it carries
+     — records from before the split are still sitting in pipeline 1. */
+  const logged = dedupedOpen.filter(function(o){ return o.status === 'sop_raised'; });
+  const loggedValue = sumUSD(logged);
 
   /* Win rate both ways. Count alone treats a ₦500m loss and a ₦50k loss as
      equal, which flattered the prototype's number. */
@@ -1246,6 +1261,7 @@ function computeAnalytics(list){
   return {
     open: open, p1: p1, p2: p2, p3: p3, invoiced: invoiced, lost: lost,
     totalOpenUSD: totalOpenUSD, p1Value: p1Value, p2Value: p2Value, p3Value: p3Value,
+    logged: logged, loggedValue: loggedValue,
     ngnOpenNative: sumNative(dedupedOpen, 'NGN'), usdOpenNative: sumNative(dedupedOpen, 'USD'),
     fxRate: Number(STATE.settings.fxRate) || 1650,
     linkedDealsCollapsed: open.length - dedupedOpen.length,
@@ -1952,7 +1968,8 @@ function pipelineTag(o){
   const p = Number(o.pipeline);
   if(!p || !PIPELINE_META[p]) return '—';
   const c = PIPELINE_META[p].color;
-  return '<span class="tag" style="background:var(--' + c + '-soft);color:var(--' + c + ');">P' + p + '</span>';
+  return '<span class="tag" style="background:var(--' + c + '-soft);color:var(--' + c + ');">' +
+    (PIPELINE_META[p].short || ('P' + p)) + '</span>';
 }
 
 function renderHealthBar(a){
@@ -1966,11 +1983,13 @@ function renderHealthBar(a){
       '<div><span class="label">Open Pipeline Health (USD)</span></div>' +
       '<div class="total">' + fmtUSD(total) + '</div>' +
     '</div>' +
-    '<div class="healthbar">' + seg(a.p1Value, 'p1') + seg(a.p2Value, 'p2') + seg(a.p3Value, 'p3') + '</div>' +
+    '<div class="healthbar">' + seg(a.p1Value, 'p1') + seg(a.p2Value, 'p2') + seg(a.p3Value, 'p3') +
+      seg(a.loggedValue, 'p4') + '</div>' +
     '<div class="healthbar-legend">' +
-      '<div class="leg-item"><span class="leg-dot" style="background:var(--p1);"></span>Pipeline 1 · SO raised — ' + fmtUSD(a.p1Value) + '</div>' +
+      '<div class="leg-item"><span class="leg-dot" style="background:var(--p1);"></span>Pipeline 1 · no quote yet — ' + fmtUSD(a.p1Value) + '</div>' +
       '<div class="leg-item"><span class="leg-dot" style="background:var(--p2);"></span>Pipeline 2 · fresh — ' + fmtUSD(a.p2Value) + '</div>' +
       '<div class="leg-item"><span class="leg-dot" style="background:var(--p3);"></span>Pipeline 3 · aging — ' + fmtUSD(a.p3Value) + '</div>' +
+      '<div class="leg-item"><span class="leg-dot" style="background:var(--p4);"></span>Logged · SO raised — ' + fmtUSD(a.loggedValue) + '</div>' +
     '</div>' +
     (a.linkedDealsCollapsed > 0
       ? '<div class="field-hint" style="margin-top:10px;">' + a.linkedDealsCollapsed + ' ' +
@@ -2038,7 +2057,10 @@ function renderDashboard(){
   }else{
     out += '<div class="grid kpi-row">' +
       kpiCard('Total open pipeline (USD)', fmtUSD(a.totalOpenUSD), 'gold', nativeBreakdown(a)) +
-      kpiCard('Pipeline 1 · Awaiting invoice', fmtUSD(a.p1Value), 'p1', a.p1.length + ' ' + pluralize(a.p1.length, 'order')) +
+      kpiCard('Pipeline 1 · No quote yet', fmtUSD(a.p1Value), 'p1',
+        a.p1.length + ' ' + pluralize(a.p1.length, 'opportunity', 'opportunities')) +
+      kpiCard('Logged · Awaiting invoice', fmtUSD(a.loggedValue), 'p4',
+        a.logged.length + ' ' + pluralize(a.logged.length, 'order')) +
       kpiCard('Pipeline 2 · Fresh quotes', fmtUSD(a.p2Value), 'p2', a.p2.length + ' ' + pluralize(a.p2.length, 'quote')) +
       kpiCard('Pipeline 3 · Aging quotes', fmtUSD(a.p3Value), 'p3', a.p3.length + ' ' + pluralize(a.p3.length, 'quote')) +
     '</div>';
@@ -2191,7 +2213,7 @@ function renderBoard(){
 
   return renderFilterBar(open, open.length + ' open · ' + fmtUSD(totalUSD) + ' (USD equivalent)') +
     '<div class="board">' +
-      [1, 2, 3].map(function(p){
+      BOARD_STAGES.map(function(p){
         return renderColumn(p, open.filter(function(o){ return Number(o.pipeline) === p; }));
       }).join('') +
     '</div>';
@@ -2527,7 +2549,8 @@ function renderAnalytics(){
 
   out += '<div class="section-title"><h2>Funnel</h2><span class="hint">Pipeline 2 → Pipeline 3 → Pipeline 1 → Invoiced</span></div>' +
     '<div class="card card-pad" style="display:flex;align-items:stretch;">' +
-      [['Pipeline 2', a.p2.length, 'p2'], ['Pipeline 3', a.p3.length, 'p3'],
+      [['Pipeline 1', a.p1.length, 'p1'], ['Pipeline 2', a.p2.length, 'p2'],
+       ['Pipeline 3', a.p3.length, 'p3'], ['Logged', a.logged.length, 'p4'],
        ['Pipeline 1', a.p1.length, 'p1'], ['Invoiced', a.invoiced.length, 'gold']].map(function(st){
         return '<div style="flex:1;text-align:center;padding:10px;border-right:1px solid var(--border);">' +
           '<div style="font-family:Sora;font-size:22px;font-weight:700;color:var(--' + st[2] + ');">' + st[1] + '</div>' +
@@ -2587,9 +2610,9 @@ function renderOrders(){
             else if(o.soNumber) badge = '<span class="ref-badge rb-so">SO ' + escapeHtml(o.soNumber) + '</span>';
             else badge = '<span class="ref-badge rb-none">No reference yet</span>';
             const act = canAct(o)
-              ? (Number(o.pipeline) === 1 && !o.invoiceNumber
+              ? (o.status === 'sop_raised' && !o.invoiceNumber
                   ? '<button class="btn btn-primary btn-sm" data-open-invoice="' + escapeHtml(o.id) + '">Record invoice</button>'
-                  : (o.status === 'open' && o.quoteSent && Number(o.pipeline) !== 1
+                  : (o.status === 'open' && o.quoteSent
                       ? '<button class="btn btn-ghost btn-sm" data-open-so="' + escapeHtml(o.id) + '">Record Sales Order</button>'
                       : ''))
               : '';
@@ -3263,6 +3286,13 @@ function renderOpportunityForm(mode){
         '</select></div>' +
         '<div class="field"><label>Delivery terms (optional)</label>' +
           '<input type="text" id="f-delivery" placeholder="e.g. D2D or FOB" value="' + escapeHtml(isEdit ? o.deliveryTerms : '') + '"></div>' +
+        '</div>' +
+        '<div class="field-row">' +
+          '<div class="field" style="grid-column:1 / -1;"><label>Note</label>' +
+            '<textarea id="f-note" rows="3" maxlength="2000" placeholder="Anything worth knowing about this quote — context, ' +
+              'what the customer asked for, a caveat on the pricing.">' + escapeHtml(isEdit ? (o.note || '') : '') + '</textarea>' +
+            '<div class="field-hint">Travels with the quote and shows in its detail view. Separate from the notes ' +
+              'thread, which is the running commentary anyone can add later.</div></div>' +
       '</div>' +
 
       (!isEdit
@@ -3315,12 +3345,21 @@ function renderOpportunityForm(mode){
       '</div>' +
 
       '<div class="field"><label>Pipeline</label>' +
-        '<select id="f-pipeline" required>' +
-          opt('2', 'Pipeline 2 — quote sent, still fresh', isEdit ? Number(o.pipeline) === 2 : true) +
-          opt('3', 'Pipeline 3 — quote sent, aging', isEdit && Number(o.pipeline) === 3) +
-          (isEdit && Number(o.pipeline) === 1
-            ? opt('1', 'Pipeline 1 — Sales Order raised', true)
-            : '') +
+        '<select id="f-pipeline"' + (noQuote ? ' disabled' : '') + ' required>' +
+          (noQuote
+            /* No quote sent means Pipeline 1 by definition — the server forces
+               it either way, so the field only reflects that. */
+            ? opt('1', 'Pipeline 1 — booked, no quote sent yet', true)
+            : opt('2', 'Pipeline 2 — quote sent, still fresh', isEdit ? Number(o.pipeline) === 2 : true) +
+              opt('3', 'Pipeline 3 — quote sent, aging', isEdit && Number(o.pipeline) === 3) +
+              /* Older records sit in Pipeline 1 with a Sales Order against them.
+                 Keep the option so editing one does not silently move it. */
+              (isEdit && Number(o.pipeline) === 1
+                ? opt('1', 'Pipeline 1 — legacy, Sales Order raised', true)
+                : '') +
+              (isEdit && Number(o.pipeline) === PIPELINE_LOGGED
+                ? opt(String(PIPELINE_LOGGED), 'Logged — Sales Order raised', true)
+                : '')) +
         '</select>' +
         '<div class="field-hint">Pipeline 2 and 3 are about how long the quote has been out, so the bucket is suggested from the date raised. ' +
           (isEdit && Number(o.pipeline) === 1 ? 'This opportunity has a Sales Order against it and stays in Pipeline 1 until invoiced.' : 'Change it whenever you need to.') +
@@ -3780,14 +3819,11 @@ function renderValidityModal(){
       '<div class="field-hint" style="margin-bottom:14px;">The document states how long the prices hold. ' +
         'Whatever you choose is printed in the terms and recorded against the quote, so Vantage flags it as ' +
         'expired on the same date the customer sees.</div>' +
-      '<div class="field"><label>Prices valid for</label>' +
-        '<select id="qv-days" required autofocus>' +
-          '<option value="">Select a validity period…</option>' +
-          options.map(function(d){
-            return '<option value="' + d + '"' + (d === current ? ' selected' : '') + '>' + d + ' days' +
-              (d === current ? ' (currently recorded)' : '') + '</option>';
-          }).join('') +
-        '</select>' +
+      '<div class="field"><label>Prices valid for (days)</label>' +
+        '<input type="number" id="qv-days" min="1" max="365" step="1" required autofocus ' +
+          'placeholder="e.g. 30" value="' + (current ? current : '') + '">' +
+        '<div class="field-hint">Any whole number of days from 1 to 365' +
+          (options.length ? ' — commonly ' + options.join(', ') : '') + '.</div>' +
         '<div class="field-hint">Valid until ' +
           '<span id="qv-until" class="mono">' + (current ? fmtDate(expiryDateOf(o)) : '—') + '</span>' +
           ', counted from the date raised (' + fmtDate(o.dateRaised) + ').</div>' +
@@ -3966,6 +4002,7 @@ const EXPORT_COLUMNS = [
   ['Business Unit', function(o){ return o.businessUnit; }],
   ['Order Type', function(o){ return o.orderType; }],
   ['Delivery terms', function(o){ return o.deliveryTerms; }],
+  ['Note', function(o){ return o.note; }],
   ['Product summary', function(o){ return o.productLine; }],
   ['Currency', function(o){ return o.currency; }],
   ['Value (native)', function(o){ return Number(o.value) || 0; }],
@@ -4190,6 +4227,30 @@ function parseFlexibleDate(val){
   return isNaN(parsed) ? null : parsed.toISOString().slice(0, 10);
 }
 
+/* Spreadsheets hand us numbers dressed up for humans: "1,200", "₦85,000.50",
+   "$ 1 250". Number() gives NaN for all of them, which flagged prices as invalid
+   and — worse — silently turned a quantity of 1,200 into 1 via `|| 1`.
+
+   Assumption stated plainly: comma is a thousands separator and dot is the
+   decimal point, which is the convention in every file we have seen. A European
+   "1.200,50" would be misread, so if that ever turns up this needs revisiting
+   rather than quietly guessing. */
+function parseAmount(raw){
+  if(raw === null || raw === undefined) return NaN;
+  if(typeof raw === 'number') return raw;
+  let text = String(raw).trim();
+  if(text === '') return NaN;
+  /* Accounting style: (1,200) means negative. */
+  const bracketed = /^\((.*)\)$/.exec(text);
+  if(bracketed) text = '-' + bracketed[1];
+  text = text
+    .replace(/[₦$£€]/g, '')      // currency symbols
+    .replace(/[\s,]/g, '')       // spaces, non-breaking spaces and thousands commas
+    .replace(/\u00A0/g, '');
+  if(!/^-?\d*\.?\d+$/.test(text)) return NaN;
+  return Number(text);
+}
+
 function parseBulkRow(row, headerMap, rowIndex){
   const s = STATE.session;
   const get = function(field){ return headerMap[field] ? row[headerMap[field]] : ''; };
@@ -4199,15 +4260,17 @@ function parseBulkRow(row, headerMap, rowIndex){
   if(s.role === 'rep' || s.role === 'head') businessGroup = s.businessGroup;
   const businessUnitRaw = String(get('businessUnit') || '').trim();
   const businessUnit = businessGroup ? normalizeBusinessUnit(businessGroup, businessUnitRaw) : null;
-  const quantity = Number(get('quantity')) || 1;
+  const rawQuantity = get('quantity');
+  const quantityBlank = (rawQuantity === '' || rawQuantity === null || rawQuantity === undefined);
+  const quantity = quantityBlank ? 1 : parseAmount(rawQuantity);
   /* Blank and zero mean different things here. A blank price column is almost
      always a mistake; an explicit 0 is a deliberate no-charge line. */
   const rawUnitPrice = get('unitPrice');
   const unitPriceBlank = (rawUnitPrice === '' || rawUnitPrice === null || rawUnitPrice === undefined);
-  const unitPrice = Number(rawUnitPrice);
+  const unitPrice = parseAmount(rawUnitPrice);
   let salesRep = String(get('salesRep') || '').trim();
   if(s.role === 'rep') salesRep = s.name;
-  let pipeline = Number(get('pipeline'));
+  let pipeline = parseAmount(get('pipeline'));
   const dateRaised = parseFlexibleDate(get('dateRaised')) || todayStr();
 
   const errors = [];
@@ -4223,7 +4286,11 @@ function parseBulkRow(row, headerMap, rowIndex){
   if(!itemDescription && !skuValue) errors.push('Missing item description and SKU — one of them is needed');
   if(unitPriceBlank) errors.push('Missing unit price — enter 0 for a no-charge line');
   else if(isNaN(unitPrice) || unitPrice < 0) errors.push('Unit price "' + rawUnitPrice + '" is not a valid amount');
-  if(!quantity || quantity <= 0) errors.push('Quantity must be greater than zero');
+  if(!quantityBlank && isNaN(quantity)){
+    errors.push('Quantity "' + rawQuantity + '" is not a valid number');
+  }else if(!quantity || quantity <= 0){
+    errors.push('Quantity must be greater than zero');
+  }
   if(!salesRep) errors.push('Missing sales rep');
   if([1, 2, 3].indexOf(pipeline) < 0) errors.push('Invalid Pipeline value "' + String(get('pipeline') || '') + '" (must be 1, 2 or 3)');
 
@@ -4246,8 +4313,8 @@ function parseBulkRow(row, headerMap, rowIndex){
     dateRaised: dateRaised,
     expectedCloseDate: parseFlexibleDate(get('expectedCloseDate')) || '',
     salesRep: salesRep,
-    probability: Number(get('probability')) || 50,
-    validityDays: Number(get('validityDays')) || 30,
+    probability: parseAmount(get('probability')) || 50,
+    validityDays: parseAmount(get('validityDays')) || 30,
     pipeline: pipeline,
     importNote: String(get('notes') || '').trim(),
     rowErrors: errors
@@ -4544,6 +4611,8 @@ function generateQuoteDocument(id){
       escapeHtml(o.businessGroup) + (o.businessUnit ? ' · ' + escapeHtml(o.businessUnit) : '') +
       (o.orderType ? ' · ' + escapeHtml(o.orderType) : '') + '</div></div>' +
     (o.deliveryTerms ? '<div class="block"><h4>Delivery terms</h4><div style="font-size:13px;">' + escapeHtml(o.deliveryTerms) + '</div></div>' : '') +
+    (o.note ? '<div class="block"><h4>Note</h4><div style="font-size:13px;white-space:pre-wrap;line-height:1.55;">' +
+      escapeHtml(o.note) + '</div></div>' : '') +
     '<table><thead><tr><th>S/N</th><th>Description</th><th>SKU / Code</th>' +
       '<th class="r">Qty</th><th class="r">Unit price</th><th class="r">Subtotal</th></tr></thead><tbody>' +
       lines.map(function(li, i){
@@ -4707,6 +4776,21 @@ async function loadActivity(){
     STATE.activity = {error: String(err.message || err), items: []};
   }
   render();
+}
+
+/* True when the open dialog contains something a person has typed. Used to stop
+   Escape throwing work away; the Cancel button is always an explicit choice. */
+function modalHoldsInput(){
+  const box = document.querySelector('.overlay');
+  if(!box) return false;
+  const fields = box.querySelectorAll('input, select, textarea');
+  for(let i = 0; i < fields.length; i++){
+    const f = fields[i];
+    if(f.type === 'file' || f.disabled) continue;
+    if(f.type === 'checkbox' || f.type === 'radio'){ if(f.checked) return true; continue; }
+    if(String(f.value || '').trim() !== '') return true;
+  }
+  return false;
 }
 
 function closeModal(){
@@ -4873,7 +4957,10 @@ function wireAll(){
 
   /* Modal chrome */
   on('[data-close-modal]', 'click', closeModal);
-  on('[data-close-overlay]', 'click', function(e){ if(e.target === e.currentTarget) closeModal(); });
+  /* Deliberately no outside-click close. A stray click beside a half-filled
+     quote used to discard the lot; every modal carries a visible Cancel or
+     Close, so nothing is trapped. Escape is likewise only honoured where there
+     is nothing to lose. */
   on('[data-stop]', 'click', function(e){ e.stopPropagation(); });
 
   /* Filters */
@@ -5031,6 +5118,7 @@ function wireOpportunityForm(){
       businessUnit: document.getElementById('f-bu').value,
       orderType: document.getElementById('f-order-type').value,
       deliveryTerms: document.getElementById('f-delivery').value.trim(),
+      note: (document.getElementById('f-note') ? document.getElementById('f-note').value : '').trim(),
       contactPerson: document.getElementById('f-contact').value.trim(),
       contactEmail: emailVal,
       currency: document.getElementById('f-currency').value,
@@ -5146,6 +5234,7 @@ function wireSecondaryForms(){
             businessUnit: document.getElementById('dup-bu').value,
             orderType: document.getElementById('dup-order-type').value,
             deliveryTerms: document.getElementById('dup-delivery').value.trim(),
+            note: src.note || '',
             currency: document.getElementById('f-currency').value,
             lineItems: lineItems
           }
@@ -5214,7 +5303,7 @@ function wireSecondaryForms(){
     const until = document.getElementById('qv-until');
     const o = currentOpp();
     /* Show the date the customer will read, as it is chosen. */
-    if(daysSel && until && o) daysSel.addEventListener('change', function(){
+    if(daysSel && until && o) daysSel.addEventListener('input', function(){
       const days = Number(daysSel.value);
       until.textContent = days
         ? fmtDate(expiryDateOf(Object.assign({}, o, {validityDays: days})))
@@ -5223,9 +5312,9 @@ function wireSecondaryForms(){
     validityForm.addEventListener('submit', async function(e){
       e.preventDefault();
       const id = modalId();
-      const days = Number(document.getElementById('qv-days').value);
-      if(!days){
-        STATE.modalError = 'Choose how long the prices are valid before generating the document.';
+      const days = Math.floor(Number(document.getElementById('qv-days').value));
+      if(!days || days < 1 || days > 365){
+        STATE.modalError = 'Enter how many days the prices hold — a whole number between 1 and 365.';
         render();
         return;
       }
@@ -5689,7 +5778,7 @@ async function boot(){
 }
 
 document.addEventListener('keydown', function(e){
-  if(e.key === 'Escape' && STATE.modal && !STATE.modalBusy) closeModal();
+  if(e.key === 'Escape' && STATE.modal && !STATE.modalBusy && !modalHoldsInput()) closeModal();
 });
 
 /* The test harness loads this file to exercise the pure logic and sets this
