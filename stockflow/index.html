@@ -368,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-09-01.1";
+const STOCKFLOW_BUILD = "2026-09-01.2";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -683,7 +683,8 @@ const STATE = {
   /* Every record view keeps its own page and its own filters, and any
      change to a filter or a sort returns to page one. */
   views: {
-    ledger: {page: 1, dateFrom: '', dateTo: '', item: '', type: '', search: '', sortBy: 'date', sortDir: 'desc', data: null, loading: false},
+    ledger: {page: 1, dateFrom: '', dateTo: '', item: '', type: '', stage: '', businessType: '',
+             search: '', sortBy: 'date', sortDir: 'desc', data: null, loading: false},
     audit:  {page: 1, dateFrom: '', dateTo: '', entity: '', search: '', data: null, loading: false},
     imports: {page: 1, data: null, loading: false},
     git:      {page: 1, search: '', category: '', sortBy: 'gitOldestAge', sortDir: 'desc'},
@@ -924,6 +925,13 @@ const CSV_FIELD_ALIASES = {
   partner: 'partner', partnername: 'partner', b2bpartner: 'partner',
   reseller: 'partner', dealer: 'partner', customer: 'partner',
   customername: 'partner', account: 'partner', accountname: 'partner',
+  /* The business the movement belongs to — B2B or run-rate. The other
+     half of what a type code like "…B2B-MainWH" used to say on its own;
+     the stage half is derived from the type's behaviour and so is never
+     a column. */
+  businesstype: 'businessType', business: 'businessType',
+  businessline: 'businessType', book: 'businessType',
+  b2borrunrate: 'businessType', channel: 'businessType',
   /* No longer in the template — a sale row does not have to carry one.
      Still read if a file includes it, because it is what makes achieved
      margin reportable. */
@@ -943,7 +951,7 @@ function normaliseHeader(h){
    and reported as ignored. */
 const KNOWN_CSV_FIELDS = ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty',
   'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes', 'txnRef', 'parentItem',
-  'partner'];
+  'partner', 'businessType'];
 
 function csvToObjects(text){
   const delimiter = detectDelimiter(text);
@@ -1404,6 +1412,36 @@ function locationOptions(selected, allLabel){
     return '<option value="' + attr(l.code) + '"' + (selected === l.code ? ' selected' : '') + '>' +
       esc(l.code) + ' — ' + esc(l.name) + '</option>';
   }).join('');
+}
+
+/* THE TWO DIMENSIONS A TYPE CODE USED TO CONFLATE.
+
+   `Opening balance B2B-MainWH` said two things in one string: what
+   happens to the stock, and which book it belongs to. Neither could be
+   filtered on, because a filter needs a field and this was a naming
+   convention. They are separate now — the stage derived from the type's
+   behaviour, the business recorded on the movement — and both of these
+   feed the pickers that filter on them.
+
+   Both come from the server, not from a list here: the stages are the
+   three the engine has, and the business lines are a Settings value a
+   business edits. Hard-coding either would put a second definition
+   beside the real one. */
+function businessTypeOptions(selected, blankLabel){
+  const list = STATE.data.businessTypes || [];
+  return '<option value="">' + esc(blankLabel || 'Not specified') + '</option>' +
+    list.map(function(b){
+      return '<option value="' + attr(b) + '"' + (b === selected ? ' selected' : '') + '>' +
+        esc(b) + '</option>';
+    }).join('');
+}
+
+function stageOptions(selected){
+  return '<option value="">All stages</option>' +
+    (STATE.data.stages || ['Backlog', 'GIT', 'MainWH']).map(function(st){
+      return '<option value="' + attr(st) + '"' + (st === selected ? ' selected' : '') + '>' +
+        esc(st) + '</option>';
+    }).join('');
 }
 
 /* Partner names already on the ledger, so the second movement with a
@@ -2188,13 +2226,13 @@ function flowNode(cls, label, value, sub){
    worked examples at the bottom are there because "leave parentItem
    blank on the parent" is far easier to copy than to read. */
 const BULK_TEMPLATE_ROWS = [
-  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark', 'txnRef', 'parentItem', 'partner'],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', '', '', ''],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231', '', '', ''],
-  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123', '', '', ''],
-  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '', '', ''],
-  ['2026-09-08', 'AP6J2AV-B2B', 'HP EliteBook 8 G1i 14 AI', 'Laptops', 'Opening Balance-MainWH', '45', '742252.143', 'TD MW', '', 'Opening stock', 'TXN-1001', '', 'Chiomas Ltd'],
-  ['2026-09-08', '1Y629AV-B2B', 'Electronic Energy Star labeling (EStar)', 'Integrated Components', 'Opening Balance-MainWH', '45', '1.081333', 'TD MW', '', 'Opening stock', 'TXN-1001', 'AP6J2AV-B2B', 'Chiomas Ltd']
+  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark', 'txnRef', 'parentItem', 'partner', 'businessType'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', '', '', '', 'Run-Rate'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231', '', '', '', 'Run-Rate'],
+  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123', '', '', '', 'Run-Rate'],
+  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '', '', '', 'Run-Rate'],
+  ['2026-09-08', 'AP6J2AV-B2B', 'HP EliteBook 8 G1i 14 AI', 'Laptops', 'Opening Balance-MainWH', '45', '742252.143', 'TD MW', '', 'Opening stock', 'TXN-1001', '', 'Chiomas Ltd', 'B2B'],
+  ['2026-09-08', '1Y629AV-B2B', 'Electronic Energy Star labeling (EStar)', 'Integrated Components', 'Opening Balance-MainWH', '45', '1.081333', 'TD MW', '', 'Opening stock', 'TXN-1001', 'AP6J2AV-B2B', 'Chiomas Ltd', 'B2B']
 ];
 
 /* The template as a file. Same rows the Copy button puts on the
@@ -2350,6 +2388,13 @@ function viewLedger(){
           '<input type="text" id="f-partner" list="f-partner-options" autocomplete="off" ' +
             'placeholder="reseller / partner, if B2B">' +
           '<datalist id="f-partner-options">' + partnerOptions() + '</datalist></div>' +
+        /* Defaulted from the type on the server, so an existing
+           "…B2B-MainWH" type still stamps B2B when this is left alone.
+           Offered here so the duplicate types can eventually be
+           collapsed into one and the business chosen per movement. */
+        '<div class="field"><label>Business type</label>' +
+          '<select id="f-businesstype" data-keep-value="1">' +
+            businessTypeOptions('', 'From the movement type') + '</select></div>' +
         '<div class="field" id="f-loc-wrap"><label>Warehouse</label>' +
           '<select id="f-location" data-keep-value="1">' + locationOptions('', 'Not specified') + '</select></div>' +
         '<div class="field" id="f-toloc-wrap"><label>Move to</label>' +
@@ -2611,6 +2656,18 @@ function viewLedgerHistory(){
       types.map(function(t){
         return '<option value="' + attr(t) + '"' + (v.type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
       }).join('') + '</select></div>' +
+    /* The two filters the split exists for. Stage is derived from each
+       row's behaviour, so a shipment answers to both Backlog and GIT —
+       "all GIT activity" that omitted the movements filling GIT would
+       be half a report. */
+    '<div class="field"><label>Stage</label><select id="lf-stage" data-state-value="1">' +
+      stageOptions(v.stage) + '</select></div>' +
+    '<div class="field"><label>Business</label><select id="lf-business" data-state-value="1">' +
+      '<option value="">All businesses</option>' +
+      (STATE.data.businessTypes || []).map(function(b){
+        return '<option value="' + attr(b) + '"' + (v.businessType === b ? ' selected' : '') + '>' +
+          esc(b) + '</option>';
+      }).join('') + '</select></div>' +
     '<div class="field"><label>Search remark, notes, who</label>' +
       '<input type="text" id="lf-search" data-state-value="1" placeholder="PO-4471, INV-, a name…" value="' + attr(v.search) + '"></div>' +
     '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="lf-clear">Clear</button></div>' +
@@ -2628,6 +2685,7 @@ function viewLedgerHistory(){
       '<table><thead><tr>' +
         '<th>Date</th><th>Item</th>' + (showBrandColumn() ? '<th>Brand</th>' : '') +
         '<th>Type</th><th class="num">Qty</th><th class="num">Cost $</th>' +
+        '<th>Stage</th><th>Business</th>' +
         '<th>Where</th><th>Partner</th><th class="num">Sell $</th><th class="num">Cost of sale</th>' +
         '<th>Remark</th><th>Posted by</th><th></th>' +
       '</tr></thead><tbody>' +
@@ -2655,6 +2713,8 @@ function viewLedgerHistory(){
             ? '<td>' + (r.brand ? esc(r.brand) : '<span class="unknown">—</span>') + '</td>'
             : '') +
           '<td>' + typePill(r.type) + '</td>' +
+          '<td>' + (r.stage ? esc(r.stage) : '<span class="unknown">—</span>') + '</td>' +
+          '<td>' + (r.businessType ? esc(r.businessType) : '<span class="unknown">—</span>') + '</td>' +
           '<td class="num">' + fmtNum(r.qty) + '</td>' +
           '<td class="num">' + (r.fob ? fmtMoney(r.fob) : '—') + '</td>' +
           '<td>' + esc([r.location, r.toLocation].filter(function(x, i, a){ return x && a.indexOf(x) === i; }).join(' → ')) + '</td>' +
@@ -3334,6 +3394,7 @@ function viewTypes(){
       '</div>' +
       '<div class="table-wrap"><table><thead><tr>' +
         '<th>Shown as</th><th>Code</th><th>What it does to stock</th>' +
+        '<th>Stage</th><th>Business</th>' +
         '<th>Counts as a sale</th><th>Needs</th><th>Status</th>' + (editable ? '<th></th>' : '') +
       '</tr></thead><tbody>' +
       (types.length ? types.map(function(t){
@@ -3345,6 +3406,13 @@ function viewTypes(){
           '<td><b>' + esc(t.label) + '</b></td>' +
           '<td><span class="unknown">' + esc(t.code) + '</span></td>' +
           '<td class="wrap" style="max-width:none;min-width:260px;">' + esc(t.behaviourLabel) + '</td>' +
+          /* Both derived from the behaviour, so the list states them
+             rather than offering them: a stage is not something a type
+             gets to disagree with. */
+          '<td>' + esc((t.stages || []).join(' → ') || '—') + '</td>' +
+          '<td>' + (t.businessType
+            ? esc(t.businessType)
+            : '<span class="unknown">per movement</span>') + '</td>' +
           '<td>' + (t.isSale
             ? '<span style="color:var(--green);font-weight:600;">yes</span>'
             : '<span class="unknown">no</span>') + '</td>' +
@@ -3799,6 +3867,8 @@ function renderModal(){
         '<tr><td>Quantity</td><td><b>' + fmtNum(r.qty) + '</b></td></tr>' +
         '<tr><td>Reference</td><td>' + esc(r.ref || '—') + '</td></tr>' +
         '<tr><td>Partner</td><td>' + (r.partner ? esc(r.partner) : '—') + '</td></tr>' +
+        '<tr><td>Business type</td><td>' + (r.businessType ? esc(r.businessType) : '—') + '</td></tr>' +
+        '<tr><td>Stage</td><td>' + (r.stage ? esc(r.stage) : '—') + '</td></tr>' +
         (r.txnRef ? '<tr><td>Transaction</td><td>' + esc(r.txnRef) + '</td></tr>' : '') +
         '<tr><td>Posted by</td><td>' + esc(r.actor) + '</td></tr>' +
       '</tbody></table></div>' +
@@ -3893,6 +3963,9 @@ function renderModal(){
             locationOptions(r.toLocation || '', 'Choose…') + '</select>', need.toLocation) +
         box('Remark', 'e-ref',
           '<input type="text" id="e-ref" data-keep-value="1" value="' + attr(r.ref || '') + '">') +
+        box('Business type', 'e-businesstype',
+          '<select id="e-businesstype" data-keep-value="1">' +
+            businessTypeOptions(r.businessType || '', 'Not specified') + '</select>') +
         box('Partner (B2B only)', 'e-partner',
           '<input type="text" id="e-partner" data-keep-value="1" list="e-partner-options" ' +
             'autocomplete="off" value="' + attr(r.partner || '') + '">' +
@@ -4044,6 +4117,14 @@ function renderModal(){
       '<div class="field" style="margin-bottom:12px;"><label>Shown as (what people pick from the list)</label>' +
         '<input type="text" id="type-label" placeholder="e.g. Write-off — damaged" ' +
           'value="' + attr(t.label || '') + '"></div>' +
+      '<div class="field" style="margin-bottom:12px;"><label>Which business? ' +
+        '<span style="color:var(--text-faint);font-weight:400;">— optional</span></label>' +
+        '<select id="type-businesstype">' +
+          businessTypeOptions(t.businessType || '', 'None — chosen per movement') + '</select>' +
+        '<div style="font-size:11px;color:var(--text-faint);margin-top:6px;">' +
+        'Stamped on every movement posted under this type, and overridable on the form. ' +
+        'Leave it as None and the business is chosen per movement — which is what lets one ' +
+        'type serve both books instead of needing a copy of it for each.</div></div>' +
       '<div class="field" style="margin-bottom:6px;"><label>What does it do to stock?</label>' +
         '<select id="type-behaviour"' + ((editing && t.builtIn) ? ' disabled' : '') + '>' +
           behaviours.map(function(b){
@@ -4397,7 +4478,7 @@ function bindLedger(){
     const data = {
       date: val('f-date'), item: val('f-item'), type: val('f-type'),
       qty: val('f-qty'), fob: val('f-fob'), ref: val('f-ref'), notes: val('f-notes'),
-      partner: val('f-partner'),
+      partner: val('f-partner'), businessType: val('f-businesstype'),
       location: val('f-location'), toLocation: val('f-tolocation'), sellPrice: val('f-sellprice')
     };
     const kids = (STATE.txnChildren || []).slice();
@@ -4451,10 +4532,13 @@ function bindLedger(){
   on('#lf-to', 'change', function(e){ setFilter('dateTo', e.target.value); });
   on('#lf-item', 'change', function(e){ setFilter('item', e.target.value); });
   on('#lf-type', 'change', function(e){ setFilter('type', e.target.value); });
+  on('#lf-stage', 'change', function(e){ setFilter('stage', e.target.value); });
+  on('#lf-business', 'change', function(e){ setFilter('businessType', e.target.value); });
   on('#lf-search', 'input', debounce(function(e){ setFilter('search', e.target.value); }, 300));
   on('#lf-clear', 'click', function(){
     STATE.views.ledger = Object.assign(STATE.views.ledger,
-      {page: 1, dateFrom: '', dateTo: '', item: '', type: '', search: ''});
+      {page: 1, dateFrom: '', dateTo: '', item: '', type: '', stage: '',
+       businessType: '', search: ''});
     loadLedger();
   });
   on('[data-spage]', 'click', function(e){
@@ -4655,7 +4739,8 @@ async function commitBulk(force){
 }
 
 const LEDGER_EXPORT_COLUMNS = ['txnId', 'date', 'item', 'brand', 'type', 'qty', 'fob', 'location',
-  'toLocation', 'ref', 'notes', 'partner', 'txnRef', 'parentItem', 'parentTxnId',
+  'toLocation', 'ref', 'notes', 'partner', 'businessType', 'stage',
+  'txnRef', 'parentItem', 'parentTxnId',
   'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale',
   'reversalOf', 'reversalReason', 'batchId', 'actor', 'createdAt', 'voided'];
 
@@ -5106,6 +5191,7 @@ function bindModalActions(){
       ref: val('e-ref'),
       notes: val('e-notes'),
       partner: val('e-partner'),
+      businessType: val('e-businesstype'),
       fob: need.fob ? val('e-fob') : '',
       location: need.location ? val('e-location') : '',
       toLocation: need.toLocation ? val('e-tolocation') : '',
@@ -5149,7 +5235,8 @@ function bindModalActions(){
   on('#type-save', 'click', async function(){
     const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
     const chk = function(id){ const el = document.getElementById(id); return !!(el && el.checked); };
-    const data = {label: val('type-label'), behaviour: val('type-behaviour'), isSale: chk('type-issale')};
+    const data = {label: val('type-label'), behaviour: val('type-behaviour'),
+                  isSale: chk('type-issale'), businessType: val('type-businesstype')};
     m.busy = true; m.error = null; render();
     try{
       if(m.code) await mutate('updateMovementType', {code: m.code, data: data});
@@ -5252,6 +5339,7 @@ async function loadLedger(){
          loaded, and is invisible until then. */
       brand: STATE.activeBrand || '',
       dateFrom: v.dateFrom, dateTo: v.dateTo, item: v.item, type: v.type,
+      stage: v.stage, businessType: v.businessType,
       search: v.search, sortBy: v.sortBy, sortDir: v.sortDir
     });
   }catch(err){
