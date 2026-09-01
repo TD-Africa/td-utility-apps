@@ -368,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-09-01.3";
+const STOCKFLOW_BUILD = "2026-09-01.5";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -684,7 +684,7 @@ const STATE = {
      change to a filter or a sort returns to page one. */
   views: {
     ledger: {page: 1, dateFrom: '', dateTo: '', item: '', type: '', stage: '', businessType: '',
-             search: '', sortBy: 'date', sortDir: 'desc', data: null, loading: false},
+             partner: '', search: '', sortBy: 'date', sortDir: 'desc', data: null, loading: false},
     audit:  {page: 1, dateFrom: '', dateTo: '', entity: '', search: '', data: null, loading: false},
     imports: {page: 1, data: null, loading: false},
     git:      {page: 1, search: '', category: '', sortBy: 'gitOldestAge', sortDir: 'desc'},
@@ -695,7 +695,7 @@ const STATE = {
   },
   /* Shared by Overview and Analytics: one filter, so switching between
      the two screens does not silently change the period being read. */
-  activity: {from: '', to: '', item: '', type: '', businessType: '',
+  activity: {from: '', to: '', item: '', type: '', businessType: '', stage: '', partner: '',
              data: null, position: null, loading: false},
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
@@ -1451,15 +1451,38 @@ function stageOptions(selected){
    suggestions are a convenience, and one that must not cost a request
    or hold up the form. An unlisted name is still perfectly valid — this
    is a datalist, not a dropdown. */
+/* Partner names the ledger actually holds.
+
+   Supplied by the server — by getLedger and by the dashboard's own
+   request, both of which read the whole ledger anyway — and stashed on
+   STATE.data as each lands. An earlier version of this read the rows in
+   the page, which was simply wrong: the ledger lives on
+   STATE.views.ledger.data, so `STATE.data.ledger` was always undefined
+   and the datalist was always empty. It failed silently, which is the
+   worst way for a suggestion list to fail: it looks like nobody has
+   ever typed a partner.
+
+   Deliberately still a datalist and not a dropdown on the entry form:
+   a partner Stockflow has never seen is perfectly valid, and the first
+   movement with a new one must not be harder than the second. */
+function knownPartners(){
+  return STATE.data.partners || [];
+}
+
 function partnerOptions(){
-  const seen = {};
-  ((STATE.data.ledger && STATE.data.ledger.rows) || []).forEach(function(r){
-    const p = String(r.partner || '').trim();
-    if(p) seen[p] = true;
-  });
-  return Object.keys(seen).sort().map(function(p){
+  return knownPartners().map(function(p){
     return '<option value="' + attr(p) + '"></option>';
   }).join('');
+}
+
+/* The filter version: a real dropdown, because filtering to a partner
+   nobody has recorded can only ever return nothing. */
+function partnerFilterOptions(selected){
+  return '<option value="">All partners</option>' +
+    knownPartners().map(function(p){
+      return '<option value="' + attr(p) + '"' + (p === selected ? ' selected' : '') + '>' +
+        esc(p) + '</option>';
+    }).join('');
 }
 
 /* The three behaviours that bring stock into existence, as opposed to
@@ -1985,12 +2008,16 @@ function activityFilterBar(){
         return '<option value="' + attr(t.code) + '"' + (a.type === t.code ? ' selected' : '') + '>' +
           esc(t.label || t.code) + (t.active === false ? ' (retired)' : '') + '</option>';
       }).join('') + '</select></div>' +
+    '<div class="field"><label>Stage</label><select id="mf-stage" data-state-value="1">' +
+      stageOptions(a.stage) + '</select></div>' +
     '<div class="field"><label>Business</label><select id="mf-business" data-state-value="1">' +
       '<option value="">All businesses</option>' +
       (STATE.data.businessTypes || []).map(function(b){
         return '<option value="' + attr(b) + '"' + (a.businessType === b ? ' selected' : '') + '>' +
           esc(b) + '</option>';
       }).join('') + '</select></div>' +
+    '<div class="field"><label>Partner</label><select id="mf-partner" data-state-value="1">' +
+      partnerFilterOptions(a.partner) + '</select></div>' +
     '<div class="field narrow"><label>&nbsp;</label>' +
       '<button class="btn secondary" id="mf-clear">Clear</button></div>' +
     '<div style="flex:1 1 100%;font-size:11.5px;color:var(--text-faint);margin-top:-2px;">' +
@@ -2025,7 +2052,7 @@ function periodFilterOn(){
      drawn from the server's filtered answer rather than summed in the
      page. Leaving it out would filter the movement panel and quietly
      leave the position cards showing the whole company beside it. */
-  return !!(a.from || a.to || a.type || a.businessType);
+  return !!(a.from || a.to || a.type || a.businessType || a.stage || a.partner);
 }
 
 /* The figures the cards, the flow and the charts are drawn from.
@@ -2059,12 +2086,28 @@ function positionMarker(){
   const parts = [];
   if(a.from || a.to) parts.push('arrived ' + periodLabel());
   if(a.type) parts.push('through ' + a.type);
+  if(a.businessType) parts.push('on the ' + a.businessType + ' book');
+  if(a.partner) parts.push('with ' + a.partner);
+  if(a.stage) parts.push('through a ' + a.stage + ' movement');
   if(a.item) parts.push('for ' + a.item);
   return '<div class="banner"><div>🔎</div><div>' +
     '<b>Showing the stock still held that these movements put there</b> — ' +
     esc(parts.join(', ')) + '. ' +
     'Valued at each item\'s net cost, exactly as the unfiltered figures are. ' +
     'Sold is the sales among the same movements.' +
+    /* The stage filter is the one that gets misread, so it says so
+       outright. Filtering to GIT and seeing a Main Warehouse figure
+       looks like a bug until you know the cards count stock by the
+       movement that PUT it where it is, not by where it sits now: the
+       60 units a receipt brought in came through GIT, and are on the
+       shelf. What is in GIT today is the GIT card on the unfiltered
+       view, which is a different question and always available. */
+    (a.stage
+      ? '<br><b>' + esc(a.stage) + '</b> here means "came through a ' + esc(a.stage) +
+        ' movement", not "is sitting in ' + esc(a.stage) + ' now" — a receipt out of GIT ' +
+        'counts as GIT activity and its stock is on the shelf. Clear the filter to see ' +
+        'where stock sits today.'
+      : '') +
     (p.lotsUnattributed
       ? ' ' + fmtNum(p.lotsUnattributed) + ' lot(s) predate the movement log and are ' +
         'excluded while a filter is on.'
@@ -2171,6 +2214,8 @@ function activityPanel(opts){
         (a.item ? ' · ' + esc(a.item) : '') +
         (a.type ? ' · ' + esc(a.type) : '') +
         (a.businessType ? ' · ' + esc(a.businessType) : '') +
+        (a.stage ? ' · ' + esc(a.stage) : '') +
+        (a.partner ? ' · ' + esc(a.partner) : '') +
         ' — reversed movements excluded</span></div></div>' +
     body +
   '</div>';
@@ -2184,11 +2229,12 @@ async function loadActivity(){
        movement panel be drawn from two different moments. */
     const res = await rpc('getDashboard', {
       dateFrom: a.from, dateTo: a.to, item: a.item, type: a.type,
-      businessType: a.businessType,
+      businessType: a.businessType, stage: a.stage, partner: a.partner,
       brand: STATE.activeBrand || ''
     });
     a.data = res.movement;
     a.position = res.position;
+    if(res.movement && res.movement.partners) STATE.data.partners = res.movement.partners;
   }catch(err){
     if(!err.sessionInvalid) toast(diagnose(err).detail, true);
   }
@@ -2211,10 +2257,13 @@ function bindActivity(){
   /* Re-renders as well as reloads, for the same reason Item does: it
      scopes the position cards, which are drawn in the page. */
   on('#mf-business', 'change', function(e){ set('businessType', e.target.value); render(); });
+  on('#mf-stage', 'change', function(e){ set('stage', e.target.value); render(); });
+  on('#mf-partner', 'change', function(e){ set('partner', e.target.value); render(); });
   on('#mf-clear', 'click', function(){
     STATE.activity.from = ''; STATE.activity.to = '';
     STATE.activity.item = ''; STATE.activity.type = '';
-    STATE.activity.businessType = '';
+    STATE.activity.businessType = ''; STATE.activity.stage = '';
+    STATE.activity.partner = '';
     loadActivity(); render();
   });
 }
@@ -2686,6 +2735,8 @@ function viewLedgerHistory(){
         return '<option value="' + attr(b) + '"' + (v.businessType === b ? ' selected' : '') + '>' +
           esc(b) + '</option>';
       }).join('') + '</select></div>' +
+    '<div class="field"><label>Partner</label><select id="lf-partner" data-state-value="1">' +
+      partnerFilterOptions(v.partner) + '</select></div>' +
     '<div class="field"><label>Search remark, notes, who</label>' +
       '<input type="text" id="lf-search" data-state-value="1" placeholder="PO-4471, INV-, a name…" value="' + attr(v.search) + '"></div>' +
     '<div class="field narrow"><label>&nbsp;</label><button class="btn secondary" id="lf-clear">Clear</button></div>' +
@@ -4552,11 +4603,12 @@ function bindLedger(){
   on('#lf-type', 'change', function(e){ setFilter('type', e.target.value); });
   on('#lf-stage', 'change', function(e){ setFilter('stage', e.target.value); });
   on('#lf-business', 'change', function(e){ setFilter('businessType', e.target.value); });
+  on('#lf-partner', 'change', function(e){ setFilter('partner', e.target.value); });
   on('#lf-search', 'input', debounce(function(e){ setFilter('search', e.target.value); }, 300));
   on('#lf-clear', 'click', function(){
     STATE.views.ledger = Object.assign(STATE.views.ledger,
       {page: 1, dateFrom: '', dateTo: '', item: '', type: '', stage: '',
-       businessType: '', search: ''});
+       businessType: '', partner: '', search: ''});
     loadLedger();
   });
   on('[data-spage]', 'click', function(e){
@@ -5349,6 +5401,11 @@ async function loadLedger(){
   const v = STATE.views.ledger;
   v.loading = true;
   try{
+    /* Both the ledger and the dashboard read the whole ledger to answer
+       their own question, so each returns the partner list as a
+       by-product. Stashed as it lands, so the pickers and the entry
+       form's datalist are populated from whichever screen was opened
+       first rather than needing a request of their own. */
     v.data = await rpc('getLedger', {
       page: v.page, pageSize: PAGE_SIZE,
       /* The switcher scopes the movements too. Without this, selecting a
@@ -5357,9 +5414,10 @@ async function loadLedger(){
          loaded, and is invisible until then. */
       brand: STATE.activeBrand || '',
       dateFrom: v.dateFrom, dateTo: v.dateTo, item: v.item, type: v.type,
-      stage: v.stage, businessType: v.businessType,
+      stage: v.stage, businessType: v.businessType, partner: v.partner,
       search: v.search, sortBy: v.sortBy, sortDir: v.sortDir
     });
+    if(v.data && v.data.partners) STATE.data.partners = v.data.partners;
   }catch(err){
     if(!err.sessionInvalid) toast(diagnose(err).detail, true);
   }
@@ -5531,4 +5589,3 @@ if(typeof document !== 'undefined' && typeof window !== 'undefined' && !window._
 </script>
 </body>
 </html>
-
