@@ -368,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-09-01.2";
+const STOCKFLOW_BUILD = "2026-09-01.3";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -695,7 +695,8 @@ const STATE = {
   },
   /* Shared by Overview and Analytics: one filter, so switching between
      the two screens does not silently change the period being read. */
-  activity: {from: '', to: '', item: '', type: '', data: null, position: null, loading: false},
+  activity: {from: '', to: '', item: '', type: '', businessType: '',
+             data: null, position: null, loading: false},
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
          rawText: null, dateOrder: null, dateInfo: null, createMissingItems: null},
@@ -1984,6 +1985,12 @@ function activityFilterBar(){
         return '<option value="' + attr(t.code) + '"' + (a.type === t.code ? ' selected' : '') + '>' +
           esc(t.label || t.code) + (t.active === false ? ' (retired)' : '') + '</option>';
       }).join('') + '</select></div>' +
+    '<div class="field"><label>Business</label><select id="mf-business" data-state-value="1">' +
+      '<option value="">All businesses</option>' +
+      (STATE.data.businessTypes || []).map(function(b){
+        return '<option value="' + attr(b) + '"' + (a.businessType === b ? ' selected' : '') + '>' +
+          esc(b) + '</option>';
+      }).join('') + '</select></div>' +
     '<div class="field narrow"><label>&nbsp;</label>' +
       '<button class="btn secondary" id="mf-clear">Clear</button></div>' +
     '<div style="flex:1 1 100%;font-size:11.5px;color:var(--text-faint);margin-top:-2px;">' +
@@ -2013,7 +2020,12 @@ function directionTag(direction){
 
 function periodFilterOn(){
   const a = STATE.activity;
-  return !!(a.from || a.to || a.type);
+  /* businessType belongs here for the same reason type does: it makes
+     the cards a narrower question than "everything", so they have to be
+     drawn from the server's filtered answer rather than summed in the
+     page. Leaving it out would filter the movement panel and quietly
+     leave the position cards showing the whole company beside it. */
+  return !!(a.from || a.to || a.type || a.businessType);
 }
 
 /* The figures the cards, the flow and the charts are drawn from.
@@ -2158,6 +2170,7 @@ function activityPanel(opts){
       '<span>' + esc(periodLabel()) +
         (a.item ? ' · ' + esc(a.item) : '') +
         (a.type ? ' · ' + esc(a.type) : '') +
+        (a.businessType ? ' · ' + esc(a.businessType) : '') +
         ' — reversed movements excluded</span></div></div>' +
     body +
   '</div>';
@@ -2171,6 +2184,7 @@ async function loadActivity(){
        movement panel be drawn from two different moments. */
     const res = await rpc('getDashboard', {
       dateFrom: a.from, dateTo: a.to, item: a.item, type: a.type,
+      businessType: a.businessType,
       brand: STATE.activeBrand || ''
     });
     a.data = res.movement;
@@ -2194,9 +2208,13 @@ function bindActivity(){
      which are drawn from data already in the page. */
   on('#mf-item', 'change', function(e){ set('item', e.target.value); render(); });
   on('#mf-type', 'change', function(e){ set('type', e.target.value); });
+  /* Re-renders as well as reloads, for the same reason Item does: it
+     scopes the position cards, which are drawn in the page. */
+  on('#mf-business', 'change', function(e){ set('businessType', e.target.value); render(); });
   on('#mf-clear', 'click', function(){
     STATE.activity.from = ''; STATE.activity.to = '';
     STATE.activity.item = ''; STATE.activity.type = '';
+    STATE.activity.businessType = '';
     loadActivity(); render();
   });
 }
