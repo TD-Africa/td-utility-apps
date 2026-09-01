@@ -368,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-08-30.3";
+const STOCKFLOW_BUILD = "2026-09-01.1";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -919,6 +919,11 @@ const CSV_FIELD_ALIASES = {
   parentitem: 'parentItem', parent: 'parentItem', parentpart: 'parentItem',
   parentpartnumber: 'parentItem', parentitemnumber: 'parentItem',
   parentsku: 'parentItem', parentcode: 'parentItem', childof: 'parentItem',
+  /* The B2B partner or reseller. "customer" is deliberately included:
+     on a sale that is what people call the same column. */
+  partner: 'partner', partnername: 'partner', b2bpartner: 'partner',
+  reseller: 'partner', dealer: 'partner', customer: 'partner',
+  customername: 'partner', account: 'partner', accountname: 'partner',
   /* No longer in the template — a sale row does not have to carry one.
      Still read if a file includes it, because it is what makes achieved
      margin reportable. */
@@ -937,7 +942,8 @@ function normaliseHeader(h){
 /* Everything an upload can carry. Anything else in the file is ignored
    and reported as ignored. */
 const KNOWN_CSV_FIELDS = ['date', 'item', 'name', 'category', 'brand', 'b2b', 'type', 'qty',
-  'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes', 'txnRef', 'parentItem'];
+  'fob', 'location', 'toLocation', 'ref', 'sellPrice', 'notes', 'txnRef', 'parentItem',
+  'partner'];
 
 function csvToObjects(text){
   const delimiter = detectDelimiter(text);
@@ -1397,6 +1403,23 @@ function locationOptions(selected, allLabel){
   return '<option value="">' + esc(allLabel || 'All warehouses') + '</option>' + locs.map(function(l){
     return '<option value="' + attr(l.code) + '"' + (selected === l.code ? ' selected' : '') + '>' +
       esc(l.code) + ' — ' + esc(l.name) + '</option>';
+  }).join('');
+}
+
+/* Partner names already on the ledger, so the second movement with a
+   partner is spelled the same way as the first. Drawn from the rows the
+   Ledger screen has already loaded rather than from a fetch of its own:
+   suggestions are a convenience, and one that must not cost a request
+   or hold up the form. An unlisted name is still perfectly valid — this
+   is a datalist, not a dropdown. */
+function partnerOptions(){
+  const seen = {};
+  ((STATE.data.ledger && STATE.data.ledger.rows) || []).forEach(function(r){
+    const p = String(r.partner || '').trim();
+    if(p) seen[p] = true;
+  });
+  return Object.keys(seen).sort().map(function(p){
+    return '<option value="' + attr(p) + '"></option>';
   }).join('');
 }
 
@@ -2165,13 +2188,13 @@ function flowNode(cls, label, value, sub){
    worked examples at the bottom are there because "leave parentItem
    blank on the parent" is far easier to copy than to read. */
 const BULK_TEMPLATE_ROWS = [
-  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark', 'txnRef', 'parentItem'],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', '', ''],
-  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231', '', ''],
-  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123', '', ''],
-  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '', ''],
-  ['2026-09-08', 'AP6J2AV-B2B', 'HP EliteBook 8 G1i 14 AI', 'Laptops', 'Opening Balance-MainWH', '45', '742252.143', 'TD MW', '', 'Opening stock', 'TXN-1001', ''],
-  ['2026-09-08', '1Y629AV-B2B', 'Electronic Energy Star labeling (EStar)', 'Integrated Components', 'Opening Balance-MainWH', '45', '1.081333', 'TD MW', '', 'Opening stock', 'TXN-1001', 'AP6J2AV-B2B']
+  ['date', 'item', 'name', 'category', 'type', 'qty', 'cost price', 'location', 'toLocation', 'remark', 'txnRef', 'parentItem', 'partner'],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Purchase-Backlog', '100', '638', '', '', 'PO-4472', '', '', ''],
+  ['2026-08-25', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Ship-to-GIT', '60', '', '', '', 'OEM-INV-88231', '', '', ''],
+  ['2026-09-02', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Receive-to-MainWH', '60', '', 'TD MW', '', 'ASN-1123', '', '', ''],
+  ['2026-09-05', 'D79E6EA', 'HP OmniBook 3 14-hu0009nia', 'Laptops', 'Sale-from-MainWH', '3', '', '', '', 'INV-9981', '', '', ''],
+  ['2026-09-08', 'AP6J2AV-B2B', 'HP EliteBook 8 G1i 14 AI', 'Laptops', 'Opening Balance-MainWH', '45', '742252.143', 'TD MW', '', 'Opening stock', 'TXN-1001', '', 'Chiomas Ltd'],
+  ['2026-09-08', '1Y629AV-B2B', 'Electronic Energy Star labeling (EStar)', 'Integrated Components', 'Opening Balance-MainWH', '45', '1.081333', 'TD MW', '', 'Opening stock', 'TXN-1001', 'AP6J2AV-B2B', 'Chiomas Ltd']
 ];
 
 /* The template as a file. Same rows the Copy button puts on the
@@ -2207,7 +2230,10 @@ function txnTypeOptions(selected){
 
    The date is not repeated on a child. One transaction happens on one
    day; offering a second date box would only invite the two to disagree,
-   and the server refuses a group that carries more than one date. */
+   and the server refuses a group that carries more than one date. The
+   partner is not repeated either, for the same reason and with the same
+   result: one transaction is with one partner, and a child inherits the
+   parent's. */
 function viewTxnChildren(){
   const kids = STATE.txnChildren || [];
 
@@ -2313,6 +2339,17 @@ function viewLedger(){
           '<input type="number" id="f-fob" min="0" step="any" placeholder="e.g. 750.00"></div>' +
         '<div class="field"><label>Remark</label>' +
           '<input type="text" id="f-ref" placeholder="PO / ASN / Invoice #"></div>' +
+        /* Optional on every movement type. B2B business is transacted
+           through a partner and run-rate business is not, and one ledger
+           carries both — so a column that is mandatory for half the rows
+           is mandatory for none of them. Always shown rather than
+           revealed for -B2B part numbers: which business a movement
+           belongs to is the poster's call, not a guess from a suffix. */
+        '<div class="field"><label>Partner <span style="color:var(--text-faint);' +
+          'font-weight:400;">— B2B only</span></label>' +
+          '<input type="text" id="f-partner" list="f-partner-options" autocomplete="off" ' +
+            'placeholder="reseller / partner, if B2B">' +
+          '<datalist id="f-partner-options">' + partnerOptions() + '</datalist></div>' +
         '<div class="field" id="f-loc-wrap"><label>Warehouse</label>' +
           '<select id="f-location" data-keep-value="1">' + locationOptions('', 'Not specified') + '</select></div>' +
         '<div class="field" id="f-toloc-wrap"><label>Move to</label>' +
@@ -2591,7 +2628,7 @@ function viewLedgerHistory(){
       '<table><thead><tr>' +
         '<th>Date</th><th>Item</th>' + (showBrandColumn() ? '<th>Brand</th>' : '') +
         '<th>Type</th><th class="num">Qty</th><th class="num">Cost $</th>' +
-        '<th>Where</th><th class="num">Sell $</th><th class="num">Cost of sale</th>' +
+        '<th>Where</th><th>Partner</th><th class="num">Sell $</th><th class="num">Cost of sale</th>' +
         '<th>Remark</th><th>Posted by</th><th></th>' +
       '</tr></thead><tbody>' +
       d.rows.map(function(r){
@@ -2621,6 +2658,7 @@ function viewLedgerHistory(){
           '<td class="num">' + fmtNum(r.qty) + '</td>' +
           '<td class="num">' + (r.fob ? fmtMoney(r.fob) : '—') + '</td>' +
           '<td>' + esc([r.location, r.toLocation].filter(function(x, i, a){ return x && a.indexOf(x) === i; }).join(' → ')) + '</td>' +
+          '<td class="wrap">' + (r.partner ? esc(r.partner) : '<span class="unknown">—</span>') + '</td>' +
           '<td class="num">' + (isNum(r.sellPrice) ? fmtMoney(r.sellPrice) : '—') + '</td>' +
           '<td class="num">' + (r.costOfSale ? fmtMoney0(r.costOfSale) : '—') + '</td>' +
           '<td class="wrap">' + esc(r.ref) +
@@ -3760,6 +3798,7 @@ function renderModal(){
         '<tr><td>Type</td><td>' + typePill(r.type) + '</td></tr>' +
         '<tr><td>Quantity</td><td><b>' + fmtNum(r.qty) + '</b></td></tr>' +
         '<tr><td>Reference</td><td>' + esc(r.ref || '—') + '</td></tr>' +
+        '<tr><td>Partner</td><td>' + (r.partner ? esc(r.partner) : '—') + '</td></tr>' +
         (r.txnRef ? '<tr><td>Transaction</td><td>' + esc(r.txnRef) + '</td></tr>' : '') +
         '<tr><td>Posted by</td><td>' + esc(r.actor) + '</td></tr>' +
       '</tbody></table></div>' +
@@ -3854,6 +3893,10 @@ function renderModal(){
             locationOptions(r.toLocation || '', 'Choose…') + '</select>', need.toLocation) +
         box('Remark', 'e-ref',
           '<input type="text" id="e-ref" data-keep-value="1" value="' + attr(r.ref || '') + '">') +
+        box('Partner (B2B only)', 'e-partner',
+          '<input type="text" id="e-partner" data-keep-value="1" list="e-partner-options" ' +
+            'autocomplete="off" value="' + attr(r.partner || '') + '">' +
+          '<datalist id="e-partner-options">' + partnerOptions() + '</datalist>') +
         box('Notes', 'e-notes',
           '<input type="text" id="e-notes" data-keep-value="1" value="' + attr(r.notes || '') + '">') +
       '</div>' +
@@ -4354,6 +4397,7 @@ function bindLedger(){
     const data = {
       date: val('f-date'), item: val('f-item'), type: val('f-type'),
       qty: val('f-qty'), fob: val('f-fob'), ref: val('f-ref'), notes: val('f-notes'),
+      partner: val('f-partner'),
       location: val('f-location'), toLocation: val('f-tolocation'), sellPrice: val('f-sellprice')
     };
     const kids = (STATE.txnChildren || []).slice();
@@ -4611,7 +4655,8 @@ async function commitBulk(force){
 }
 
 const LEDGER_EXPORT_COLUMNS = ['txnId', 'date', 'item', 'brand', 'type', 'qty', 'fob', 'location',
-  'toLocation', 'ref', 'notes', 'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale',
+  'toLocation', 'ref', 'notes', 'partner', 'txnRef', 'parentItem', 'parentTxnId',
+  'sellPrice', 'unitCostAtSale', 'saleValue', 'costOfSale',
   'reversalOf', 'reversalReason', 'batchId', 'actor', 'createdAt', 'voided'];
 
 function ledgerRowsToCsv(rows){
@@ -5060,6 +5105,7 @@ function bindModalActions(){
       qty: val('e-qty'),
       ref: val('e-ref'),
       notes: val('e-notes'),
+      partner: val('e-partner'),
       fob: need.fob ? val('e-fob') : '',
       location: need.location ? val('e-location') : '',
       toLocation: need.toLocation ? val('e-tolocation') : '',
