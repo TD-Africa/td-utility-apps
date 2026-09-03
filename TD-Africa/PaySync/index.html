@@ -1854,10 +1854,24 @@ function viewRegister(mode){
    cached them in a variable it never invalidated (defect D8) — here an open
    period derives fresh on every request and a closed one reads rows that
    cannot change, so there is no cache to go stale. */
+/* Every filter the journal sends to the server must appear here. The journal is
+   paged server-side and the result is cached against this key, so a filter left
+   out of it changes nothing on screen: ensureJournal sees the same key, returns
+   early, and the previous rows stay put. That is how `purpose` shipped looking
+   like a dropdown that did nothing.
+
+   Built by walking the filter state rather than by listing fields, so the next
+   filter added cannot repeat it. `data`, `loading`, `error` and `key` are
+   working state, not filters. */
+const JOURNAL_KEY_SKIP = {data:1, loading:1, error:1, key:1};
+
 function journalKey(){
   const f = STATE.jnl;
-  return [STATE.period, f.q, f.category, f.section, f.businessUnit, f.page, f.pageSize,
-    STATE.revision].join('|');
+  const parts = [STATE.period, STATE.revision];
+  Object.keys(f).sort().forEach(function(k){
+    if(!JOURNAL_KEY_SKIP[k]) parts.push(k + '=' + f[k]);
+  });
+  return parts.join('|');
 }
 
 async function ensureJournal(){
