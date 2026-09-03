@@ -75,6 +75,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;font-size:13px;color:var(
 .nav{background:var(--sf);border-bottom:2px solid var(--bdr);display:flex;padding:0 22px;position:sticky;top:54px;z-index:300;overflow-x:auto}
 .nb{padding:13px 15px;border:none;background:transparent;cursor:pointer;font-size:12.5px;color:var(--t2);border-bottom:3px solid transparent;font-weight:500;white-space:nowrap;transition:all .13s;position:relative;font-family:inherit}
 .nb:hover{background:var(--lt);color:var(--t1)}.nb.on{color:var(--accent-ink);border-bottom-color:var(--w);font-weight:700}
+.nb.waiting{opacity:.45}
 .nb-dot{position:absolute;top:9px;right:8px;min-width:7px;height:7px;padding:0 3px;background:var(--red);border-radius:6px;color:#fff;font-size:8px;line-height:7px;font-weight:700}
 .content{padding:20px 22px;max-width:1600px;margin:0 auto}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
@@ -635,8 +636,28 @@ const VIEW_LABELS = {
 /* Every record view carries its own filters, sort, and page — and each
    remembers its own page, so switching screens does not lose your place
    (gap G1). Changing any filter or sort returns that view to page one. */
+/* The Purpose dimension: what a person's cost is for. A sales person carries
+   the product they sell, everyone in support carries Financial.
+
+   Held here as well as on the server for the same reason REGISTER_FIELDS is: a
+   form must be able to draw itself without a round trip. When this page is
+   newer than the deployed script, ref.purposes is simply absent — and a
+   silently empty dropdown is the one failure a person cannot diagnose. The
+   server's list wins whenever it sends one, so a product added on the RefData
+   tab appears without republishing this file. A test asserts the two lists are
+   identical character for character. */
+const PURPOSE_VALUES = ['APC','ASUS','BOSCH','CHECKPOINT','CISCO','DELL','DELL EMC','DLINK',
+  'Financial','HPE','HPS','HUAWEI','HUAWEI POWER','HUAWEI R-R','HUAWEI SMB','IBM','INFINIX',
+  'IPG','LENOVO','MICROSOFT','NOKIA','NUTANIX','OPPO','PHILIPS','PSG','SAMSUNG CE',
+  'SAMSUNG COM','SAMSUNG MOBILE','STARLINK','SYINIX','TECNO','ZEBRA','ZINOX IPOWER'];
+
+function purposeList(){
+  const ref = STATE.refData || {};
+  return (ref.purposes && ref.purposes.length) ? ref.purposes : PURPOSE_VALUES;
+}
+
 function newRegisterFilter(){
-  return {q:'', grp:'', type:'', bu:'', status:'', sort:'name', dir:1, page:1, pageSize:50};
+  return {q:'', grp:'', type:'', bu:'', purpose:'', status:'', sort:'name', dir:1, page:1, pageSize:50};
 }
 
 const STATE = {
@@ -676,7 +697,7 @@ const STATE = {
   /* Per-view filter state. */
   reg: {payroll:newRegisterFilter(), security:newRegisterFilter(), consolidated:newRegisterFilter()},
   chg: {q:'', type:'', showReversed:false, page:1, pageSize:25},
-  jnl: {q:'', category:'', section:'', businessUnit:'', page:1, pageSize:200,
+  jnl: {q:'', category:'', section:'', businessUnit:'', purpose:'', page:1, pageSize:200,
         loading:false, data:null, error:null, key:''},
   hist: {q:'', entity:'', action:'', actorId:'', from:'', to:'', page:1, pageSize:50,
          loading:false, data:null, error:null, key:''},
@@ -861,7 +882,7 @@ function render(){
   app.innerHTML = renderTopBar() + renderNav() +
     '<div class="content">' +
       renderAlerts() +
-      (STATE.needsSetup ? renderSetupNotice() : renderView()) +
+      renderView() +
     '</div>';
 
   renderOverlay();
@@ -897,10 +918,12 @@ function renderAlerts(){
       '<button class="btn btn-sm btn-ghost" data-act="dismiss-save">Dismiss</button></div></div>';
   }
   /* A branded copy pointed at another company's Sheet is the worst outcome
-     available here, and the easiest to cause with a copy-paste: Task Systems
-     staff would be looking at TD Africa's payroll under a Task Systems
-     header. The server reports whose Sheet this is; if it disagrees with this
-     file's BRAND block, say so loudly rather than rendering it. */
+     available here, and the easiest to cause with a copy-paste — the more so
+     now that several deployments share a colour scheme and differ only by the
+     name in the header. Someone would be looking at one company's payroll
+     under another's heading. The server reports whose Sheet this is; if that
+     disagrees with this file's BRAND block, say so loudly rather than
+     rendering it. */
   if(STATE.settings && STATE.settings.orgName &&
      STATE.settings.orgName.trim().toLowerCase() !== BRAND.org.trim().toLowerCase()){
     html += '<div class="alert err"><div><strong>This page is branded for ' +
@@ -1012,7 +1035,10 @@ function renderTopBar(){
   const counts = staffCounts();
   return '<div class="top">' +
     '<div class="top-l"><div class="logo">' + esc(BRAND.logo) + '</div><div>' +
-      '<div class="top-h1">' + esc(BRAND.app) + ' &mdash; ' + esc(BRAND.tagline) + '</div>' +
+      /* The organisation leads, because several deployments share a colour
+         scheme and the header is the only thing on screen that tells a person
+         whose payroll they are looking at. */
+      '<div class="top-h1">' + esc(BRAND.org) + ' &mdash; ' + esc(BRAND.app) + '</div>' +
       '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' + counts.sales + ' sales &nbsp;|&nbsp; ' +
         counts.support + ' support &nbsp;|&nbsp; ' + counts.tds + ' TD Services &nbsp;|&nbsp; ' +
         'all figures in naira (' + NAIRA + ')</div>' +
@@ -1035,7 +1061,12 @@ function renderNav(){
   }).map(function(v){
     const dot = (v === 'changes' && pending)
       ? '<span class="nb-dot">' + pending + '</span>' : '';
-    return '<button class="nb' + (STATE.view === v ? ' on' : '') + '" data-nav="' + v + '">' +
+    /* Still clickable when there is no period — clicking explains why the
+       screen is empty, which is more use than an unresponsive button. */
+    const waiting = STATE.needsSetup && v !== 'admin';
+    return '<button class="nb' + (STATE.view === v ? ' on' : '') + (waiting ? ' waiting' : '') +
+      '" data-nav="' + v + '"' +
+      (waiting ? ' title="Needs a payroll period first"' : '') + '>' +
       esc(VIEW_LABELS[v]) + dot + '</button>';
   }).join('') + '</div>';
 }
@@ -1079,12 +1110,27 @@ function renderMonthBar(){
 }
 
 function renderSetupNotice(){
-  return '<div class="note amber" style="line-height:1.7">' +
-    '<strong>This PaySync Sheet has no payroll period yet.</strong><br>' + esc(STATE.setupMessage) +
-    '</div>' +
-    (can('createPeriod')
-      ? '<button class="btn btn-f" data-act="new-period">Create the first period</button>'
-      : '<div class="note grey">Ask an Administrator to set it up.</div>');
+  const where = VIEW_LABELS[STATE.view] || 'This screen';
+  return '<div class="sec-title">' + esc(where) + '</div>' +
+    '<div class="note amber" style="line-height:1.7">' +
+      '<strong>' + esc(where) + ' has nothing to show until this Sheet has a payroll period.' +
+      '</strong><br>' + esc(STATE.setupMessage) + '</div>' +
+    (can('createPeriod') || can('manageDirectory')
+      ? '<div class="card"><div class="card-h">Getting started</div>' +
+        '<ol style="margin-left:18px;line-height:1.9;font-size:13px">' +
+          (can('manageDirectory')
+            ? '<li>Add the people who will use this Sheet — HR, Finance, anyone who needs to see ' +
+              'it. <button class="btn btn-sm btn-w" data-nav="admin">Go to Administration</button></li>'
+            : '') +
+          '<li>Load this company\u2019s staff onto the <strong>Staff</strong> tab of the Sheet, and ' +
+            'its reference data onto <strong>RefData</strong>, <strong>AcctRef</strong> and ' +
+            '<strong>SalaryStruct</strong>. See DEPLOYMENT.md step 5.</li>' +
+          (can('createPeriod')
+            ? '<li>Create the first payroll period. ' +
+              '<button class="btn btn-sm btn-f" data-act="new-period">Create a period</button></li>'
+            : '') +
+        '</ol></div>'
+      : '<div class="note grey">Ask an Administrator to finish setting this Sheet up.</div>');
 }
 
 /* ============================================================
@@ -1175,6 +1221,14 @@ function renderView(){
     history: viewHistory, structure: viewStructure, proration: viewProration,
     recon: viewReconciliation, admin: viewAdmin
   }[STATE.view];
+  /* With no payroll period there is nothing for the payroll screens to show.
+     Administration is the exception, and the important one: it is where the
+     people who will use this Sheet get added and where the first period is
+     created. Rendering the same notice on every tab made clicking one look
+     like nothing had happened. */
+  if(STATE.needsSetup && STATE.view !== 'admin'){
+    return renderSetupNotice();
+  }
   return renderMonthBar() + (body ? body() : '<div class="empty">Unknown view.</div>');
 }
 
@@ -1525,10 +1579,22 @@ function filteredStaff(mode){
     if(f.grp && e.salary_group !== f.grp) return false;
     if(f.type && e.staff_type !== f.type) return false;
     if(f.bu && e.bus_unit !== f.bu) return false;
+    if(f.purpose && (e.purpose || '') !== f.purpose) return false;
     if(f.status && (e.status || 'ACTIVE') !== f.status) return false;
     return true;
   });
   return sortRows(rows, f.sort, f.dir);
+}
+
+/* A blank Purpose on a sales record is a real gap: it expands to an empty D365
+   dimension segment, which imports without complaint and posts to the wrong
+   place. Shown as an amber "set" rather than an em dash so it reads as
+   outstanding rather than as not applicable. */
+function purposeCell(e){
+  const v = (e.purpose || '').trim();
+  if(v) return '<td>' + esc(v) + '</td>';
+  return '<td class="muted" style="color:var(--gld);font-weight:600" ' +
+    'title="No Purpose set: this posts to an empty D365 dimension">set</td>';
 }
 
 function registerControls(mode){
@@ -1542,8 +1608,10 @@ function registerControls(mode){
     selectHtml(mode + '-type', [['','Sales + support + TDS'],['SALES','Sales only'],
       ['SUPPORT','Support only'],['TD SERVICES','TD Services']], f.type,
       {act:'filter:reg.' + mode + ':type'}) +
-    selectHtml(mode + '-bu', [['','All business units']].concat((ref.businessUnits || [])
+    selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
       .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'}) +
+    selectHtml(mode + '-purpose', [['','All purposes']].concat(purposeList()
+      .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:reg.' + mode + ':purpose'}) +
     selectHtml(mode + '-status', [['','Any status'],['ACTIVE','Active'],['New Hire','New hire'],
       ['SUSPENDED','Suspended'],['EXITED','Exited']], f.status, {act:'filter:reg.' + mode + ':status'}) +
     selectHtml(mode + '-size', [[25,'25 per page'],[50,'50'],[100,'100'],[250,'250']], f.pageSize,
@@ -1630,7 +1698,7 @@ function viewRegister(mode){
 
   if(mode === 'payroll'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
+        '<th class="hg" colspan="' + (can('sendPayslip') ? 8 : 7) + '"></th>' +
         '<th class="hg" colspan="6">Payroll earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="1">Employer cost</th>' +
         '<th class="hg" colspan="5">Payroll deductions</th>' +
@@ -1640,7 +1708,8 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        sortHeader(mode, 'bus_unit', 'Bus unit') + sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'bus_unit', 'SAL_Dept') + sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'purpose', 'Purpose') +
         sortHeader(mode, 'gross', 'Gross', 'r') + sortHeader(mode, 'basic', 'Basic', 'r') +
         sortHeader(mode, 'housing', 'Housing', 'r') + sortHeader(mode, 'transport', 'Transport', 'r') +
         sortHeader(mode, 'domestic', 'Domestic / arrears', 'r') +
@@ -1656,6 +1725,7 @@ function viewRegister(mode){
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
         '<td>' + esc(e.grade) + '</td><td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td>' +
+        purposeCell(e) +
         ['gross','basic','housing','transport','domestic','total_earn'].map(function(k){
           return '<td class="earn">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
         /* Employer pension sits in its own group, not inside earnings — it is a
@@ -1669,7 +1739,7 @@ function viewRegister(mode){
     }).join('');
   }else if(mode === 'security'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 6 : 5) + '"></th>' +
+        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
         '<th class="hg" colspan="8">Security earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="5">Fixed deductions</th>' +
         '<th class="hg" colspan="5">EMP account deductions · DR employee loan account</th>' +
@@ -1679,7 +1749,7 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'org', 'Org') + sortHeader(mode, 'purpose', 'Purpose') +
         sortHeader(mode, 'sec_allow', 'Sec allow', 'r') + sortHeader(mode, 'resp_allow', 'Resp allow', 'r') +
         sortHeader(mode, 'sec_arrears', 'Sec arrears', 'r') + sortHeader(mode, 'special_sec', 'Special sec', 'r') +
         sortHeader(mode, 'commission', 'Commission', 'r') + sortHeader(mode, 'contract_sec', 'Ctr sec allow', 'r') +
@@ -1706,7 +1776,7 @@ function viewRegister(mode){
       const car = (Number(e.car_scheme1) || 0) + (Number(e.car_scheme2) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
-        '<td>' + esc(e.grade) + '</td><td>' + esc(e.org) + '</td>' +
+        '<td>' + esc(e.grade) + '</td><td>' + esc(e.org) + '</td>' + purposeCell(e) +
         ['sec_allow','resp_allow','sec_arrears','special_sec','commission','contract_sec',
          'other_allow','sec_total_earn'].map(function(k){
           return '<td class="earn">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
@@ -1723,15 +1793,15 @@ function viewRegister(mode){
     }).join('');
   }else{
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 6 : 5) + '"></th>' +
+        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
         '<th class="hg" colspan="3">Payroll</th>' +
         '<th class="hg" colspan="3">Security</th><th class="hg" colspan="1">Consolidated</th>' +
         '<th class="hg" colspan="3"></th>' +
       '</tr><tr>' +
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
-        sortHeader(mode, 'bus_unit', 'Bus unit') + sortHeader(mode, 'org', 'Org') +
-        sortHeader(mode, 'grade', 'Grade') +
+        sortHeader(mode, 'bus_unit', 'SAL_Dept') + sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'grade', 'Grade') + sortHeader(mode, 'purpose', 'Purpose') +
         /* Labelled for what they are. The prototype's "JUNE PAY" and "JUNE
            TOTAL" columns actually showed July file values (defect D24). */
         sortHeader(mode, 'jul_net', 'Payroll before movements', 'r') +
@@ -1748,6 +1818,7 @@ function viewRegister(mode){
       const movS = (Number(e.netSecurity) || 0) - (Number(e.jul_sec_net) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
+        purposeCell(e) +
         '<td class="r">' + esc(moneyOrBlank(e.jul_net)) + '</td>' +
         '<td class="' + (movP > 0 ? 'earn' : movP < 0 ? 'ded' : 'r') + '">' + esc(signed(movP)) + '</td>' +
         '<td class="net">' + esc(money(e.netPay)) + '</td>' +
@@ -1799,7 +1870,8 @@ async function ensureJournal(){
     const f = STATE.jnl;
     const res = await rpc('getJournalPage', {
       period: STATE.period, page: f.page, pageSize: f.pageSize,
-      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit}
+      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
+        purpose:f.purpose}
     });
     STATE.jnl.data = res;
     STATE.jnl.key = key;
@@ -1826,15 +1898,17 @@ function viewJournal(){
     selectHtml('jnl-sec', [['','Payroll + security'],['PAYROLL','Payroll only'],
       ['SECURITY','Security only'],['EMP_ACCT','EMP account only']], f.section,
       {act:'filter:jnl:section'}) +
-    selectHtml('jnl-bu', [['','All business units']].concat((ref.businessUnits || [])
+    selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
       .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'}) +
+    selectHtml('jnl-purpose', [['','All purposes']].concat(purposeList()
+      .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:jnl:purpose'}) +
     selectHtml('jnl-size', [[100,'100 per page'],[200,'200'],[500,'500']], f.pageSize,
       {act:'filter:jnl:pageSize'}) +
     (can('exportJournal')
       ? '<button class="btn btn-w" data-act="export-journal">Export CSV</button>' +
         '<button class="btn btn-g" data-act="export-d365" ' +
-        'title="The same postings in the column layout Dynamics 365 imports">' +
-        'Export to D365</button>'
+        'title="An Excel workbook, filter on, in the column layout Dynamics 365 imports">' +
+        'Export to D365 (Excel)</button>'
       : '') +
     '</div>';
 
@@ -1893,7 +1967,8 @@ function viewJournal(){
     table = '<div class="tw"><div class="ts" data-keep-scroll="jnl">' +
       '<table><thead><tr>' +
         '<th class="hc r">#</th><th class="hc">Emp no</th><th class="hc">Staff name</th>' +
-        '<th class="hc">Bus unit</th><th class="hc">Org</th><th class="hc">Ledger</th>' +
+        '<th class="hc">SAL_Dept</th><th class="hc">Org</th><th class="hc">Purpose</th>' +
+        '<th class="hc">Ledger</th>' +
         '<th class="hc c">Category</th><th class="hc">Debit</th><th class="hc">Credit</th>' +
         '<th class="hc r">Amount</th><th class="hc">Section</th><th class="hc">EMP account</th>' +
       '</tr></thead><tbody>' +
@@ -1905,6 +1980,7 @@ function viewJournal(){
           '<td class="muted">' + esc(r.emp_no) + '</td>' +
           '<td class="nm">' + esc(r.name) + '</td>' +
           '<td>' + esc(r.bus_unit) + '</td><td>' + esc(r.org) + '</td>' +
+          '<td>' + esc(r.purpose || '') + '</td>' +
           '<td style="font-weight:500">' + esc(r.ledger) + '</td>' +
           '<td class="c"><span class="bdg ' + (r.category === 'EARNINGS' ? 'bNEW' : 'bEXI') + '">' +
             esc(r.category) + '</span></td>' +
@@ -1975,7 +2051,7 @@ function viewBusinessGroups(){
     (a.unallocated.length
       ? '<div class="note red"><strong>' + a.unallocated.length + ' member(s) of staff could not be ' +
         'matched to a Business Group</strong>, so their cost has gone into the shared support pool ' +
-        'rather than to a group directly. Give their business unit a Business Group on the RefData tab.' +
+        'rather than to a group directly. Give their SAL_Dept a Business Group on the RefData tab.' +
         '<ul style="margin:6px 0 0 18px">' + a.unallocated.map(function(u){
           return '<li>' + esc(u.emp_no) + ' ' + esc(u.name) + ' — ' + esc(u.bus_unit || 'no unit') +
             ' · ' + esc(money(u.cost)) + '</li>'; }).join('') + '</ul></div>'
@@ -2037,7 +2113,7 @@ function viewBusinessGroups(){
     '<div class="sec-title" style="font-size:13.5px">Sales and TD Services staff — direct cost</div>' +
     '<div class="tw"><div class="ts" data-keep-scroll="bu-staff"><table><thead><tr>' +
       '<th class="hc">Emp no</th><th class="hc">Name</th><th class="hc">Grade</th>' +
-      '<th class="hc">Org</th><th class="hc">Bus unit</th><th class="hc">Business group</th>' +
+      '<th class="hc">Org</th><th class="hc">SAL_Dept</th><th class="hc">Business group</th>' +
       '<th class="hc r">Net payroll</th><th class="hc r">Net security</th><th class="hc r">Total</th>' +
     '</tr></thead><tbody>' +
       (direct.length ? direct.map(function(e){
@@ -2707,7 +2783,8 @@ function modalPayslip(m){
       '<div class="ps-emp">' +
         psField('Employee no', p.emp_no) + psField('Name', p.name) +
         psField('Grade', p.grade || '—') + psField('Salary group', p.salary_group || '—') +
-        psField('Business unit', p.bus_unit || '—') + psField('Organisation', p.org || '—') +
+        psField('SAL_Dept', p.bus_unit || '—') + psField('Purpose', p.purpose || '—') +
+        psField('Organisation', p.org || '—') +
         psField('Staff type', p.staff_type || '—') +
         psField('Loan account', p.empAccount || '—') +
       '</div>' +
@@ -2817,9 +2894,12 @@ function modalMovement(m){
         '<div class="fld"><label>Staff type</label>' +
           selectHtml('mv-nh-type', [['SUPPORT','SUPPORT'],['SALES','SALES'],
             ['TD SERVICES','TD SERVICES']], 'SUPPORT') + '</div>' +
-        '<div class="fld"><label>Business unit</label>' +
+        '<div class="fld"><label>SAL_Dept</label>' +
           selectHtml('mv-nh-bu', [['','— none —']].concat((ref.businessUnits || [])
             .map(function(b){ return [b, b]; })), '') + '</div>' +
+        '<div class="fld"><label>Purpose</label>' +
+          selectHtml('mv-nh-purpose', [['','— none —']].concat(purposeList()
+            .map(function(v){ return [v, v]; })), '') + '</div>' +
         '<div class="fld"><label>Email</label>' +
           '<input type="email" id="mv-nh-email" placeholder="name@tdafrica.com"></div>' +
       '</div>' : '') +
@@ -2963,10 +3043,14 @@ function modalStaff(m){
         '<div class="fld"><label>Staff type</label>' +
           selectHtml('st-staff_type', [['SUPPORT','SUPPORT'],['SALES','SALES'],
             ['TD SERVICES','TD SERVICES']], e ? e.staff_type : 'SUPPORT') + '</div>' +
-        '<div class="fld"><label>Business unit</label>' +
+        '<div class="fld"><label>SAL_Dept</label>' +
           selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
             .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
           '<span class="hint">Decides the Business Group cost is charged to.</span></div>' +
+        '<div class="fld"><label>Purpose</label>' +
+          selectHtml('st-purpose', [['','—']].concat(purposeList()
+            .map(function(v){ return [v, v]; })), e ? e.purpose : '') +
+          '<span class="hint">Sales: the product they sell. Support: Financial.</span></div>' +
         '<div class="fld"><label>Organisation</label>' +
           selectHtml('st-org', [['','—']].concat((ref.orgs || []).map(function(o){ return [o, o]; })),
             e ? e.org : '') + '</div>' +
@@ -3666,29 +3750,29 @@ function stamp(){ return STATE.period.replace('-', '_'); }
 
 const REGISTER_EXPORT = {
   payroll: {
-    cols: ['emp_no','name','salary_group','grade','bus_unit','org','gross','basic','housing',
+    cols: ['emp_no','name','salary_group','grade','bus_unit','org','purpose','gross','basic','housing',
       'transport','domestic','total_earn','emp_pension','pension','paye','welfare','nhf',
       'total_ded','netPay','status'],
-    head: ['Emp no','Name','Salary group','Grade','Business unit','Org','Gross','Basic','Housing',
+    head: ['Emp no','Name','Salary group','Grade','SAL_Dept','Org','Purpose','Gross','Basic','Housing',
       'Transport','Domestic/arrears','Total earnings','Employer pension','Pension','PAYE','Welfare',
       'NHF','Total deductions','Net payroll','Status']
   },
   security: {
-    cols: ['emp_no','name','salary_group','grade','org','sec_allow','resp_allow','sec_arrears',
+    cols: ['emp_no','name','salary_group','grade','org','purpose','sec_allow','resp_allow','sec_arrears',
       'special_sec','commission','contract_sec','other_allow','sec_total_earn','vol_pension',
       'staff_purchase','contract_welfare','device_financing','sec_tax','sec_penalties',
       'laptop_scheme','simba_loan','car_scheme1','car_scheme2','emp_account','sec_total_ded',
       'netSecurity','status'],
-    head: ['Emp no','Name','Salary group','Grade','Org','Security allowance','Responsibility allowance',
+    head: ['Emp no','Name','Salary group','Grade','Org','Purpose','Security allowance','Responsibility allowance',
       'Security arrears','Special security','Commission','Contract security','Other allowance',
       'Total security earnings','Voluntary pension','Staff purchase','Contract welfare',
       'Device financing','Security tax','Security penalties','Laptop scheme','Simba loan',
       'Car scheme','Car scheme 2','Loan account','Total security deductions','Net security','Status']
   },
   consolidated: {
-    cols: ['emp_no','name','bus_unit','org','grade','staff_type','resolvedBg','jul_net','netPay',
+    cols: ['emp_no','name','bus_unit','org','purpose','grade','staff_type','resolvedBg','jul_net','netPay',
       'jul_sec_net','netSecurity','netTotal','status'],
-    head: ['Emp no','Name','Business unit','Org','Grade','Staff type','Business group',
+    head: ['Emp no','Name','SAL_Dept','Org','Purpose','Grade','Staff type','Business group',
       'Payroll before movements','Net payroll','Security before movements','Net security',
       'Consolidated net','Status']
   }
@@ -3717,7 +3801,8 @@ async function exportJournal(){
     const f = STATE.jnl;
     const res = await rpc('getJournalExport', {
       period: STATE.period,
-      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit}
+      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
+        purpose:f.purpose}
     });
     const out = [
       ['PaySync journal', periodLabel(STATE.period),
@@ -3725,11 +3810,12 @@ async function exportJournal(){
         res.source === 'posted' ? 'Posted ' + res.postedAt : 'Exported ' + new Date().toISOString(),
         'Debits ' + res.totals.debit.toFixed(2), 'Credits ' + res.totals.credit.toFixed(2),
         res.totals.assertion.ok ? 'BALANCED' : 'DOES NOT BALANCE'],
-      ['Batch','Period','#','Emp no','Staff name','Business unit','Org','Ledger','Category',
+      ['Batch','Period','#','Emp no','Staff name','SAL_Dept','Org','Purpose','Ledger','Category',
         'Debit code','Credit code','Amount','Section','EMP account']
     ];
     res.rows.forEach(function(r){
-      out.push([res.batchRef || '', r.period, r.seq, r.emp_no, r.name, r.bus_unit, r.org, r.ledger,
+      out.push([res.batchRef || '', r.period, r.seq, r.emp_no, r.name, r.bus_unit, r.org,
+        r.purpose || '', r.ledger,
         r.category, r.debit, r.credit, Number(r.amount).toFixed(2), r.section, r.empAccount || '']);
     });
     downloadCsv('PaySync_journal_' + stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.csv', out);
@@ -3742,32 +3828,300 @@ async function exportJournal(){
   }
 }
 
+/* ============================================================
+   XLSX EXPORT
+   ------------------------------------------------------------
+   The D365 file is an Excel workbook with a filter on the header row, not a
+   CSV. Nothing is loaded to build it, because this page deliberately loads
+   nothing at all: an .xlsx is a ZIP of XML parts, and the ZIP format permits a
+   stored — uncompressed — entry, so the whole writer is string building plus a
+   CRC32. The file is bigger than a deflated one would be, a few megabytes for a
+   month of postings, which is a fair price for an export that cannot be broken
+   by a CDN disappearing or a network policy blocking it.
+
+   Amounts are written as numbers, not text. That is the reason for shipping a
+   workbook rather than a CSV in the first place: a filtered column has to sum.
+   ============================================================ */
+
+const XLSX_CRC = (function(){
+  const t = new Uint32Array(256);
+  for(let n = 0; n < 256; n++){
+    let c = n;
+    for(let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes){
+  let c = 0xFFFFFFFF;
+  for(let i = 0; i < bytes.length; i++) c = XLSX_CRC[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/* A, B … Z, AA. Excel's column names are base-26 with no zero digit. */
+function colName(n){
+  let s = '';
+  while(n > 0){ const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; }
+  return s;
+}
+
+function xmlEsc(s){
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    /* A control character is not legal anywhere in XML. Left in, it makes the
+       workbook refuse to open rather than merely look wrong, so it goes. */
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
+
+/* A ZIP whose entries are all stored rather than deflated. */
+function zipStored(parts){
+  const enc = new TextEncoder();
+  const chunks = [];
+  const dir = [];
+  let at = 0;
+  parts.forEach(function(p){
+    const name = enc.encode(p.name);
+    const crc = crc32(p.bytes);
+    const h = new Uint8Array(30 + name.length);
+    const d = new DataView(h.buffer);
+    d.setUint32(0, 0x04034b50, true);   /* local file header */
+    d.setUint16(4, 20, true);           /* version needed */
+    d.setUint16(6, 0x0800, true);       /* the name is UTF-8 */
+    d.setUint16(8, 0, true);            /* method 0 — stored */
+    d.setUint32(14, crc, true);
+    d.setUint32(18, p.bytes.length, true);
+    d.setUint32(22, p.bytes.length, true);
+    d.setUint16(26, name.length, true);
+    h.set(name, 30);
+    chunks.push(h, p.bytes);
+    dir.push({name:name, crc:crc, size:p.bytes.length, at:at});
+    at += h.length + p.bytes.length;
+  });
+  const dirAt = at;
+  dir.forEach(function(e){
+    const h = new Uint8Array(46 + e.name.length);
+    const d = new DataView(h.buffer);
+    d.setUint32(0, 0x02014b50, true);   /* central directory header */
+    d.setUint16(4, 20, true);
+    d.setUint16(6, 20, true);
+    d.setUint16(8, 0x0800, true);
+    d.setUint16(10, 0, true);
+    d.setUint32(16, e.crc, true);
+    d.setUint32(20, e.size, true);
+    d.setUint32(24, e.size, true);
+    d.setUint16(28, e.name.length, true);
+    d.setUint32(42, e.at, true);
+    h.set(e.name, 46);
+    chunks.push(h);
+    at += h.length;
+  });
+  const end = new Uint8Array(22);
+  const d = new DataView(end.buffer);
+  d.setUint32(0, 0x06054b50, true);     /* end of central directory */
+  d.setUint16(8, dir.length, true);
+  d.setUint16(10, dir.length, true);
+  d.setUint32(12, at - dirAt, true);
+  d.setUint32(16, dirAt, true);
+  chunks.push(end);
+  return new Blob(chunks,
+    {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+
+/* opts.headerRow is the 1-based row the headings sit on — 1 unless the file
+   being matched leaves rows above them, which the D365 layout does. Rows before
+   it are written as they are given, blank included, and the filter covers the
+   heading row down to the last row.
+
+   opts.numeric lists column indexes written as plain numbers; opts.money lists
+   those written as numbers with the accounting format. opts.sheet names the
+   tab. */
+function downloadXlsx(filename, rows, opts){
+  const o = opts || {};
+  const enc = new TextEncoder();
+  const headerRow = Math.max(1, Number(o.headerRow) || 1);
+  const numeric = {};
+  (o.numeric || []).forEach(function(i){ numeric[i] = true; });
+  const money = {};
+  (o.money || []).forEach(function(i){ money[i] = true; });
+  const nCols = rows.reduce(function(m, r){ return Math.max(m, r.length); }, 1);
+  const nRows = Math.max(rows.length, 1);
+  /* The filter starts at the heading row, not at the top of the sheet. */
+  const ref = 'A' + headerRow + ':' + colName(nCols) + nRows;
+  /* Excel refuses these characters in a sheet name, and anything past 31. */
+  const sheet = String(o.sheet || 'Sheet1').replace(/[\[\]\*\/\\\?:]/g, ' ').slice(0, 31);
+
+  const headings = rows[headerRow - 1] || [];
+  let cols = '';
+  for(let c = 0; c < nCols; c++){
+    const head = String(headings[c] || '');
+    cols += '<col min="' + (c + 1) + '" max="' + (c + 1) + '" width="' +
+      Math.min(Math.max(head.length + 4, 10), 34) + '" customWidth="1"/>';
+  }
+
+  const body = rows.map(function(r, i){
+    const isHead = (i + 1) === headerRow;
+    let cells = '';
+    for(let c = 0; c < r.length; c++){
+      const at = colName(c + 1) + (i + 1);
+      const v = r[c];
+      if(v === null || v === undefined || v === ''){
+        /* An empty heading cell still needs the style, or the filter button
+           lands on an unformatted column. Empty cells elsewhere are omitted
+           entirely, which is what Excel itself writes. */
+        if(isHead) cells += '<c r="' + at + '" s="1"/>';
+        continue;
+      }
+      if(!isHead && money[c] && isFinite(Number(v))){
+        cells += '<c r="' + at + '" s="2"><v>' + Number(v) + '</v></c>';
+      }else if(!isHead && numeric[c] && isFinite(Number(v))){
+        cells += '<c r="' + at + '"><v>' + Number(v) + '</v></c>';
+      }else{
+        cells += '<c r="' + at + '"' + (isHead ? ' s="1"' : '') +
+          ' t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(v) + '</t></is></c>';
+      }
+    }
+    /* A row with nothing on it is still written, so the rows above the heading
+       exist and the heading lands where the importer expects it. */
+    return '<row r="' + (i + 1) + '"' + (isHead ? ' s="1" customFormat="1"' : '') + '>' +
+      cells + '</row>';
+  }).join('');
+
+  const DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const PKG = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  const OFF = 'application/vnd.openxmlformats-officedocument.spreadsheetml';
+
+  const parts = [
+    {name:'[Content_Types].xml', text: DECL +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="' + OFF + '.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="' + OFF + '.worksheet+xml"/>' +
+        '<Override PartName="/xl/styles.xml" ContentType="' + OFF + '.styles+xml"/>' +
+      '</Types>'},
+    {name:'_rels/.rels', text: DECL +
+      '<Relationships xmlns="' + PKG + '">' +
+        '<Relationship Id="rId1" Type="' + REL + '/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>'},
+    {name:'xl/workbook.xml', text: DECL +
+      '<workbook xmlns="' + NS + '" xmlns:r="' + REL + '">' +
+        '<sheets><sheet name="' + xmlEsc(sheet) + '" sheetId="1" r:id="rId1"/></sheets>' +
+        /* Named the way Excel names its own filter, so the drop-downs are live
+           when the file opens rather than something the reader has to switch
+           on. This is what "with the filter incorporated" asks for. */
+        '<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">' +
+          "'" + xmlEsc(sheet.replace(/'/g, "''")) + "'!$A$" + headerRow + ':$' +
+          colName(nCols) + '$' + nRows +
+        '</definedName></definedNames>' +
+      '</workbook>'},
+    {name:'xl/_rels/workbook.xml.rels', text: DECL +
+      '<Relationships xmlns="' + PKG + '">' +
+        '<Relationship Id="rId1" Type="' + REL + '/worksheet" Target="worksheets/sheet1.xml"/>' +
+        '<Relationship Id="rId2" Type="' + REL + '/styles" Target="styles.xml"/>' +
+      '</Relationships>'},
+    {name:'xl/styles.xml', text: DECL +
+      '<styleSheet xmlns="' + NS + '">' +
+        /* The accounting format the file being matched uses. */
+        '<numFmts count="1"><numFmt numFmtId="164" formatCode="' +
+          '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* &quot;-&quot;??_);_(@_)"/></numFmts>' +
+        '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>' +
+          '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+        /* Fill 1 must be gray125: Excel reserves the first two slots. */
+        '<fills count="3"><fill><patternFill patternType="none"/></fill>' +
+          '<fill><patternFill patternType="gray125"/></fill>' +
+          '<fill><patternFill patternType="solid"><fgColor rgb="FFF4ECED"/>' +
+          '<bgColor indexed="64"/></patternFill></fill></fills>' +
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+        '<cellXfs count="3">' +
+          '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+          '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
+          '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+        '</cellXfs>' +
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+      '</styleSheet>'},
+    {name:'xl/worksheets/sheet1.xml', text: DECL +
+      '<worksheet xmlns="' + NS + '">' +
+        '<dimension ref="' + ref + '"/>' +
+        '<sheetViews><sheetView workbookViewId="0">' +
+          '<pane ySplit="' + headerRow + '" topLeftCell="A' + (headerRow + 1) + '" ' +
+          'activePane="bottomLeft" state="frozen"/>' +
+        '</sheetView></sheetViews>' +
+        '<sheetFormatPr defaultRowHeight="15"/>' +
+        '<cols>' + cols + '</cols>' +
+        '<sheetData>' + body + '</sheetData>' +
+        /* Schema order: autoFilter comes after sheetData, not before. */
+        '<autoFilter ref="' + ref + '"/>' +
+      '</worksheet>'}
+  ].map(function(p){ return {name:p.name, bytes:enc.encode(p.text)}; });
+
+  const url = URL.createObjectURL(zipStored(parts));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+}
+
+/* Written as numbers rather than text, so a filtered column sums. Amounts carry
+   the accounting format the sample file uses; the rest are plain numbers.
+   TRANSDATE is deliberately in neither: d/M/yyyy is the value D365 has been
+   accepting, and an Excel serial date would change what is imported.
+
+   The lists are also on the server, which is the authority; these are the
+   fallback for a page newer than the deployed script. A test asserts they
+   agree. */
+const D365_MONEY = ['DEBITAMOUNT', 'CREDITAMOUNT'];
+const D365_NUMERIC = ['EXCHANGERATE', 'REPORTINGCURRENCYEXCHANGERATE',
+  'LINENUMBER', 'S/N'];
+
+/* The D365 file leaves two rows above its headings. */
+const D365_HEADER_ROW = 3;
+
 /* The same journal in the shape Dynamics 365's general journal import expects.
    Its columns, their order and their spelling are fixed by D365, so the file is
    built from the column list the server sends rather than assembled here — the
    two cannot drift.
 
-   Deliberately written without a UTF-8 BOM, unlike the other exports. Those are
-   opened in Excel and need it for the naira sign; this one is read by an
-   importer, where a BOM would land inside the first column name. */
+   An .xlsx with a filter on the header row, not a CSV. */
 async function exportD365(){
-  STATE.busy = 'Building the D365 file';
+  STATE.busy = 'Building the D365 workbook';
   render();
   try{
     const f = STATE.jnl;
     const res = await rpc('getD365Export', {
       period: STATE.period,
-      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit}
+      filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
+        purpose:f.purpose}
     });
-    const out = [res.columns];
+    /* Two blank rows, then the headings on row 3, matching the file Finance
+       feeds D365 — its importer is configured for that layout. */
+    const out = [];
+    while(out.length < D365_HEADER_ROW - 1) out.push([]);
+    out.push(res.columns);
     res.rows.forEach(function(r){
       out.push(res.columns.map(function(c){ return r[c]; }));
     });
-    downloadCsv('D365_' + res.config.journalName.replace(/[^A-Za-z0-9-]/g, '') + '_' +
-      stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.csv', out, {bom:false});
+    const money = [], numeric = [];
+    const moneyCols = res.moneyColumns || D365_MONEY;
+    const plainCols = res.numberColumns || D365_NUMERIC;
+    res.columns.forEach(function(c, i){
+      if(moneyCols.indexOf(c) >= 0) money.push(i);
+      else if(plainCols.indexOf(c) >= 0) numeric.push(i);
+    });
+    downloadXlsx('D365_' + res.config.journalName.replace(/[^A-Za-z0-9-]/g, '') + '_' +
+      stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.xlsx', out,
+      {sheet:'Sheet1', headerRow:D365_HEADER_ROW, money:money, numeric:numeric});
     toast(res.rows.length + ' line(s) exported for D365' +
       (res.source === 'posted' ? ' — batch ' + res.batchRef : ' as a draft') + '.' +
-      (res.missingAccount ? ' ' + res.missingAccount + ' have no loan account.' : ''));
+      (res.missingAccount ? ' ' + res.missingAccount + ' have no loan account.' : '') +
+      (res.missingPurpose ? ' ' + res.missingPurpose + ' have no Purpose set.' : ''),
+      !!res.missingPurpose);
   }catch(err){
     toast(String(err.message || err), true);
   }finally{
@@ -3830,7 +4184,7 @@ function exportChanges(){
   }
   const out = [['PaySync movements', periodLabel(STATE.period), 'Exported ' + new Date().toISOString(),
       rows.length + ' rows'],
-    ['#','Source','Period','Emp no','Name','Business unit','Org','Type','Payroll','Security','Reason',
+    ['#','Source','Period','Emp no','Name','SAL_Dept','Org','Type','Payroll','Security','Reason',
       'Staff status set','Recorded by','Recorded at','Reversed by','Reversed at','Reversal reason']];
   rows.sort(function(a, b){
     if(!!a.derived !== !!b.derived) return a.derived ? -1 : 1;
@@ -3923,7 +4277,7 @@ function exportBgCost(){
   if(a.unallocated.length){
     out.push([]);
     out.push(['Could not be matched to a Business Group']);
-    out.push(['Emp no','Name','Business unit','Staff type','Cost']);
+    out.push(['Emp no','Name','SAL_Dept','Staff type','Cost']);
     a.unallocated.forEach(function(u){
       out.push([u.emp_no, u.name, u.bus_unit, u.staff_type, u.cost.toFixed(2)]);
     });
@@ -4308,7 +4662,8 @@ async function handleAction(act, arg, ev, el){
           movement.newHire = {
             emp_no: val('mv-nh-empno'),
             name: val('mv-nh-name'), grade: val('mv-nh-grade'),
-            staff_type: val('mv-nh-type'), bus_unit: val('mv-nh-bu'), email: val('mv-nh-email')
+            staff_type: val('mv-nh-type'), bus_unit: val('mv-nh-bu'),
+            purpose: val('mv-nh-purpose'), email: val('mv-nh-email')
           };
         }
         try{
@@ -4344,7 +4699,8 @@ async function handleAction(act, arg, ev, el){
         const existing = STATE.modal.emp_no;
         const staff = {emp_no: val('st-emp_no'), name: val('st-name'), email: val('st-email'),
           status: val('st-status'), grade: val('st-grade'), salary_group: val('st-salary_group'),
-          staff_type: val('st-staff_type'), bus_unit: val('st-bus_unit'), org: val('st-org'),
+          staff_type: val('st-staff_type'), bus_unit: val('st-bus_unit'),
+          purpose: val('st-purpose'), org: val('st-org'),
           emp_account: val('st-emp_account')};
         STAFF_EDIT_GROUPS.forEach(function(g){
           g[1].forEach(function(k){ staff[k] = numVal('st-' + k) || 0; });
