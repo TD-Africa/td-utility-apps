@@ -3973,6 +3973,26 @@ function downloadXlsx(filename, rows, opts){
       Math.min(Math.max(head.length + 4, 10), 34) + '" customWidth="1"/>';
   }
 
+  /* Text goes into a shared string table rather than inline. Excel builds an
+     AutoFilter's list of values from that table: with inline strings the arrow
+     draws but the list has nothing to populate from, and the drop-down does
+     nothing when clicked. It is also dramatically smaller — "Ledger", "NGN"
+     and "SALARY-J" appear once each instead of four thousand times, which
+     matters when the archive is stored uncompressed.
+
+     Object.create(null) so a value that happens to be "__proto__" or
+     "constructor" is a key like any other rather than a collision. */
+  const sst = [];
+  const sstIndex = Object.create(null);
+  let sstUses = 0;
+  const shared = function(v){
+    const k = String(v);
+    let i = sstIndex[k];
+    if(i === undefined){ i = sst.length; sstIndex[k] = i; sst.push(k); }
+    sstUses++;
+    return i;
+  };
+
   const body = rows.map(function(r, i){
     const isHead = (i + 1) === headerRow;
     let cells = '';
@@ -3992,13 +4012,21 @@ function downloadXlsx(filename, rows, opts){
         cells += '<c r="' + at + '"><v>' + Number(v) + '</v></c>';
       }else{
         cells += '<c r="' + at + '"' + (isHead ? ' s="1"' : '') +
-          ' t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(v) + '</t></is></c>';
+          ' t="s"><v>' + shared(v) + '</v></c>';
       }
     }
-    /* A row with nothing on it is still written, so the rows above the heading
-       exist and the heading lands where the importer expects it. */
+    /* A row with no cells is not written at all. Writing an empty <row> for the
+       blank rows above the heading put rows outside the declared dimension,
+       which is malformed — and a sheet Excel has to repair on open is a sheet
+       whose filter may not work. The heading still lands on its row because
+       every row carries its own r="" index. */
+    if(!cells) return '';
     return '<row r="' + (i + 1) + '"' + (isHead ? ' s="1" customFormat="1"' : '') + '>' +
       cells + '</row>';
+  }).join('');
+
+  const sharedXml = sst.map(function(v){
+    return '<si><t xml:space="preserve">' + xmlEsc(v) + '</t></si>';
   }).join('');
 
   const DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -4015,6 +4043,7 @@ function downloadXlsx(filename, rows, opts){
         '<Override PartName="/xl/workbook.xml" ContentType="' + OFF + '.sheet.main+xml"/>' +
         '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="' + OFF + '.worksheet+xml"/>' +
         '<Override PartName="/xl/styles.xml" ContentType="' + OFF + '.styles+xml"/>' +
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="' + OFF + '.sharedStrings+xml"/>' +
       '</Types>'},
     {name:'_rels/.rels', text: DECL +
       '<Relationships xmlns="' + PKG + '">' +
@@ -4027,14 +4056,20 @@ function downloadXlsx(filename, rows, opts){
            when the file opens rather than something the reader has to switch
            on. This is what "with the filter incorporated" asks for. */
         '<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">' +
-          "'" + xmlEsc(sheet.replace(/'/g, "''")) + "'!$A$" + headerRow + ':$' +
-          colName(nCols) + '$' + nRows +
+          /* A sheet name is quoted in a reference only when it has to be. Excel
+             writes Sheet1!$A$3 unquoted, and matching that exactly is one less
+             thing that can differ from the file this is modelled on. */
+          (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(sheet)
+            ? xmlEsc(sheet)
+            : "'" + xmlEsc(sheet.replace(/'/g, "''")) + "'") +
+          '!$A$' + headerRow + ':$' + colName(nCols) + '$' + nRows +
         '</definedName></definedNames>' +
       '</workbook>'},
     {name:'xl/_rels/workbook.xml.rels', text: DECL +
       '<Relationships xmlns="' + PKG + '">' +
         '<Relationship Id="rId1" Type="' + REL + '/worksheet" Target="worksheets/sheet1.xml"/>' +
         '<Relationship Id="rId2" Type="' + REL + '/styles" Target="styles.xml"/>' +
+        '<Relationship Id="rId3" Type="' + REL + '/sharedStrings" Target="sharedStrings.xml"/>' +
       '</Relationships>'},
     {name:'xl/styles.xml', text: DECL +
       '<styleSheet xmlns="' + NS + '">' +
@@ -4057,12 +4092,22 @@ function downloadXlsx(filename, rows, opts){
         '</cellXfs>' +
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
       '</styleSheet>'},
+    {name:'xl/sharedStrings.xml', text: DECL +
+      '<sst xmlns="' + NS + '" count="' + sstUses + '" uniqueCount="' + sst.length + '">' +
+        sharedXml +
+      '</sst>'},
     {name:'xl/worksheets/sheet1.xml', text: DECL +
       '<worksheet xmlns="' + NS + '">' +
         '<dimension ref="' + ref + '"/>' +
         '<sheetViews><sheetView workbookViewId="0">' +
           '<pane ySplit="' + headerRow + '" topLeftCell="A' + (headerRow + 1) + '" ' +
           'activePane="bottomLeft" state="frozen"/>' +
+          /* A pane that names an active pane needs the matching selection, which
+             is what Excel itself writes. Declaring the one without the other is
+             malformed, and a sheet Excel has to repair on open is a sheet whose
+             filter may not behave. */
+          '<selection pane="bottomLeft" activeCell="A' + (headerRow + 1) + '" ' +
+          'sqref="A' + (headerRow + 1) + '"/>' +
         '</sheetView></sheetViews>' +
         '<sheetFormatPr defaultRowHeight="15"/>' +
         '<cols>' + cols + '</cols>' +
