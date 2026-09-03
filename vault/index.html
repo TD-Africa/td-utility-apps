@@ -142,6 +142,12 @@ html, body { height:100%; margin:0; padding:0; background:#10141A; }
 .tcf-ambig { background:var(--panel-2); border:1px solid var(--amber); border-radius:8px; padding:12px 14px; margin-top:12px; font-size:12.5px; line-height:1.55; }
 .tcf-conn { font-family:'IBM Plex Mono',monospace; font-size:11.5px; white-space:pre-wrap; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-top:12px; max-height:260px; overflow:auto; line-height:1.6; }
 .tcf-td-actions { display:flex; gap:4px; }
+.tcf-selbar { display:flex; align-items:center; gap:10px; background:rgba(201,161,90,0.10); border:1px solid rgba(201,161,90,0.45); color:#EBD6AC; padding:9px 12px; border-radius:8px; font-size:12.5px; margin:8px 0; flex-wrap:wrap; }
+.tcf-btn-danger { background:var(--red); border-color:var(--red); color:#2A100C; font-weight:600; }
+.tcf-btn-danger:disabled { opacity:0.5; cursor:not-allowed; }
+.tcf-row-selected { background:rgba(201,161,90,0.10) !important; }
+.tcf-table input[type="checkbox"] { width:15px; height:15px; accent-color:var(--gold); cursor:pointer; }
+.tcf-table input[type="checkbox"]:disabled { cursor:not-allowed; opacity:0.35; }
 </style>
 </head>
 <body>
@@ -170,6 +176,11 @@ html, body { height:100%; margin:0; padding:0; background:#10141A; }
    but you.
    ------------------------------------------------------------------------- */
 var VAULT_BACKEND_URL = "https://script.google.com/macros/s/AKfycbyqUNx7w2db3TGdr-f92s5xo1U1iIOSNxpMn4gdJL4tLLeUspTXVeVCkwcveyMxFy84/exec";
+
+/* The oldest backend this page can work against. If the deployed Apps Script is
+   older, the page says so at the top of every screen rather than letting a form
+   fail with a message about an enum. Bump it here and in Code.gs together. */
+var REQUIRED_API_VERSION = 3;
 
 var SESSION_KEY = "vault::session";
 
@@ -237,9 +248,13 @@ var ROLE_LABELS = {
   analyst: "Treasury Analyst", manager: "Treasury Manager",
   exec: "Executive / CFO", admin: "Admin"
 };
+/* Who may CREATE a record. */
 function canWrite() { return ["analyst", "manager", "admin"].indexOf(state.actor.role) >= 0; }
+/* Who may EDIT one in place. */
+function canEdit() { return ["manager", "exec", "admin"].indexOf(state.actor.role) >= 0; }
+/* Who may DELETE one: everybody who can sign in. */
+function canDeleteAny() { return !!state.actor.role; }
 function canSetAssumptions() { return ["manager", "admin"].indexOf(state.actor.role) >= 0; }
-function canDeleteAny() { return ["manager", "admin"].indexOf(state.actor.role) >= 0; }
 function canManagePeople() { return state.actor.role === "admin"; }
 
 /* =========================================================================
@@ -475,6 +490,13 @@ function runConnectionCheck() {
         lines.push("  reply parsed as JSON — OK");
         lines.push("");
         lines.push("Server date: " + parsed.result.today);
+        var v = Number(parsed.result.apiVersion) || 1;
+        lines.push("Backend version: v" + v + "  (this page needs v" + REQUIRED_API_VERSION + ")");
+        if (v < REQUIRED_API_VERSION) {
+          lines.push("");
+          lines.push("WARNING: the deployed script is OLDER than this page. Credit notes and");
+          lines.push("multi-row deletion will be refused until it is re-deployed.");
+        }
         lines.push("");
         lines.push("VERDICT: both hops are working. VAULT can reach its backend.");
       } else if (/<html|<!doctype/i.test(r.text)) {
@@ -540,18 +562,19 @@ var state = {
   actor: { userId: "", name: "", role: "", email: "" },
   today: "",              /* THE SERVER'S DATE — never new Date() */
   revision: 0,
+  apiVersion: null,        /* what the deployed backend reports */
   settings: {
     ngnRate: 1411, ghsRate: 11.5, collectionRatePct: 20,
-    minBufferUSD: 500000, numWeeks: 12, startDate: "", ownEditWindowDays: 7
+    minBufferUSD: 500000, numWeeks: 12, startDate: ""
   },
   /* Keyed by the week's START DATE, not by index (REQUIREMENTS D2). */
   collectionOverrides: {},
   position: null,
   positionHistory: [],
   debtorTxns: [],
-  debtorCredits: [],
+  debtorCarried: [],
   oemInvoices: [],
-  oemCredits: [],
+  oemCarried: [],
   mobilePurchases: [],
   dividends: [],
   dailyExpenses: [],
@@ -582,6 +605,10 @@ var ui = {
   confirm: null,          /* {title, body, action, data} */
   undo: null,             /* {entity, row, timer} */
   connCheck: null,
+  /* Ticked rows, per entity: { debtorTxn: {id: true, ...}, ... }. Kept out of
+     the DOM so a re-render never loses a selection, and cleared whenever the
+     underlying rows are reloaded. */
+  selection: {},
   history: { rows: [], total: 0, page: 0, loading: false, entity: "", from: "", to: "" },
   /* Each record view remembers its OWN page and its own filters. Changing any
      filter or sort returns that view to page one. */
@@ -611,9 +638,10 @@ function resetDrafts() {
   var today = state.today || "";
   var start = state.settings.startDate || today;
   drafts = {
-    debtor: { debtorName: "", type: "credit_sale", transactionDate: today, dueDate: start, amount: "", currency: "USD", reference: "" },
+    debtor: { debtorName: "", type: "credit_sale", transactionDate: today, dueDate: start, amount: "", currency: "USD", reference: "", reason: "", appliesToReference: "" },
     oemInvoice: { oem: OEM_BRANDS[0], reference: "", amount: "", currency: "USD", invoiceDate: today, dueDate: start, source: "new_invoice" },
     oemPayment: { oem: OEM_BRANDS[0], paymentDate: today, amount: "", currency: "USD", reference: "" },
+    oemCredit: { oem: OEM_BRANDS[0], creditNoteDate: today, amount: "", currency: "USD", reference: "", reason: "", appliesToReference: "" },
     mobile: { brand: MOBILE_BRANDS[0], amount: "", currency: "USD", estimatedDate: start, notes: "" },
     cashSale: { description: "", amount: "", currency: "USD", date: today, reference: "" },
     dividend: { description: "", amount: "", currency: "USD", dueDate: start, status: "due", paidDate: "" },
@@ -641,11 +669,19 @@ function resetDrafts() {
      · a carried-forward credit from before the feed cutoff joins the pool, so
        bounding the feed cannot change the answer (REQUIREMENTS §14 Q3).
    ========================================================================= */
-function computeDebtorAgeing(transactions, rates, asOfDate, carriedCredits) {
+function computeDebtorAgeing(transactions, rates, asOfDate, carried) {
+  /* `carried` is one aggregate per counterparty for everything before the feed
+     cutoff: the credit left unallocated, and the VOLUMES of cash received and
+     credit notes issued. Every figure the ageing screen shows has to cross the
+     cutoff, or the number a user reads would change with the feed mode. */
   var byKey = {};
-  var creditByKey = {};
-  (carriedCredits || []).forEach(function (c) {
-    creditByKey[nameKeyOf(c.debtorName)] = (creditByKey[nameKeyOf(c.debtorName)] || 0) + Number(c.amountUSD || 0);
+  var bf = {};
+  (carried || []).forEach(function (c) {
+    var k = nameKeyOf(c.name);
+    if (!bf[k]) bf[k] = { unallocatedUSD: 0, notesUSD: 0, cashUSD: 0, name: c.name };
+    bf[k].unallocatedUSD += Number(c.unallocatedUSD || 0);
+    bf[k].notesUSD += Number(c.notesUSD || 0);
+    bf[k].cashUSD += Number(c.cashUSD || 0);
   });
 
   transactions.forEach(function (t) {
@@ -655,10 +691,11 @@ function computeDebtorAgeing(transactions, rates, asOfDate, carriedCredits) {
   /* A debtor whose every transaction was collapsed away by the feed cutoff, but
      who is carrying a credit, still has to appear — they have overpaid, and money
      we owe back must not be invisible just because the feed was bounded. */
-  (carriedCredits || []).forEach(function (c) {
-    var k = nameKeyOf(c.debtorName);
-    if (!byKey[k]) byKey[k] = [{ debtorName: c.debtorName, type: "cash_receipt",
-      transactionDate: "", amount: 0, currency: "USD", fxRateAtEntry: 1, __creditOnly: true }];
+  Object.keys(bf).forEach(function (k) {
+    if (!byKey[k] && bf[k].unallocatedUSD > 0.5) {
+      byKey[k] = [{ debtorName: bf[k].name, type: "cash_receipt",
+        transactionDate: "", amount: 0, currency: "USD", fxRateAtEntry: 1, __creditOnly: true }];
+    }
   });
 
   var result = [];
@@ -668,23 +705,33 @@ function computeDebtorAgeing(transactions, rates, asOfDate, carriedCredits) {
     var txns = byKey[key];
     var displayName = txns[0].debtorName;
     var sales = txns.filter(function (t) { return t.type === "credit_sale"; })
-      .map(function (t) {
-        var usd = rowUSD(t, rates);
-        return Object.assign({}, t, { usd: usd, remaining: usd });
-      })
+      .map(function (t) { return Object.assign({}, t, { usd: rowUSD(t, rates) }); })
       .sort(function (a, b) { return String(a.transactionDate || "").localeCompare(String(b.transactionDate || "")); });
     var receipts = txns.filter(function (t) { return t.type === "cash_receipt"; })
       .map(function (t) { return Object.assign({}, t, { usd: rowUSD(t, rates) }); })
       .sort(function (a, b) { return String(a.transactionDate || "").localeCompare(String(b.transactionDate || "")); });
 
-    var receiptPool = receipts.reduce(function (s, r) { return s + r.usd; }, 0) + (creditByKey[key] || 0);
-    for (var i = 0; i < sales.length; i++) {
-      if (receiptPool <= 0) break;
-      var consume = Math.min(sales[i].remaining, receiptPool);
-      sales[i].remaining -= consume;
-      receiptPool -= consume;
-    }
-    var outstanding = sales.filter(function (s) { return s.remaining > 0.5; });
+    /* Credit notes reverse an invoice to a customer. They reduce what is owed
+       exactly as a receipt does — but they are NOT CASH, and computeModel must
+       never count them as an actual receipt in a closed week. That separation
+       lives in computeModel, which filters on type === "cash_receipt". */
+    var creditNotes = txns.filter(function (t) { return t.type === "credit_note"; })
+      .map(function (t) { return Object.assign({}, t, { usd: rowUSD(t, rates) }); });
+    var targeted = creditNotes.filter(function (t) { return refKeyOf(t.appliesToReference); })
+      .map(function (t) { return { reference: t.appliesToReference, usd: t.usd }; });
+    var untargetedCredit = creditNotes
+      .filter(function (t) { return !refKeyOf(t.appliesToReference); })
+      .reduce(function (a, t) { return a + t.usd; }, 0);
+
+    var carriedIn = bf[key] || { unallocatedUSD: 0, notesUSD: 0, cashUSD: 0 };
+    var receiptsUSD = receipts.reduce(function (s, r) { return s + r.usd; }, 0) + carriedIn.cashUSD;
+    var creditNotesUSD = creditNotes.reduce(function (s, r) { return s + r.usd; }, 0) + carriedIn.notesUSD;
+    var pooled = receipts.reduce(function (s, r) { return s + r.usd; }, 0) +
+      untargetedCredit + carriedIn.unallocatedUSD;
+
+    var alloc = allocateFifo(sales, pooled, targeted);
+    var outstanding = alloc.open;
+    var receiptPool = alloc.unallocated;
     var totalOutstanding = outstanding.reduce(function (s, i2) { return s + i2.remaining; }, 0);
     var overdue = outstanding.filter(function (i2) { return i2.dueDate && i2.dueDate < asOfDate; })
       .reduce(function (s, i2) { return s + i2.remaining; }, 0);
@@ -695,10 +742,15 @@ function computeDebtorAgeing(transactions, rates, asOfDate, carriedCredits) {
     /* A debtor with nothing outstanding AND no credit has nothing to say on an
        ageing screen. Dropping them also makes the bounded and unbounded feeds
        agree exactly — a settled debtor is absent either way. */
+    /* An ageing list is for counterparties with a live balance, or a credit we
+       owe back. Credit-note volume alone does not earn a row, or every customer
+       ever fully credited would sit here for ever — it stays visible in the
+       drilldown and on the History tab. */
     if (totalOutstanding <= 0 && receiptPool <= 0.5) return;
     result.push({
       debtorName: displayName, totalOutstanding: totalOutstanding, overdue: overdue,
-      nextDue: nextDue, invoiceCount: outstanding.length, unallocatedReceipt: receiptPool
+      nextDue: nextDue, invoiceCount: outstanding.length, unallocatedReceipt: receiptPool,
+      receiptsUSD: receiptsUSD, creditNotesUSD: creditNotesUSD
     });
   });
 
@@ -709,11 +761,15 @@ function computeDebtorAgeing(transactions, rates, asOfDate, carriedCredits) {
 /* =========================================================================
    FIFO ageing engine — OEM creditors. The same, in reverse.
    ========================================================================= */
-function computeCreditorAgeing(transactions, rates, asOfDate, carriedCredits) {
+function computeCreditorAgeing(transactions, rates, asOfDate, carried) {
   var byKey = {};
-  var creditByKey = {};
-  (carriedCredits || []).forEach(function (c) {
-    creditByKey[nameKeyOf(c.oem)] = (creditByKey[nameKeyOf(c.oem)] || 0) + Number(c.amountUSD || 0);
+  var bf = {};
+  (carried || []).forEach(function (c) {
+    var k = nameKeyOf(c.name);
+    if (!bf[k]) bf[k] = { unallocatedUSD: 0, notesUSD: 0, cashUSD: 0, name: c.name };
+    bf[k].unallocatedUSD += Number(c.unallocatedUSD || 0);
+    bf[k].notesUSD += Number(c.notesUSD || 0);
+    bf[k].cashUSD += Number(c.cashUSD || 0);
   });
 
   transactions.forEach(function (t) {
@@ -721,10 +777,11 @@ function computeCreditorAgeing(transactions, rates, asOfDate, carriedCredits) {
     (byKey[k] = byKey[k] || []).push(t);
   });
   /* Same for an OEM we have overpaid — see the note in computeDebtorAgeing. */
-  (carriedCredits || []).forEach(function (c) {
-    var k = nameKeyOf(c.oem);
-    if (!byKey[k]) byKey[k] = [{ oem: c.oem, type: "payment", paymentDate: "",
-      amount: 0, currency: "USD", fxRateAtEntry: 1, __creditOnly: true }];
+  Object.keys(bf).forEach(function (k) {
+    if (!byKey[k] && bf[k].unallocatedUSD > 0.5) {
+      byKey[k] = [{ oem: bf[k].name, type: "payment", paymentDate: "",
+        amount: 0, currency: "USD", fxRateAtEntry: 1, __creditOnly: true }];
+    }
   });
 
   var result = [];
@@ -734,10 +791,7 @@ function computeCreditorAgeing(transactions, rates, asOfDate, carriedCredits) {
     var txns = byKey[key];
     var displayName = txns[0].oem;
     var invoices = txns.filter(function (t) { return (t.type || "invoice") === "invoice"; })
-      .map(function (t) {
-        var usd = rowUSD(t, rates);
-        return Object.assign({}, t, { usd: usd, remaining: usd });
-      })
+      .map(function (t) { return Object.assign({}, t, { usd: rowUSD(t, rates) }); })
       .sort(function (a, b) {
         return String(a.invoiceDate || a.dueDate || "").localeCompare(String(b.invoiceDate || b.dueDate || ""));
       });
@@ -745,14 +799,26 @@ function computeCreditorAgeing(transactions, rates, asOfDate, carriedCredits) {
       .map(function (t) { return Object.assign({}, t, { usd: rowUSD(t, rates) }); })
       .sort(function (a, b) { return String(a.paymentDate || "").localeCompare(String(b.paymentDate || "")); });
 
-    var paymentPool = payments.reduce(function (s, p) { return s + p.usd; }, 0) + (creditByKey[key] || 0);
-    for (var i = 0; i < invoices.length; i++) {
-      if (paymentPool <= 0) break;
-      var consume = Math.min(invoices[i].remaining, paymentPool);
-      invoices[i].remaining -= consume;
-      paymentPool -= consume;
-    }
-    var outstanding = invoices.filter(function (s) { return s.remaining > 0.5; });
+    /* A credit note FROM an OEM reverses one of their invoices. It reduces what
+       we owe them, but no cash left the business — computeModel must never count
+       it as an actual OEM payment. */
+    var creditNotes = txns.filter(function (t) { return t.type === "credit_note"; })
+      .map(function (t) { return Object.assign({}, t, { usd: rowUSD(t, rates) }); });
+    var targeted = creditNotes.filter(function (t) { return refKeyOf(t.appliesToReference); })
+      .map(function (t) { return { reference: t.appliesToReference, usd: t.usd }; });
+    var untargetedCredit = creditNotes
+      .filter(function (t) { return !refKeyOf(t.appliesToReference); })
+      .reduce(function (a, t) { return a + t.usd; }, 0);
+
+    var carriedIn = bf[key] || { unallocatedUSD: 0, notesUSD: 0, cashUSD: 0 };
+    var paymentsUSD = payments.reduce(function (s, p) { return s + p.usd; }, 0) + carriedIn.cashUSD;
+    var creditNotesUSD = creditNotes.reduce(function (s, r) { return s + r.usd; }, 0) + carriedIn.notesUSD;
+    var pooled = payments.reduce(function (s, p) { return s + p.usd; }, 0) +
+      untargetedCredit + carriedIn.unallocatedUSD;
+
+    var alloc = allocateFifo(invoices, pooled, targeted);
+    var outstanding = alloc.open;
+    var paymentPool = alloc.unallocated;
     var totalOutstanding = outstanding.reduce(function (s, i2) { return s + i2.remaining; }, 0);
     var overdue = outstanding.filter(function (i2) { return i2.dueDate && i2.dueDate < asOfDate; })
       .reduce(function (s, i2) { return s + i2.remaining; }, 0);
@@ -760,11 +826,12 @@ function computeCreditorAgeing(transactions, rates, asOfDate, carriedCredits) {
     outstanding.forEach(function (i2) {
       allOutstandingInvoices.push(Object.assign({}, i2, { oem: displayName }));
     });
-    var totalPaid = payments.reduce(function (s, p) { return s + p.usd; }, 0);
+    var totalPaid = paymentsUSD;
     if (totalOutstanding <= 0 && paymentPool <= 0.5 && totalPaid <= 0) return;
     result.push({
       oem: displayName, totalOutstanding: totalOutstanding, overdue: overdue, nextDue: nextDue,
-      invoiceCount: outstanding.length, totalPaid: totalPaid, unallocatedPayment: paymentPool
+      invoiceCount: outstanding.length, totalPaid: totalPaid, unallocatedPayment: paymentPool,
+      creditNotesUSD: creditNotesUSD
     });
   });
 
@@ -777,6 +844,79 @@ function computeCreditorAgeing(transactions, rates, asOfDate, carriedCredits) {
    server exactly — a test asserts it does. */
 function nameKeyOf(name) {
   return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/* Matches a category case-insensitively; anything unrecognised becomes Other,
+   because a real expense file has arbitrary categories and losing a whole
+   day's expenses over the word "Fuel" is worse than filing it under Other.
+   The import preview names every row this happened to, so it is visible
+   rather than silent. Must agree with normaliseCategory_ on the server. */
+function normaliseCategoryClient(raw) {
+  var s = String(raw === null || raw === undefined ? "" : raw).trim();
+  if (!s) return "Other";
+  var hit = EXPENSE_CATEGORIES.filter(function (c) {
+    return c.toLowerCase() === s.toLowerCase();
+  })[0];
+  return hit || "Other";
+}
+
+/* References are matched loosely — "INV-1234", "inv 1234" and " INV-1234 " are
+   the same document as far as a person typing a credit note is concerned.
+   Must match refKey_ on the server; a test asserts it does. */
+function refKeyOf(ref) {
+  return String(ref || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/* The allocation both engines share.
+
+     invoices      USD-converted, sorted oldest-first, each with .usd
+     pooledTotal   cash receipts / OEM payments / UNTARGETED credit notes
+     targeted      credit notes naming the invoice they reverse
+
+   Targeted credits go against their named invoice first. The NET balance is the
+   same either way, but which invoice stays open decides which WEEK the debt is
+   bucketed into — so pooling a targeted credit would quietly move cash between
+   weeks. Anything left over joins the pool.
+
+   Everything else is the prototype behaviour, unchanged: pooled credit consumes
+   the oldest invoice first, and the strict `> 0.5` threshold stops rounding
+   dust showing as outstanding.
+
+   This must agree with fifoPass_ in Code.gs exactly. tests/integration.test.js
+   runs the same fixture through both and compares every weekly closing balance,
+   because a divergence here would move money into the wrong week silently. */
+function allocateFifo(invoices, pooledTotal, targeted) {
+  var work = invoices.map(function (inv) {
+    return Object.assign({}, inv, { remaining: inv.usd });
+  });
+  var pool = pooledTotal;
+
+  (targeted || []).forEach(function (credit) {
+    var left = credit.usd;
+    var key = refKeyOf(credit.reference);
+    if (!key) { pool += left; return; }
+    for (var i = 0; i < work.length && left > 0; i++) {
+      if (refKeyOf(work[i].reference) !== key) continue;
+      var consume = Math.min(work[i].remaining, left);
+      work[i].remaining -= consume;
+      left -= consume;
+    }
+    /* Named an invoice that does not exist, or over-credited it. The money is
+       real either way, so it joins the pool rather than being lost. */
+    if (left > 0) pool += left;
+  });
+
+  for (var j = 0; j < work.length; j++) {
+    if (pool <= 0) break;
+    var take = Math.min(work[j].remaining, pool);
+    work[j].remaining -= take;
+    pool -= take;
+  }
+
+  return {
+    open: work.filter(function (inv) { return inv.remaining > 0.5; }),
+    unallocated: pool
+  };
 }
 
 /* =========================================================================
@@ -850,11 +990,11 @@ function computeModel() {
     Number(p.usdGlobal || 0) + Number(p.usdNigeria || 0) + Number(p.usdGhana || 0) +
     toUSD(p.ngnPosition, "NGN", rates) + toUSD(p.ghsPosition, "GHS", rates);
 
-  var ageing = computeDebtorAgeing(state.debtorTxns, rates, startDate, state.debtorCredits);
+  var ageing = computeDebtorAgeing(state.debtorTxns, rates, startDate, state.debtorCarried);
   var totalARUSD = ageing.byDebtor.reduce(function (a, d) { return a + d.totalOutstanding; }, 0);
   var totalOverdueUSD = ageing.byDebtor.reduce(function (a, d) { return a + d.overdue; }, 0);
 
-  var oemAgeing = computeCreditorAgeing(state.oemInvoices, rates, startDate, state.oemCredits);
+  var oemAgeing = computeCreditorAgeing(state.oemInvoices, rates, startDate, state.oemCarried);
   var totalOemOutstandingUSD = oemAgeing.byOem.reduce(function (a, o) { return a + o.totalOutstanding; }, 0);
   var totalOemOverdueUSD = oemAgeing.byOem.reduce(function (a, o) { return a + o.overdue; }, 0);
 
@@ -1424,16 +1564,82 @@ function renderPager(key, r) {
     '</div>';
 }
 
-/* Edit / delete buttons, drawn only where this actor may actually use them —
-   and refused again on the server if the markup is tampered with. */
+/* =========================================================================
+   Row selection — deletion is by ticking rows, not by a per-row trash icon.
+
+   One deletion path rather than two, so the permission rules and the audit
+   trail cannot drift between them. The selection lives in ui.selection, outside
+   the DOM, so a re-render never loses what you ticked.
+   ========================================================================= */
+function selectionFor(entity) {
+  if (!ui.selection[entity]) ui.selection[entity] = {};
+  return ui.selection[entity];
+}
+function selectedIds(entity) {
+  return Object.keys(selectionFor(entity)).filter(function (id) { return ui.selection[entity][id]; });
+}
+function selectedCount(entity) { return selectedIds(entity).length; }
+function clearSelection(entity) {
+  if (entity) ui.selection[entity] = {};
+  else ui.selection = {};
+}
+
+/* Deleting and editing are separate rights now, so they are separate questions.
+   The server asks both again and refuses if the markup was tampered with. */
+function mayDelete(row) { return canDeleteAny(); }
+function mayEdit(row) { return canEdit(); }
+function whyNotEdit() {
+  return "Editing is for Treasury Managers, Executives and Admins — " +
+    "you can still delete this and enter it again";
+}
+/* Kept as the name the selection code asks by. */
+function mayMutate(row) { return mayDelete(row); }
+
+/* The tick box on a row. Rows this actor may not delete get a disabled box with
+   the reason on hover, rather than no box at all — otherwise the column looks
+   broken. */
+function rowSelectBox(entity, row) {
+  var on = !!selectionFor(entity)[row.id];
+  return '<input type="checkbox" data-act="row-select" data-nopreserve="1"' +
+    ' data-entity="' + attr(entity) + '" data-id="' + attr(row.id) + '"' +
+    (on ? " checked" : "") +
+    ' title="Select for deletion" aria-label="Select this row" />';
+}
+
+/* The header box ticks or clears every selectable row on the CURRENT PAGE — not
+   the whole filtered set. Ticking a box you cannot see is how people delete
+   things they did not mean to. */
+function headerSelectBox(entity, pageRows) {
+  var selectable = pageRows.filter(mayMutate);
+  if (!selectable.length) return '<th style="width:28px"></th>';
+  var sel = selectionFor(entity);
+  var allOn = selectable.every(function (r) { return !!sel[r.id]; });
+  return '<th style="width:28px"><input type="checkbox" data-act="page-select" data-nopreserve="1"' +
+    ' data-entity="' + attr(entity) + '" data-ids="' + attr(selectable.map(function (r) { return r.id; }).join(",")) + '"' +
+    (allOn ? " checked" : "") +
+    ' title="Select every row on this page" aria-label="Select every row on this page" /></th>';
+}
+
+/* The bar that appears once anything is ticked. */
+function selectionBar(entity, allRows) {
+  var ids = selectedIds(entity);
+  if (!ids.length) return "";
+  var rows = allRows.filter(function (r) { return ids.indexOf(r.id) >= 0; });
+  var usd = rows.reduce(function (a, r) { return a + rowUSD(r, model.rates); }, 0);
+  return '<div class="tcf-selbar">' + ico("alert", 14) +
+    '<span><strong>' + ids.length + ' row' + (ids.length === 1 ? "" : "s") + ' selected</strong>' +
+    (usd ? ' · ' + esc(fmtUSD(usd)) + ' in total' : "") + '</span>' +
+    '<div class="tcf-nav-spacer"></div>' +
+    btn("sel-clear", "Clear", { cls: "tcf-btn-ghost", data: ' data-entity="' + attr(entity) + '"' }) +
+    saveBtn("sel-delete", "Delete " + ids.length + " selected", { cls: "tcf-btn-danger", icon: "trash", data: ' data-entity="' + attr(entity) + '"' }) +
+    '</div>';
+}
+
+/* Edit only. Deletion is by tick box — see rowSelectBox. */
 function rowActions(entity, row) {
-  if (!canWrite()) return "";
-  var mine = row.createdById === state.actor.userId;
-  var allowed = canDeleteAny() || mine;
-  var why = allowed ? "" : "Logged by " + (row.createdBy || "someone else") + " — ask a Treasury Manager";
+  if (!canEdit()) return "";
   return '<div class="tcf-td-actions">' +
-    iconBtn("edit-open", "settings", { data: ' data-entity="' + attr(entity) + '" data-id="' + attr(row.id) + '"', size: 13, title: allowed ? "Edit" : why, disabled: !allowed }) +
-    iconBtn("del-ask", "trash", { data: ' data-entity="' + attr(entity) + '" data-id="' + attr(row.id) + '"', size: 13, title: allowed ? "Delete" : why, disabled: !allowed }) +
+    iconBtn("edit-open", "settings", { data: ' data-entity="' + attr(entity) + '" data-id="' + attr(row.id) + '"', size: 13, title: "Edit" }) +
     '</div>';
 }
 
@@ -1486,6 +1692,17 @@ function renderApp() {
     ' <span class="tcf-link" data-act="sign-out" role="button" tabindex="0">sign out</span></div></nav>';
 
   html += '<main class="tcf-main">';
+
+  if (state.apiVersion !== null && state.apiVersion < REQUIRED_API_VERSION) {
+    html += '<div class="tcf-alert">' + ico("alert", 16) +
+      '<span><strong>This page is newer than the deployed script.</strong> ' +
+      'It expects VAULT backend v' + REQUIRED_API_VERSION + ' but the deployment is v' +
+      state.apiVersion + ', so newer entry types — credit notes, and deleting several rows ' +
+      'at once — will be refused. Everything else works normally.<br>' +
+      'To fix it: in the Apps Script editor, paste the current Code.gs, then ' +
+      '<strong>Deploy → Manage deployments → the pencil → Version: New version → Deploy</strong>, ' +
+      'then run <strong>setupVault</strong> once to add the new columns.</span></div>';
+  }
 
   /* The background poll never re-renders over an open form — it sets this flag
      and the flag is shown once the modal closes (REQUIREMENTS §11). */
@@ -1816,25 +2033,42 @@ function renderDebtors() {
       '<div class="tcf-add-row">' +
       btn("bulk-open", "Upload credit sales", { icon: "uploadCloud", data: ' data-bulk="credit_sale"' }) +
       btn("bulk-open", "Upload cash receipts", { cls: "tcf-btn-ghost", icon: "uploadCloud", data: ' data-bulk="cash_receipt"' }) +
+      btn("bulk-open", "Upload credit notes", { cls: "tcf-btn-ghost", icon: "uploadCloud", data: ' data-bulk="ar_credit_note"' }) +
       '</div></section>';
 
     html += '<section class="tcf-panel"><div class="tcf-panel-title">Add a single entry</div>' +
       '<div class="tcf-add-row tcf-add-row-wrap">' +
-      selectEl("debtor.type", [{ value: "credit_sale", label: "Credit sale" }, { value: "cash_receipt", label: "Cash receipt" }], { cls: "tcf-input-sm", rerender: true }) +
+      selectEl("debtor.type", [
+        { value: "credit_sale", label: "Credit sale" },
+        { value: "cash_receipt", label: "Cash receipt" },
+        { value: "credit_note", label: "Credit note (reverse an invoice)" }
+      ], { cls: "tcf-input-sm", rerender: true }) +
       inputEl("debtor.debtorName", { placeholder: "Debtor name" }) +
-      inputEl("debtor.transactionDate", { type: "date", cls: "tcf-input-sm", title: "Transaction date" }) +
-      /* No due date on a receipt — and the value is not merely hidden, it is not
-         sent (REQUIREMENTS D14). */
+      inputEl("debtor.transactionDate", { type: "date", cls: "tcf-input-sm",
+        title: drafts.debtor.type === "credit_note" ? "Credit note date" : "Transaction date" }) +
+      /* No due date on a receipt or a credit note — and the value is not merely
+         hidden, it is not sent (REQUIREMENTS D14). */
       (drafts.debtor.type === "credit_sale" ? inputEl("debtor.dueDate", { type: "date", cls: "tcf-input-sm", title: "Due date" }) : "") +
       inputEl("debtor.amount", { type: "number", cls: "tcf-input-sm", placeholder: "Amount", min: 0 }) +
       selectEl("debtor.currency", CURRENCIES, { cls: "tcf-input-sm" }) +
-      inputEl("debtor.reference", { cls: "tcf-input-sm", placeholder: "Reference" }) +
+      inputEl("debtor.reference", { cls: "tcf-input-sm",
+        placeholder: drafts.debtor.type === "credit_note" ? "Credit note no." : "Reference" }) +
+      (drafts.debtor.type === "credit_note"
+        ? openInvoicePicker("debtor.appliesToReference", "debtor", m.ageing.invoices, drafts.debtor.debtorName, "debtorName") +
+          inputEl("debtor.reason", { placeholder: "Reason (required)", title: "Why is this invoice being reversed?" })
+        : "") +
       saveBtn("debtor-add", "Add", { icon: "plus" }) +
       '</div>' + nameHint("debtor.debtorName", m.ageing.byDebtor.map(function (d) { return d.debtorName; })) +
+      (drafts.debtor.type === "credit_note"
+        ? '<p class="tcf-note">A credit note reduces what this customer owes, but it is <strong>not cash</strong> ' +
+          '— it never shows as money received in a closed week. Naming the invoice it reverses keeps the ' +
+          'remaining debt in the right week; leave it blank and it comes off the oldest invoice first.</p>'
+        : "") +
       '</section>';
   } else {
-    html += '<section class="tcf-panel"><div class="tcf-readonly-note">Your role is read-only. ' +
-      'You can see and export everything, but not log transactions.</div></section>';
+    html += '<section class="tcf-panel"><div class="tcf-readonly-note">Your role does not log new ' +
+      'transactions. You can see and export everything, and ' +
+      (canEdit() ? 'edit or delete' : 'delete') + ' existing entries.</div></section>';
   }
 
   html += '<section class="tcf-panel"><div class="tcf-panel-title">AR ageing by debtor</div>' +
@@ -1846,7 +2080,7 @@ function renderDebtors() {
     sortableTh(vkey, "overdue", "Overdue") +
     sortableTh(vkey, "nextDue", "Next due") +
     sortableTh(vkey, "invoiceCount", "Open invoices") +
-    '<th>Unallocated</th><th></th></tr></thead><tbody>';
+    '<th>Unallocated</th><th title="Credit notes issued to this customer — these reduce the balance but are not cash">Credit notes</th><th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (d) {
     html += '<tr>' +
@@ -1855,13 +2089,38 @@ function renderDebtors() {
       '<td class="tcf-mono ' + (d.overdue > 0 ? "tcf-neg" : "") + '">' + (d.overdue > 0 ? esc(fmtUSD(d.overdue)) : dash()) + '</td>' +
       '<td class="tcf-mono">' + esc(d.nextDue || dash()) + '</td>' +
       '<td>' + d.invoiceCount + '</td>' +
-      '<td class="tcf-mono">' + (d.unallocatedReceipt > 0.5 ? '<span class="tcf-pos" title="Paid more than they owe">' + esc(fmtUSD(d.unallocatedReceipt)) + '</span>' : dash()) + '</td>' +
+      '<td class="tcf-mono">' + (d.unallocatedReceipt > 0.5 ? '<span class="tcf-pos" title="Paid or credited more than they owe">' + esc(fmtUSD(d.unallocatedReceipt)) + '</span>' : dash()) + '</td>' +
+      '<td class="tcf-mono tcf-td-sub">' + (d.creditNotesUSD ? esc(fmtUSD(d.creditNotesUSD)) : dash()) + '</td>' +
       '<td>' + btn("drill", "Ledger", { cls: "tcf-btn-ghost", data: ' data-kind="debtor" data-name="' + attr(d.debtorName) + '"' }) + '</td></tr>';
   });
-  if (!view.rows.length) html += '<tr><td colspan="7" class="tcf-empty">' +
+  if (!view.rows.length) html += '<tr><td colspan="8" class="tcf-empty">' +
     (m.ageing.byDebtor.length ? "Nothing matches these filters." : "No debtor transactions logged yet.") + '</td></tr>';
   html += '</tbody></table>' + renderPager(vkey, view) + '</section></div>';
   return html;
+}
+
+/* A credit note usually reverses one specific invoice, so offer the ones that
+   are actually open for that counterparty rather than making someone retype a
+   reference. Blank means "take it off the oldest invoice first", which is what
+   the pooled path does. */
+function openInvoicePicker(draftPath, draftKey, invoices, counterpartyName, nameField) {
+  var key = nameKeyOf(counterpartyName);
+  var mine = (invoices || []).filter(function (inv) {
+    return nameKeyOf(inv[nameField]) === key && inv.reference;
+  });
+  var current = String(getDraft(draftPath) || "");
+  var opts = [{ value: "", label: mine.length ? "Oldest invoice first" : "No open invoices on file" }]
+    .concat(mine.map(function (inv) {
+      return { value: inv.reference,
+        label: inv.reference + " — " + fmtUSD(inv.remaining) + " open" +
+          (inv.dueDate ? " · due " + inv.dueDate : "") };
+    }));
+  /* A reference typed by hand, or one whose invoice has since been settled,
+     must not silently vanish from the dropdown. */
+  if (current && !mine.some(function (inv) { return refKeyOf(inv.reference) === refKeyOf(current); })) {
+    opts.push({ value: current, label: current + " (not an open invoice)" });
+  }
+  return selectEl(draftPath, opts, { cls: "tcf-input-sm", rerender: true });
 }
 
 /* Warns when a newly typed name is a near-match for one already on file —
@@ -1904,12 +2163,14 @@ function renderOem() {
       '<div class="tcf-add-row">' +
       btn("bulk-open", "Upload OEM invoices", { icon: "uploadCloud", data: ' data-bulk="oem_invoice"' }) +
       btn("bulk-open", "Upload payments to OEMs", { cls: "tcf-btn-ghost", icon: "uploadCloud", data: ' data-bulk="oem_payment"' }) +
+      btn("bulk-open", "Upload credit notes from OEMs", { cls: "tcf-btn-ghost", icon: "uploadCloud", data: ' data-bulk="ap_credit_note"' }) +
       '</div></section>';
 
     html += '<section class="tcf-panel"><div class="tcf-panel-title">Add a single entry</div>' +
       '<div class="tcf-subtab-row">' +
       '<button class="tcf-subtab' + (ui.oemEntryType === "invoice" ? " tcf-subtab-active" : "") + '" data-act="oem-entry-type" data-type="invoice">Invoice</button>' +
       '<button class="tcf-subtab' + (ui.oemEntryType === "payment" ? " tcf-subtab-active" : "") + '" data-act="oem-entry-type" data-type="payment">Payment</button>' +
+      '<button class="tcf-subtab' + (ui.oemEntryType === "credit" ? " tcf-subtab-active" : "") + '" data-act="oem-entry-type" data-type="credit">Credit note</button>' +
       '</div>';
 
     if (ui.oemEntryType === "invoice") {
@@ -1927,7 +2188,7 @@ function renderOem() {
         saveBtn("oem-invoice-add", "Add", { icon: "plus" }) +
         '</div>' + nameHint("oemInvoice.oem", m.oemAgeing.byOem.map(function (o) { return o.oem; })) +
         '<datalist id="oem-list">' + OEM_BRANDS.map(function (b) { return '<option value="' + attr(b) + '"></option>'; }).join("") + '</datalist>';
-    } else {
+    } else if (ui.oemEntryType === "payment") {
       html += '<div class="tcf-add-row tcf-add-row-wrap" style="margin-top:12px">' +
         inputEl("oemPayment.oem", { cls: "tcf-input-sm", placeholder: "OEM name" }) +
         inputEl("oemPayment.paymentDate", { type: "date", cls: "tcf-input-sm", title: "Payment date" }) +
@@ -1936,6 +2197,20 @@ function renderOem() {
         inputEl("oemPayment.reference", { cls: "tcf-input-sm", placeholder: "Reference" }) +
         saveBtn("oem-payment-add", "Add", { icon: "plus" }) +
         '</div>' + nameHint("oemPayment.oem", m.oemAgeing.byOem.map(function (o) { return o.oem; }));
+    } else {
+      html += '<div class="tcf-add-row tcf-add-row-wrap" style="margin-top:12px">' +
+        inputEl("oemCredit.oem", { cls: "tcf-input-sm", placeholder: "OEM name" }) +
+        inputEl("oemCredit.creditNoteDate", { type: "date", cls: "tcf-input-sm", title: "Credit note date" }) +
+        inputEl("oemCredit.amount", { type: "number", cls: "tcf-input-sm", placeholder: "Amount", min: 0 }) +
+        selectEl("oemCredit.currency", CURRENCIES, { cls: "tcf-input-sm" }) +
+        inputEl("oemCredit.reference", { cls: "tcf-input-sm", placeholder: "Credit note no." }) +
+        openInvoicePicker("oemCredit.appliesToReference", "oemCredit", m.oemAgeing.invoices, drafts.oemCredit.oem, "oem") +
+        inputEl("oemCredit.reason", { placeholder: "Reason (required)", title: "Why is this invoice being reversed?" }) +
+        saveBtn("oem-credit-add", "Add", { icon: "plus" }) +
+        '</div>' + nameHint("oemCredit.oem", m.oemAgeing.byOem.map(function (o) { return o.oem; })) +
+        '<p class="tcf-note">A credit note from an OEM reduces what we owe them, but <strong>no cash leaves ' +
+        'the business</strong> — it never shows as an OEM payment in a closed week. Naming the invoice it ' +
+        'reverses keeps the remaining obligation in the right week.</p>';
     }
     html += '</section>';
   }
@@ -1950,7 +2225,7 @@ function renderOem() {
     sortableTh(vkey, "nextDue", "Next due") +
     sortableTh(vkey, "invoiceCount", "Open invoices") +
     sortableTh(vkey, "totalPaid", "Total paid") +
-    '<th></th></tr></thead><tbody>';
+    '<th title="Credit notes received from this OEM — these reduce what we owe but no cash moved">Credit notes</th><th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (o) {
     html += '<tr>' +
@@ -1961,9 +2236,10 @@ function renderOem() {
       '<td>' + o.invoiceCount + '</td>' +
       '<td class="tcf-mono tcf-td-sub">' + esc(fmtUSD(o.totalPaid)) +
       (o.unallocatedPayment > 0.5 ? '<div class="tcf-td-sub tcf-pos">' + esc(fmtUSD(o.unallocatedPayment)) + ' unallocated</div>' : "") + '</td>' +
+      '<td class="tcf-mono tcf-td-sub">' + (o.creditNotesUSD ? esc(fmtUSD(o.creditNotesUSD)) : dash()) + '</td>' +
       '<td>' + btn("drill", "Ledger", { cls: "tcf-btn-ghost", data: ' data-kind="oem" data-name="' + attr(o.oem) + '"' }) + '</td></tr>';
   });
-  if (!view.rows.length) html += '<tr><td colspan="7" class="tcf-empty">' +
+  if (!view.rows.length) html += '<tr><td colspan="8" class="tcf-empty">' +
     (m.oemAgeing.byOem.length ? "Nothing matches these filters." : "No OEM invoices logged yet.") + '</td></tr>';
   html += '</tbody></table>' + renderPager(vkey, view) + '</section></div>';
   return html;
@@ -2018,46 +2294,70 @@ function renderDrilldownModal() {
       '<div class="tcf-chip"><span>Open invoices</span><span class="tcf-mono tcf-bold">' + summaryRow.invoiceCount + '</span></div>' +
       '<div class="tcf-chip"><span>' + (isDebtor ? "Unallocated receipts" : "Unallocated payments") + '</span><span class="tcf-mono tcf-bold">' +
       esc(fmtUSD(isDebtor ? summaryRow.unallocatedReceipt : summaryRow.unallocatedPayment)) + '</span></div>' +
+      (summaryRow.creditNotesUSD
+        ? '<div class="tcf-chip"><span>Credit notes (not cash)</span><span class="tcf-mono tcf-bold">' +
+          esc(fmtUSD(summaryRow.creditNotesUSD)) + '</span></div>'
+        : "") +
       '</div>';
   }
 
   var cfg = isDebtor
-    ? { searchFields: ["reference", "type"], dateFields: [{ value: "transactionDate", label: "Transaction date" }, { value: "dueDate", label: "Due date" }],
-        typeField: "type", typeLabel: "Entry", typeOptions: [{ value: "credit_sale", label: "Credit sale" }, { value: "cash_receipt", label: "Cash receipt" }],
-        defaultSort: "transactionDate", searchPlaceholder: "Reference" }
-    : { searchFields: ["reference", "type"], dateFields: [{ value: "invoiceDate", label: "Invoice date" }, { value: "dueDate", label: "Due date" }, { value: "paymentDate", label: "Payment date" }],
-        typeField: "type", typeLabel: "Entry", typeOptions: [{ value: "invoice", label: "Invoice" }, { value: "payment", label: "Payment" }],
-        defaultSort: "invoiceDate", searchPlaceholder: "Reference" };
+    ? { searchFields: ["reference", "type", "reason", "appliesToReference"], dateFields: [{ value: "transactionDate", label: "Transaction date" }, { value: "dueDate", label: "Due date" }],
+        typeField: "type", typeLabel: "Entry", typeOptions: [{ value: "credit_sale", label: "Credit sale" }, { value: "cash_receipt", label: "Cash receipt" }, { value: "credit_note", label: "Credit note" }],
+        defaultSort: "transactionDate", searchPlaceholder: "Reference or reason" }
+    : { searchFields: ["reference", "type", "reason", "appliesToReference"], dateFields: [{ value: "invoiceDate", label: "Invoice date" }, { value: "dueDate", label: "Due date" }, { value: "paymentDate", label: "Payment date" }, { value: "creditNoteDate", label: "Credit note date" }],
+        typeField: "type", typeLabel: "Entry", typeOptions: [{ value: "invoice", label: "Invoice" }, { value: "payment", label: "Payment" }, { value: "credit_note", label: "Credit note" }],
+        defaultSort: "invoiceDate", searchPlaceholder: "Reference or reason" };
 
   var view = applyView(vkey, d.rows, cfg);
   var entity = isDebtor ? "debtorTxn" : "oemTxn";
 
+  var pick = canDeleteAny();
+  var selectableRows = view.rows.filter(function (r) { return !r.carriedForward; });
   html += renderFilters(vkey, cfg) + renderCount(vkey, view) +
+    (pick ? selectionBar(entity, d.rows) : "") +
     '<div class="tcf-ledger-scroll"><table class="tcf-table"><thead><tr>' +
+    (pick ? headerSelectBox(entity, selectableRows) : "") +
     '<th>Date</th><th>Due</th><th>Entry</th><th>Amount</th><th>USD</th>' +
-    '<th title="What is still owed on this invoice after receipts are applied FIFO">Outstanding</th>' +
+    '<th title="What is still owed on this invoice after receipts and credit notes are applied">Outstanding</th>' +
     '<th>Reference</th><th>Logged by</th><th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (t) {
-    var isCredit = isDebtor ? t.type === "cash_receipt" : t.type === "payment";
-    var primaryDate = isDebtor ? t.transactionDate : (t.type === "payment" ? t.paymentDate : (t.invoiceDate || dash()));
+    var isNote = t.type === "credit_note";
+    var isCash = isDebtor ? t.type === "cash_receipt" : t.type === "payment";
+    var reducesBalance = isCash || isNote;
+    var primaryDate = isDebtor
+      ? t.transactionDate
+      : (t.type === "payment" ? t.paymentDate : t.type === "credit_note" ? t.creditNoteDate : (t.invoiceDate || dash()));
     var rem = remainingById[t.id];
-    html += '<tr><td class="tcf-mono">' + esc(primaryDate || dash()) + '</td>' +
+    var kind = isNote ? "credit note" : isCash ? (isDebtor ? "receipt" : "payment") : "invoice";
+    var picked = pick && !!selectionFor(entity)[t.id];
+    html += '<tr' + (picked ? ' class="tcf-row-selected"' : "") + '>' +
+      (pick ? '<td>' + (t.carriedForward ? "" : rowSelectBox(entity, t)) + '</td>' : "") +
+      '<td class="tcf-mono">' + esc(primaryDate || dash()) + '</td>' +
       '<td class="tcf-mono">' + (t.dueDate ? esc(t.dueDate) : '<span class="tcf-td-sub">' + dash() + '</span>') + '</td>' +
-      '<td class="tcf-td-sub">' + esc(isCredit ? (isDebtor ? "receipt" : "payment") : "invoice") +
-      (t.carriedForward ? ' <span class="tcf-badge tcf-badge-ok" title="Carried forward from before the forecast window">b/f</span>' : "") + '</td>' +
-      '<td class="tcf-mono ' + (isCredit ? "tcf-pos" : "") + '">' + (isCredit ? "+" : "") + esc(fmtCcy(t.amount, t.currency)) + '</td>' +
+      '<td class="tcf-td-sub">' + esc(kind) +
+      /* A credit note is not cash, and the drilldown says so rather than letting
+         it read like a receipt. */
+      (isNote ? ' <span class="tcf-badge tcf-badge-warn" title="Reduces the balance, but no cash moved">not cash</span>' : "") +
+      (t.carriedForward ? ' <span class="tcf-badge tcf-badge-ok" title="Carried forward from before the forecast window">b/f</span>' : "") +
+      (isNote && t.appliesToReference ? '<div class="tcf-td-sub">reverses ' + esc(t.appliesToReference) + '</div>' : "") +
+      (isNote && t.reason ? '<div class="tcf-td-sub">' + esc(t.reason) + '</div>' : "") + '</td>' +
+      '<td class="tcf-mono ' + (reducesBalance ? "tcf-pos" : "") + '">' + (reducesBalance ? "-" : "") + esc(fmtCcy(t.amount, t.currency)) + '</td>' +
       '<td class="tcf-mono">' + esc(fmtUSD(t.usd !== undefined ? t.usd : rowUSD(t, model.rates))) + '</td>' +
-      '<td class="tcf-mono tcf-bold">' + (isCredit ? dash() : (rem !== undefined ? esc(fmtUSD(rem)) : '<span class="tcf-td-sub">settled</span>')) + '</td>' +
+      '<td class="tcf-mono tcf-bold">' + (reducesBalance ? dash() : (rem !== undefined ? esc(fmtUSD(rem)) : '<span class="tcf-td-sub">settled</span>')) + '</td>' +
       '<td class="tcf-td-sub">' + esc(t.reference || dash()) + '</td>' +
       '<td class="tcf-td-sub">' + esc(t.createdBy || dash()) + '</td>' +
       '<td>' + (t.carriedForward ? "" : rowActions(entity, t)) + '</td></tr>';
   });
-  if (!view.rows.length) html += '<tr><td colspan="9" class="tcf-empty">Nothing matches these filters.</td></tr>';
+  if (!view.rows.length) html += '<tr><td colspan="' + (pick ? 10 : 9) + '" class="tcf-empty">Nothing matches these filters.</td></tr>';
   html += '</tbody></table></div>' + renderPager(vkey, view) +
-    '<p class="tcf-note">“Outstanding” is what is still owed on that invoice after receipts have been applied ' +
-    'oldest-first — not the invoice\'s gross value. Rows marked <strong>b/f</strong> are the net position ' +
-    'carried forward from before the forecast window; edit them at source if they are wrong.</p>' +
+    '<p class="tcf-note">“Outstanding” is what is still owed on that invoice after receipts and ' +
+    'credit notes have been applied — not the invoice\'s gross value. A <strong>credit note</strong> ' +
+    'reduces the balance but moves no cash, so it never appears as money received or paid.<br>' +
+    'Rows marked <strong>b/f</strong> are a single net figure carried forward from before the forecast ' +
+    'window, so they cannot be edited or deleted here. To work on the entries behind one, move the ' +
+    '<strong>forecast start</strong> back on Settings so the period is inside the window again.</p>' +
     '</div></div>';
   return html;
 }
@@ -2069,18 +2369,24 @@ function renderDrilldownModal() {
    ========================================================================= */
 function renderRecordTable(vkey, entity, rows, cfg) {
   var view = applyView(vkey, rows, cfg);
+  var pick = canDeleteAny();
   var html = renderFilters(vkey, cfg) + renderCount(vkey, view) +
+    (pick ? selectionBar(entity, rows) : "") +
     '<div class="tcf-ledger-scroll"><table class="tcf-table"><thead><tr>' +
+    (pick ? headerSelectBox(entity, view.rows) : "") +
     cfg.columns.map(function (c) {
       return c.sort ? sortableTh(vkey, c.sort, c.label) : '<th>' + esc(c.label) + '</th>';
     }).join("") + '<th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (r) {
-    html += '<tr>' + cfg.columns.map(function (c) { return c.cell(r); }).join("") +
+    var on = pick && !!selectionFor(entity)[r.id];
+    html += '<tr' + (on ? ' class="tcf-row-selected"' : "") + '>' +
+      (pick ? '<td>' + rowSelectBox(entity, r) + '</td>' : "") +
+      cfg.columns.map(function (c) { return c.cell(r); }).join("") +
       '<td>' + rowActions(entity, r) + '</td></tr>';
   });
   if (!view.rows.length) {
-    html += '<tr><td colspan="' + (cfg.columns.length + 1) + '" class="tcf-empty">' +
+    html += '<tr><td colspan="' + (cfg.columns.length + (pick ? 2 : 1)) + '" class="tcf-empty">' +
       (rows.length ? "Nothing matches these filters." : esc(cfg.emptyText || "Nothing logged yet.")) + '</td></tr>';
   }
   html += '</tbody></table></div>' + renderPager(vkey, view);
@@ -2475,6 +2781,24 @@ var CASH_SALE_FIELDS = [
   { key: "date", label: "Date", aliases: ["Transaction Date", "Sale Date"], required: true, type: "date" },
   { key: "reference", label: "Reference", aliases: ["Receipt No", "Ref", "Invoice"], required: false, type: "text" }
 ];
+var AR_CREDIT_NOTE_FIELDS = [
+  { key: "debtorName", label: "Debtor Name", aliases: ["Customer", "Customer Name", "Debtor"], required: true, type: "text" },
+  { key: "transactionDate", label: "Credit Note Date", aliases: ["Date", "Transaction Date"], required: true, type: "date" },
+  { key: "amount", label: "Amount", aliases: ["Value"], required: true, type: "number" },
+  { key: "currency", label: "Currency", aliases: ["Ccy"], required: false, type: "text" },
+  { key: "reference", label: "Credit Note No", aliases: ["Reference", "Ref", "CN No"], required: false, type: "text" },
+  { key: "appliesToReference", label: "Reverses Invoice No", aliases: ["Invoice No", "Against Invoice", "Applies To"], required: false, type: "text" },
+  { key: "reason", label: "Reason", aliases: ["Narration", "Description", "Why"], required: true, type: "text" }
+];
+var AP_CREDIT_NOTE_FIELDS = [
+  { key: "oem", label: "OEM Name", aliases: ["Vendor", "Supplier"], required: true, type: "text" },
+  { key: "creditNoteDate", label: "Credit Note Date", aliases: ["Date"], required: true, type: "date" },
+  { key: "amount", label: "Amount", aliases: ["Value"], required: true, type: "number" },
+  { key: "currency", label: "Currency", aliases: ["Ccy"], required: false, type: "text" },
+  { key: "reference", label: "Credit Note No", aliases: ["Reference", "Ref", "CN No"], required: false, type: "text" },
+  { key: "appliesToReference", label: "Reverses Invoice No", aliases: ["Invoice No", "Against Invoice", "Applies To"], required: false, type: "text" },
+  { key: "reason", label: "Reason", aliases: ["Narration", "Description", "Why"], required: true, type: "text" }
+];
 var DIVIDEND_FIELDS = [
   { key: "description", label: "Description", aliases: ["Dividend", "Name"], required: true, type: "text" },
   { key: "amount", label: "Amount", aliases: ["Value"], required: true, type: "number" },
@@ -2494,10 +2818,85 @@ var BULK_CONFIGS = {
   cash_receipt: { entity: "debtorTxn", fixed: { type: "cash_receipt" }, title: "Upload Cash Receipts", fields: RECEIPT_FIELDS, sampleRow: ["Acme Distributors Ltd", "2026-08-17", 15000, "USD", "RCT-5521"], description: "Columns: Debtor Name, Transaction Date, Amount, Currency (optional, defaults USD), Reference (optional). Receipts are applied FIFO against the debtor's oldest open invoices." },
   oem_invoice: { entity: "oemTxn", fixed: { type: "invoice" }, title: "Upload OEM Invoices", fields: OEM_INVOICE_FIELDS, sampleRow: ["Samsung", "SS-INV-88213", 180000, "USD", "2026-08-10", "2026-08-24", "New Invoice"], description: "Columns: OEM Name, Invoice Reference (optional), Amount, Currency (optional, defaults USD), Invoice Date (optional), Due Date (REQUIRED — an obligation with no due date cannot be placed in a week), Type (optional — 'Opening Balance' or 'New Invoice')." },
   oem_payment: { entity: "oemTxn", fixed: { type: "payment" }, title: "Upload Payments to OEMs", fields: OEM_PAYMENT_FIELDS, sampleRow: ["Samsung", "2026-08-18", 120000, "USD", "PMT-2201"], description: "Columns: OEM Name, Payment Date, Amount, Currency (optional, defaults USD), Reference (optional). Applied FIFO against the OEM's oldest open invoices." },
+  ar_credit_note: { entity: "debtorTxn", fixed: { type: "credit_note" }, title: "Upload Credit Notes to Customers", fields: AR_CREDIT_NOTE_FIELDS, sampleRow: ["Acme Distributors Ltd", "2026-08-19", 4000, "USD", "CN-0012", "INV-10234", "Goods returned — damaged in transit"], description: "Columns: Debtor Name, Credit Note Date, Amount, Currency (optional, defaults USD), Credit Note No (optional), Reverses Invoice No (optional — naming it keeps the remaining debt in the right week; leave blank to net off the oldest invoice first), Reason (required). A credit note reduces what the customer owes but is NOT cash — it never shows as money received." },
+  ap_credit_note: { entity: "oemTxn", fixed: { type: "credit_note" }, title: "Upload Credit Notes from OEMs", fields: AP_CREDIT_NOTE_FIELDS, sampleRow: ["Samsung", "2026-08-19", 12000, "USD", "SS-CN-441", "SS-INV-88213", "Faulty units returned"], description: "Columns: OEM Name, Credit Note Date, Amount, Currency (optional, defaults USD), Credit Note No (optional), Reverses Invoice No (optional), Reason (required). A credit note reduces what we owe the OEM but NO CASH LEAVES the business — it never shows as an OEM payment." },
   cash_sale: { entity: "cashSale", fixed: {}, title: "Upload Cash Sales", fields: CASH_SALE_FIELDS, sampleRow: ["Walk-in retail — Ikeja showroom", 3400, "USD", "2026-08-18", "CS-0091"], description: "Columns: Description (optional), Amount, Currency (optional, defaults USD), Date, Reference (optional)." },
   dividend: { entity: "dividend", fixed: { status: "due" }, title: "Upload Dividends", fields: DIVIDEND_FIELDS, sampleRow: ["Interim dividend", 5000000, "USD", "2026-08-31"], description: "Columns: Description, Amount, Currency (optional, defaults USD), Due Date." },
   expense: { entity: "expense", fixed: {}, title: "Upload Daily Expenses", fields: EXPENSE_FIELDS, sampleRow: ["Diesel — Lagos warehouse generators", "Utilities", 1250, "USD", "2026-08-18"], description: "Columns: Description, Category (optional), Amount, Currency (optional, defaults USD), Date." }
 };
+
+/* A negative line has a meaning, and the meaning depends on which template it
+   arrived in. Rather than refusing it — losing data the business has — or
+   writing it raw into a FIFO tab — reintroducing the phantom-receipt bug — each
+   one is converted into the record type that already expresses it correctly,
+   and the preview names every conversion.
+
+   The four ledger entities need no conversion: their arithmetic is a plain
+   signed sum, so a negative is simply a reversal of that line. */
+var NEGATIVE_MEANING = {
+  credit_sale: function (row) {
+    /* Less owed by the customer: a credit note against that invoice. */
+    return {
+      type: "credit_note", dueDate: "",
+      appliesToReference: row.reference || "",
+      reason: "Negative amount on import" + (row.reference ? " against " + row.reference : ""),
+      __became: "a credit note to the customer"
+    };
+  },
+  cash_receipt: function (row) {
+    /* Cash that came back — a bounced or reversed receipt. The customer owes it
+       again, from the day it reversed. */
+    return {
+      type: "credit_sale", dueDate: row.transactionDate,
+      __became: "an amount owed again, due " + row.transactionDate
+    };
+  },
+  ar_credit_note: function (row) {
+    /* A credit note reversed: the debt is re-instated. */
+    return {
+      type: "credit_sale", dueDate: row.transactionDate,
+      appliesToReference: "", reason: "",
+      __became: "a re-instated debt, due " + row.transactionDate
+    };
+  },
+  oem_invoice: function (row) {
+    /* Less owed to the OEM: a credit note from them. */
+    return {
+      type: "credit_note", creditNoteDate: row.invoiceDate || row.dueDate,
+      invoiceDate: "", dueDate: "",
+      appliesToReference: row.reference || "",
+      reason: "Negative amount on import" + (row.reference ? " against " + row.reference : ""),
+      __became: "a credit note from the OEM"
+    };
+  },
+  oem_payment: function (row) {
+    /* A payment that came back — we owe it again, from the day it reversed. */
+    return {
+      type: "invoice", invoiceDate: row.paymentDate, dueDate: row.paymentDate,
+      paymentDate: "", source: "new_invoice",
+      __became: "an obligation owed again, due " + row.paymentDate
+    };
+  },
+  ap_credit_note: function (row) {
+    return {
+      type: "invoice", invoiceDate: row.creditNoteDate, dueDate: row.creditNoteDate,
+      creditNoteDate: "", appliesToReference: "", reason: "", source: "new_invoice",
+      __became: "a re-instated obligation, due " + row.creditNoteDate
+    };
+  }
+};
+
+/* Applies the meaning above, flipping the amount positive. Returns null when the
+   row needs no conversion. */
+function convertNegative(key, row) {
+  var fn = NEGATIVE_MEANING[key];
+  if (!fn) return null;                       /* a ledger entity — a sign is fine */
+  var patch = fn(row);
+  var became = patch.__became;
+  delete patch.__became;
+  return { row: Object.assign({}, row, patch, { amount: Math.abs(Number(row.amount) || 0) }),
+    became: became };
+}
 
 function bulkConfig() { return BULK_CONFIGS[ui.bulk.key]; }
 
@@ -2581,23 +2980,34 @@ function parseImportDate(v, order) {
   return { iso: "", ambiguous: false, bad: true };
 }
 
-/* Amounts must parse cleanly AND be positive. The prototype stripped
-   non-numerics and returned 0 for anything left unparseable, so "1.2.3" became
-   a silent zero and a negative broke FIFO (REQUIREMENTS D8). */
+/* Amounts must parse cleanly. Signs ARE accepted on upload, in every column —
+   a real treasury file carries returns, rebates and reversals as negative lines,
+   and rejecting them loses data the business has.
+
+   A negative is never written to a FIFO tab as-is, because a negative credit
+   sale acts as a phantom receipt inside the allocation (REQUIREMENTS D8,
+   verified). It is converted into the record type that means the same thing —
+   a credit note, or a re-instated claim — by BULK_CONFIGS[...].onNegative
+   below, and every conversion is named in the preview.
+
+   Zero is still refused: a zero-value row is a blank line, not a transaction.
+   Accounting parentheses, "(500)", are read as -500. */
 function parseImportNumber(v) {
   if (v === null || v === undefined || v === "") return { n: null, bad: true, why: "is blank" };
   if (typeof v === "number") {
     if (!isFinite(v)) return { n: null, bad: true, why: "is not a number" };
-    if (v <= 0) return { n: null, bad: true, why: "is " + v + " — amounts must be greater than zero" };
+    if (v === 0) return { n: null, bad: true, why: "is zero" };
     return { n: v };
   }
-  var s = String(v).trim().replace(/[\s,]/g, "").replace(/^[$₦₵]/, "");
+  var s = String(v).trim().replace(/[\s,]/g, "").replace(/^[-+]?[$₦₵]/, function (m) {
+    return m.charAt(0) === "-" ? "-" : "";
+  });
   var neg = /^\(.*\)$/.test(s);
-  if (neg) s = s.slice(1, -1);
-  if (!/^-?\d*\.?\d+$/.test(s)) return { n: null, bad: true, why: '"' + v + '" is not a number' };
+  if (neg) s = s.slice(1, -1).replace(/^[$₦₵]/, "");
+  if (!/^[-+]?\d*\.?\d+$/.test(s)) return { n: null, bad: true, why: '"' + v + '" is not a number' };
   var n = Number(s) * (neg ? -1 : 1);
   if (!isFinite(n)) return { n: null, bad: true, why: '"' + v + '" is not a number' };
-  if (n <= 0) return { n: null, bad: true, why: "is " + n + " — amounts must be greater than zero" };
+  if (n === 0) return { n: null, bad: true, why: "is zero" };
   return { n: n };
 }
 
@@ -2625,7 +3035,7 @@ function processRawRows(headerRow, dataRows) {
   }
 
   var order = ui.bulk.dateOrder || "dmy";
-  var parsed = [], rowErrors = [], ambiguous = [];
+  var parsed = [], rowErrors = [], ambiguous = [], remapped = [], converted = [];
 
   dataRows.forEach(function (line, r) {
     if (!line || line.every(function (c) { return c === "" || c == null; })) return;
@@ -2651,16 +3061,39 @@ function processRawRows(headerRow, dataRows) {
       } else {
         obj[f.key] = raw === undefined || raw === null ? "" : String(raw).trim();
         if (f.required && !obj[f.key]) problems.push(f.label + " is missing");
+        /* Filed under Other rather than losing the row — but recorded, so the
+           preview can say which rows it happened to. */
+        if (f.key === "category" && obj[f.key]) {
+          var mapped = normaliseCategoryClient(obj[f.key]);
+          /* Only a real FALLBACK is reported. Correcting "utilities" to
+             "Utilities" is a casing fix, and telling the user it was "filed
+             under Other" would simply be untrue. */
+          if (mapped === "Other" && obj[f.key].toLowerCase() !== "other") {
+            remapped.push({ row: rowNum, from: obj[f.key], to: mapped });
+          }
+          obj[f.key] = mapped;
+        }
       }
     });
 
-    if (problems.length) rowErrors.push({ row: rowNum, why: problems.join("; ") });
-    else parsed.push(obj);
+    if (problems.length) { rowErrors.push({ row: rowNum, why: problems.join("; ") }); return; }
+
+    /* A negative line becomes the record type that means the same thing. */
+    if (Number(obj.amount) < 0) {
+      var conv = convertNegative(ui.bulk.key, obj);
+      if (conv) {
+        converted.push({ row: rowNum, amount: obj.amount, became: conv.became });
+        obj = conv.row;
+      }
+    }
+    parsed.push(obj);
   });
 
   ui.bulk.rows = parsed;
   ui.bulk.errors = rowErrors;
   ui.bulk.ambiguous = ambiguous;
+  ui.bulk.remapped = remapped;
+  ui.bulk.converted = converted;
   ui.bulk.duplicates = findDuplicates(parsed, cfg);
 }
 
@@ -2783,6 +3216,13 @@ function renderBulkModal() {
     '<div class="tcf-modal-head"><div><div class="tcf-eyebrow">Bulk upload</div><h3 style="margin:4px 0 0">' + esc(cfg.title) + '</h3></div>' +
     iconBtn("bulk-close", "x", { size: 16, title: "Close" }) + '</div>' +
     '<p class="tcf-note" style="margin-top:8px">' + esc(cfg.description) + '</p>' +
+    '<p class="tcf-note" style="margin-top:-4px"><strong>Negative amounts are accepted</strong> in ' +
+    'any amount column — returns, rebates and reversals. ' +
+    (NEGATIVE_MEANING[b.key]
+      ? 'On this sheet a negative is turned into the entry that means the same thing (a credit note, ' +
+        'or an amount owed again), and every conversion is listed before you import.'
+      : 'On this sheet a negative is kept as-is: it simply reverses that line.') +
+    ' A zero is treated as a blank row and rejected.</p>' +
     '<div class="tcf-subtab-row">' +
     '<button class="tcf-subtab' + (b.mode === "file" ? " tcf-subtab-active" : "") + '" data-act="bulk-mode" data-mode="file">' + ico("uploadCloud", 13) + ' Upload a file</button>' +
     '<button class="tcf-subtab' + (b.mode === "paste" ? " tcf-subtab-active" : "") + '" data-act="bulk-mode" data-mode="paste">' + ico("clipboard", 13) + ' Paste from Excel</button>' +
@@ -2836,6 +3276,32 @@ function renderBulkModal() {
       '</div></div>';
   }
 
+  if (b.converted && b.converted.length) {
+    html += '<div class="tcf-warn-inline"><strong>' + b.converted.length + ' negative amount' +
+      (b.converted.length === 1 ? "" : "s") + ' found.</strong> ' +
+      'A negative cannot be written to an ageing ledger as-is — it would behave as a payment ' +
+      'nobody made — so each has been converted into the entry that means the same thing:<br>' +
+      b.converted.slice(0, 8).map(function (x) {
+        return '<span class="tcf-mono tcf-td-sub">Row ' + x.row + ': ' + esc(fmtUSD(x.amount)) +
+          ' → ' + esc(x.became) + '</span>';
+      }).join("<br>") +
+      (b.converted.length > 8 ? '<br><span class="tcf-td-sub">…and ' + (b.converted.length - 8) + ' more.</span>' : "") +
+      '<br>The preview below shows what will actually be saved.</div>';
+  }
+
+  if (b.remapped && b.remapped.length) {
+    var kinds = {};
+    b.remapped.forEach(function (x) { kinds[x.from] = (kinds[x.from] || 0) + 1; });
+    html += '<div class="tcf-warn-inline">' + b.remapped.length + ' row' +
+      (b.remapped.length === 1 ? " has a category VAULT" : "s have categories VAULT") +
+      ' does not recognise, so ' + (b.remapped.length === 1 ? "it has" : "they have") +
+      ' been filed under <strong>Other</strong>: ' +
+      Object.keys(kinds).slice(0, 8).map(function (k) {
+        return '<span class="tcf-mono">' + esc(k) + '</span> (' + kinds[k] + ')';
+      }).join(", ") +
+      '. Edit them afterwards, or rename the column values to match VAULT\'s categories.</div>';
+  }
+
   if (b.duplicates && b.duplicates.length) {
     html += '<div class="tcf-warn-inline">' + b.duplicates.length + ' of these rows look like duplicates of ' +
       'entries already in VAULT (same counterparty, date, amount and reference). Importing them would double ' +
@@ -2875,13 +3341,17 @@ var EDIT_FIELDS = {
   debtorTxn: function (r) {
     return [
       { key: "debtorName", label: "Debtor name", type: "text" },
-      { key: "transactionDate", label: "Transaction date", type: "date" }
+      { key: "transactionDate", label: r.type === "credit_note" ? "Credit note date" : "Transaction date", type: "date" }
     ].concat(r.type === "credit_sale" ? [{ key: "dueDate", label: "Due date", type: "date" }] : [])
      .concat([
       { key: "amount", label: "Amount", type: "number" },
       { key: "currency", label: "Currency", type: "select", options: CURRENCIES },
-      { key: "reference", label: "Reference", type: "text" }
-    ]);
+      { key: "reference", label: r.type === "credit_note" ? "Credit note no." : "Reference", type: "text" }
+    ])
+     .concat(r.type === "credit_note" ? [
+      { key: "appliesToReference", label: "Reverses invoice no.", type: "text" },
+      { key: "reason", label: "Reason (required)", type: "text" }
+    ] : []);
   },
   oemTxn: function (r) {
     return [{ key: "oem", label: "OEM name", type: "text" }].concat(
@@ -2889,12 +3359,17 @@ var EDIT_FIELDS = {
         ? [{ key: "invoiceDate", label: "Invoice date", type: "date" },
            { key: "dueDate", label: "Due date", type: "date" },
            { key: "source", label: "Type", type: "select", options: [{ value: "new_invoice", label: "New invoice" }, { value: "opening_balance", label: "Opening balance" }] }]
-        : [{ key: "paymentDate", label: "Payment date", type: "date" }]
+        : r.type === "payment"
+          ? [{ key: "paymentDate", label: "Payment date", type: "date" }]
+          : [{ key: "creditNoteDate", label: "Credit note date", type: "date" }]
     ).concat([
       { key: "amount", label: "Amount", type: "number" },
       { key: "currency", label: "Currency", type: "select", options: CURRENCIES },
-      { key: "reference", label: "Reference", type: "text" }
-    ]);
+      { key: "reference", label: r.type === "credit_note" ? "Credit note no." : "Reference", type: "text" }
+    ]).concat(r.type === "credit_note" ? [
+      { key: "appliesToReference", label: "Reverses invoice no.", type: "text" },
+      { key: "reason", label: "Reason (required)", type: "text" }
+    ] : []);
   },
   cashSale: function () {
     return [
@@ -3069,13 +3544,17 @@ function buildExportSheets() {
     "AR Ageing Summary": m.ageing.byDebtor.map(function (d) {
       return { "Debtor": d.debtorName, "Outstanding USD": Math.round(d.totalOutstanding),
         "Overdue USD": Math.round(d.overdue), "Next Due": d.nextDue, "Open Invoices": d.invoiceCount,
-        "Unallocated Receipts USD": Math.round(d.unallocatedReceipt) };
+        "Cash Received USD": Math.round(d.receiptsUSD || 0),
+        "Credit Notes USD (not cash)": Math.round(d.creditNotesUSD || 0),
+        "Unallocated Credit USD": Math.round(d.unallocatedReceipt) };
     }),
     "Debtor Transactions": strip(state.debtorTxns),
     "OEM Ageing Summary": m.oemAgeing.byOem.map(function (o) {
       return { "OEM": o.oem, "Outstanding USD": Math.round(o.totalOutstanding),
         "Overdue USD": Math.round(o.overdue), "Next Due": o.nextDue, "Open Invoices": o.invoiceCount,
-        "Total Paid USD": Math.round(o.totalPaid), "Unallocated Payments USD": Math.round(o.unallocatedPayment) };
+        "Total Paid USD": Math.round(o.totalPaid),
+        "Credit Notes USD (not cash)": Math.round(o.creditNotesUSD || 0),
+        "Unallocated Credit USD": Math.round(o.unallocatedPayment) };
     }),
     "OEM Transactions": strip(state.oemInvoices),
     "Mobile Purchases": strip(state.mobilePurchases),
@@ -3249,6 +3728,7 @@ function flashToast(type, message, undo) {
 function loadBootstrap() {
   return callApi("getBootstrap", {}).then(function (b) {
     state.today = b.today;
+    state.apiVersion = Number(b.apiVersion) || 1;
     state.revision = b.revision;
     state.actor = b.actor;
     state.settings = b.settings;
@@ -3256,9 +3736,9 @@ function loadBootstrap() {
     state.position = b.position;
     state.positionHistory = b.positionHistory || [];
     state.debtorTxns = b.debtorTxns || [];
-    state.debtorCredits = b.debtorCredits || [];
+    state.debtorCarried = b.debtorCarried || [];
     state.oemInvoices = b.oemInvoices || [];
-    state.oemCredits = b.oemCredits || [];
+    state.oemCarried = b.oemCarried || [];
     state.cashSales = b.cashSales || [];
     state.mobilePurchases = b.mobilePurchases || [];
     state.dividends = b.dividends || [];
@@ -3269,6 +3749,10 @@ function loadBootstrap() {
     state.lastSync = new Date();
     state.stale = false;
     state.phase = "ready";
+    /* The rows have just been replaced, so a stale selection could point at ids
+       that no longer exist — or, worse, at a row somebody else has since
+       changed. Selections do not survive a reload. */
+    clearSelection();
     resetDrafts();
     render();
     return b;
@@ -3454,9 +3938,15 @@ function startPolling() {
    ========================================================================= */
 var ENTITY_META = {
   debtorTxn: { label: "transaction", listOf: function () { return state.debtorTxns; },
-    describe: function (r) { return (r.type === "credit_sale" ? "credit sale" : "cash receipt") + " · " + r.debtorName + " · " + fmtCcy(r.amount, r.currency); } },
+    describe: function (r) {
+      var k = r.type === "credit_sale" ? "credit sale" : r.type === "credit_note" ? "credit note" : "cash receipt";
+      return k + " · " + r.debtorName + " · " + fmtCcy(r.amount, r.currency);
+    } },
   oemTxn: { label: "OEM entry", listOf: function () { return state.oemInvoices; },
-    describe: function (r) { return (r.type === "payment" ? "payment" : "invoice") + " · " + r.oem + " · " + fmtCcy(r.amount, r.currency); } },
+    describe: function (r) {
+      var k = r.type === "payment" ? "payment" : r.type === "credit_note" ? "credit note" : "invoice";
+      return k + " · " + r.oem + " · " + fmtCcy(r.amount, r.currency);
+    } },
   cashSale: { label: "cash sale", listOf: function () { return state.cashSales; },
     describe: function (r) { return (r.description || "cash sale") + " · " + fmtCcy(r.amount, r.currency) + " · " + r.date; } },
   mobilePurchase: { label: "purchase estimate", listOf: function () { return state.mobilePurchases; },
@@ -3491,9 +3981,9 @@ function addSingle(entity, draftKey, required, fixed) {
     return;
   }
   var row = Object.assign({}, d, fixed || {});
-  /* A receipt has no due date, and the hidden draft value is not sent
-     (REQUIREMENTS D14). */
-  if (entity === "debtorTxn" && row.type === "cash_receipt") delete row.dueDate;
+  /* Neither a receipt nor a credit note has a due date, and the hidden draft
+     value is not sent (REQUIREMENTS D14). */
+  if (entity === "debtorTxn" && row.type !== "credit_sale") delete row.dueDate;
 
   mutate("createRecords", { entity: entity, rows: [row] }, "Saved", {
     onDone: function () {
@@ -3536,6 +4026,57 @@ appEl.addEventListener("click", function (ev) {
       break;
     case "refresh-all": refreshAll(true); break;
 
+    /* ---- row selection ---- */
+    case "row-select": {
+      var rsEntity = el.getAttribute("data-entity");
+      var rsId = el.getAttribute("data-id");
+      var sel = selectionFor(rsEntity);
+      if (el.checked) sel[rsId] = true; else delete sel[rsId];
+      render();
+      break;
+    }
+    case "page-select": {
+      var psEntity = el.getAttribute("data-entity");
+      var psIds = (el.getAttribute("data-ids") || "").split(",").filter(Boolean);
+      var psSel = selectionFor(psEntity);
+      /* Only ever the rows on THIS page — ticking a box you cannot see is how
+         people delete things they did not mean to. */
+      if (el.checked) psIds.forEach(function (id) { psSel[id] = true; });
+      else psIds.forEach(function (id) { delete psSel[id]; });
+      render();
+      break;
+    }
+    case "sel-clear":
+      clearSelection(el.getAttribute("data-entity"));
+      render();
+      break;
+    case "sel-delete": {
+      var sdEntity = el.getAttribute("data-entity");
+      var sdIds = selectedIds(sdEntity);
+      if (!sdIds.length) return;
+      var pool = ENTITY_META[sdEntity].listOf()
+        .concat(ui.drilldown && ui.drilldown.rows ? ui.drilldown.rows : []);
+      var sdRows = sdIds.map(function (id) {
+        return pool.filter(function (r) { return r.id === id; })[0];
+      }).filter(Boolean);
+      var sdUsd = sdRows.reduce(function (a, r) { return a + rowUSD(r, model.rates); }, 0);
+      ui.confirm = {
+        eyebrow: "Delete", okLabel: "Delete " + sdIds.length + " row" + (sdIds.length === 1 ? "" : "s"),
+        title: "Delete " + sdIds.length + " " + ENTITY_META[sdEntity].label +
+          (sdIds.length === 1 ? "" : "s") + "?",
+        body: '<span class="tcf-mono">' + esc(fmtUSD(sdUsd)) + '</span> in total.<br><br>' +
+          sdRows.slice(0, 6).map(function (r) {
+            return '<span class="tcf-mono tcf-td-sub">' + esc(ENTITY_META[sdEntity].describe(r)) + '</span>';
+          }).join("<br>") +
+          (sdRows.length > 6 ? '<br><span class="tcf-td-sub">…and ' + (sdRows.length - 6) + ' more.</span>' : "") +
+          '<br><br>They stop counting towards the forecast immediately. Every one leaves a record ' +
+          'on the History tab, and you can undo the whole lot for a few seconds afterwards.',
+        action: "delete-selected", entity: sdEntity, ids: sdIds, error: ""
+      };
+      render();
+      break;
+    }
+
     /* ---- filters, sorting, paging ---- */
     case "sort": {
       var vk = el.getAttribute("data-view"), field = el.getAttribute("data-field");
@@ -3576,13 +4117,18 @@ appEl.addEventListener("click", function (ev) {
       addSingle("debtorTxn", "debtor",
         drafts.debtor.type === "credit_sale"
           ? ["debtorName", "transactionDate", "dueDate", "amount"]
-          : ["debtorName", "transactionDate", "amount"]);
+          : drafts.debtor.type === "credit_note"
+            ? ["debtorName", "transactionDate", "amount", "reason"]
+            : ["debtorName", "transactionDate", "amount"]);
       break;
     case "oem-invoice-add":
       addSingle("oemTxn", "oemInvoice", ["oem", "dueDate", "amount"], { type: "invoice" });
       break;
     case "oem-payment-add":
       addSingle("oemTxn", "oemPayment", ["oem", "paymentDate", "amount"], { type: "payment" });
+      break;
+    case "oem-credit-add":
+      addSingle("oemTxn", "oemCredit", ["oem", "creditNoteDate", "amount", "reason"], { type: "credit_note" });
       break;
     case "mobile-add":
       addSingle("mobilePurchase", "mobile", ["brand", "amount", "estimatedDate"]);
@@ -3636,35 +4182,26 @@ appEl.addEventListener("click", function (ev) {
     }
 
     /* ---- delete: confirm, then tombstone, then offer an undo ---- */
-    case "del-ask": {
-      var dEntity = el.getAttribute("data-entity"), dId = el.getAttribute("data-id");
-      var dRow = findRecord(dEntity, dId);
-      if (!dRow) { flashToast("error", "That record is no longer loaded — reload and try again."); return; }
-      ui.confirm = {
-        eyebrow: "Delete", title: "Delete this " + ENTITY_META[dEntity].label + "?",
-        body: '<span class="tcf-mono">' + esc(ENTITY_META[dEntity].describe(dRow)) + '</span><br><br>' +
-          'It will stop counting towards the forecast immediately. A record of the deletion — ' +
-          'including everything this row contained — is kept on the History tab, and you can undo ' +
-          'it for a few seconds afterwards.',
-        okLabel: "Delete", action: "delete-record", entity: dEntity, id: dId, error: ""
-      };
-      render();
-      break;
-    }
     case "confirm-cancel":
     case "confirm-close-bg":
       ui.confirm = null; render(); break;
     case "confirm-go": {
       var c = ui.confirm;
-      if (c.action === "delete-record") {
-        mutate("deleteRecord", { entity: c.entity, id: c.id }, "Deleted", {
-          undo: true,
-          onDone: function (res) {
-            ui.undo = { entity: c.entity, row: res.restored };
-            ui.confirm = null;
+      if (c.action === "delete-selected") {
+        mutate("deleteRecords", { entity: c.entity, ids: c.ids },
+          function (res) {
+            return "Deleted " + res.removed + " row" + (res.removed === 1 ? "" : "s") +
+              (res.missing ? " (" + res.missing + " had already gone)" : "");
           },
-          onError: function (err) { ui.confirm.error = describeError(err); }
-        });
+          {
+            undo: true,
+            onDone: function (res) {
+              ui.undo = { entity: c.entity, rows: res.restored };
+              clearSelection(c.entity);
+              ui.confirm = null;
+            },
+            onError: function (err) { ui.confirm.error = describeError(err); }
+          });
       }
       break;
     }
@@ -3672,13 +4209,20 @@ appEl.addEventListener("click", function (ev) {
       if (!ui.undo) return;
       var u = ui.undo;
       ui.undo = null;
-      /* Re-created as a NEW row with a new id, and the re-creation is itself
+      /* Re-created as NEW rows with new ids, and the re-creation is itself
          recorded — an undo is a business event, not a rewrite of history. */
-      var restore = Object.assign({}, u.row);
-      delete restore.id; delete restore.createdAt; delete restore.createdById;
-      delete restore.createdBy; delete restore.updatedAt; delete restore.updatedById;
-      delete restore.updatedBy; delete restore.importBatchId;
-      mutate("createRecords", { entity: u.entity, rows: [restore] }, "Restored");
+      var restore = (u.rows || []).map(function (row) {
+        var copy = Object.assign({}, row);
+        ["id", "createdAt", "createdById", "createdBy", "updatedAt", "updatedById",
+         "updatedBy", "importBatchId", "nameKey"].forEach(function (k) { delete copy[k]; });
+        return copy;
+      });
+      if (!restore.length) return;
+      /* restoreRecords, not createRecords: everyone who can delete can undo,
+         but not everyone can create, and an undo the deleter cannot press is
+         worse than no undo at all. */
+      mutate("restoreRecords", { entity: u.entity, rows: restore },
+        "Restored " + restore.length + " row" + (restore.length === 1 ? "" : "s"));
       break;
     }
 
@@ -3727,7 +4271,8 @@ appEl.addEventListener("click", function (ev) {
     /* ---- bulk upload ---- */
     case "bulk-open":
       ui.bulk = { key: el.getAttribute("data-bulk"), mode: "file", pasteText: "", rows: null,
-        errors: [], fileName: "", ambiguous: [], duplicates: [], dateOrder: "dmy" };
+        errors: [], fileName: "", ambiguous: [], duplicates: [], remapped: [], converted: [],
+        dateOrder: "dmy" };
       render();
       break;
     case "bulk-close":
@@ -3813,8 +4358,8 @@ function loadHistory(page) {
 appEl.addEventListener("keydown", function (ev) {
   if (ev.key === "Escape") {
     if (ui.bulk) { ui.bulk = null; render(); }
-    else if (ui.edit) { ui.edit = null; render(); }
     else if (ui.confirm) { ui.confirm = null; render(); }
+    else if (ui.edit) { ui.edit = null; render(); }
     else if (ui.drilldown) { ui.drilldown = null; render(); }
     else if (ui.exportOpen) { ui.exportOpen = false; revokeExportUrl(); render(); }
     return;
@@ -3839,9 +4384,16 @@ function handleBinding(ev) {
   if (t.id === "auth-email") { ui.auth.email = t.value; return; }
   if (t.id === "auth-code") { ui.auth.code = t.value; return; }
   if (t.id === "auth-name") { ui.auth.name = t.value; return; }
-  if (t.hasAttribute("data-paste")) { ui.bulk.pasteText = t.value; return; }
+  /* These two can fire after their modal has closed — Escape, a backdrop click,
+     or an IME composition finishing on a node that has just been replaced. The
+     event is then simply stale, and dropping it is correct; dereferencing the
+     modal state would throw and surface as "VAULT hit an internal error". */
+  if (t.hasAttribute("data-paste")) { if (ui.bulk) ui.bulk.pasteText = t.value; return; }
 
-  if (t.hasAttribute("data-edit")) { ui.edit.draft[t.getAttribute("data-edit")] = t.value; return; }
+  if (t.hasAttribute("data-edit")) {
+    if (ui.edit) ui.edit.draft[t.getAttribute("data-edit")] = t.value;
+    return;
+  }
   if (t.hasAttribute("data-hist")) { ui.history[t.getAttribute("data-hist")] = t.value; return; }
 
   if (t.hasAttribute("data-filter")) {
@@ -3866,7 +4418,7 @@ appEl.addEventListener("change", function (ev) {
   var act = t.getAttribute && t.getAttribute("data-act");
 
   if (act === "bulk-file") {
-    if (t.files && t.files[0]) handleBulkFile(t.files[0]);
+    if (ui.bulk && t.files && t.files[0]) handleBulkFile(t.files[0]);
     return;
   }
   if (act === "pct-override") {
