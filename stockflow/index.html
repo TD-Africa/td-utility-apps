@@ -368,7 +368,7 @@ const STOCKFLOW_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyOBWe8HQ
    browser's cache — and the symptom is simply that the fix does not
    work. Without a visible build there is nothing to check, and the
    obvious conclusion is that the fix is broken. */
-const STOCKFLOW_BUILD = "2026-09-01.5";
+const STOCKFLOW_BUILD = "2026-09-04.1";
 
 const SESSION_KEY = 'stockflow_session';
 const EMAIL_KEY = 'stockflow_last_email';
@@ -698,6 +698,7 @@ const STATE = {
   activity: {from: '', to: '', item: '', type: '', businessType: '', stage: '', partner: '',
              data: null, position: null, loading: false},
   bulk: {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
+         allowRepeats: false,
          ignored: null, fileName: null, delimiter: null, lastBatchId: null,
          rawText: null, dateOrder: null, dateInfo: null, createMissingItems: null},
   itemImport: {open: false, rows: [], preview: null, busy: false, error: null, skipInvalid: true},
@@ -2580,6 +2581,16 @@ function viewBulkPanel(){
           ? '<label style="font-size:11.5px;color:var(--text-faint);display:flex;align-items:center;gap:6px;">' +
             '<input type="checkbox" id="bulk-skip" data-keep-value="1" style="width:auto;"' +
             (b.skipInvalid ? ' checked' : '') + '> skip the ' + p.invalid + ' refused row(s)</label>'
+          : '') +
+        /* Offered only when something was actually refused for being
+           already recorded. A standing tick that loosens a duplicate
+           guard on every future import is how the guard stops meaning
+           anything at all. */
+        (p.rows && p.rows.some(function(r){
+          return (r.errors || []).some(function(e){ return /already on the ledger/.test(e); }); })
+          ? '<label style="font-size:11.5px;color:var(--amber);display:flex;align-items:center;gap:6px;">' +
+            '<input type="checkbox" id="bulk-repeats" style="width:auto;"' +
+            (b.allowRepeats ? ' checked' : '') + '> these movements really did happen again</label>'
           : '') +
         '<button class="btn secondary" id="bulk-cancel">Cancel</button>' +
         (p.invalid ? '<button class="btn secondary" id="bulk-export-errors">Download the refused rows</button>' : '') +
@@ -4681,6 +4692,15 @@ function bindLedger(){
     if(STATE.bulk.rawText) checkBulk(STATE.bulk.rawText);
   });
   on('#bulk-skip', 'change', function(e){ STATE.bulk.skipInvalid = e.target.checked; });
+  /* Re-checks the file rather than just remembering the tick: the point
+     is to watch the rows go from refused to OK before committing
+     anything. rawText is kept for exactly this kind of re-read — the
+     date-order switch uses it the same way. */
+  on('#bulk-repeats', 'change', function(e){
+    STATE.bulk.allowRepeats = e.target.checked;
+    if(STATE.bulk.rawText) checkBulk(STATE.bulk.rawText);
+    else render();
+  });
   on('#bulk-create-items', 'change', function(e){
     STATE.bulk.createMissingItems = e.target.checked;
     /* Re-check straight away: what the preview says is valid changes
@@ -4760,6 +4780,7 @@ async function checkBulk(text, fileName){
   try{
     const preview = await rpc('bulkPostTransactions', {
       rows: STATE.bulk.rows, dryRun: true, skipInvalid: true,
+      allowRepeats: !!STATE.bulk.allowRepeats,
       createMissingItems: autoCreateItems()
     });
     STATE.bulk.preview = preview;
@@ -4785,10 +4806,15 @@ async function commitBulk(force){
     const res = await mutate('bulkPostTransactions', {
       rows: STATE.bulk.rows,
       skipInvalid: skipEl ? skipEl.checked : STATE.bulk.skipInvalid,
+      allowRepeats: !!STATE.bulk.allowRepeats,
       createMissingItems: autoCreateItems(),
       force: !!force || !!(STATE.bulk.preview && STATE.bulk.preview.duplicateBatch)
     });
+    /* allowRepeats resets to false: it answers one file, not a standing
+       preference. Left on, the next upload would silently lose the
+       protection this whole change exists to add. */
     STATE.bulk = {rows: [], preview: null, busy: false, error: null, skipInvalid: true,
+      allowRepeats: false,
       ignored: null, fileName: null, delimiter: null, lastBatchId: null,
       rawText: null, dateOrder: null, dateInfo: null};
     const paste = document.getElementById('bulk-paste');
