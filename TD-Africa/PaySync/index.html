@@ -656,6 +656,45 @@ function purposeList(){
   return (ref.purposes && ref.purposes.length) ? ref.purposes : PURPOSE_VALUES;
 }
 
+/* ============================================================
+   WHOSE PAYROLL THIS IS
+   ------------------------------------------------------------
+   The BRAND block above is this page's own identity — its logo, its colours,
+   the name it was published under. The Sheet also holds orgName, orgAddress
+   and appName on its Settings tab, and the server sends them with every load.
+
+   Where the two disagree, the SHEET WINS. It has to: the address printed on a
+   payslip is a fact about the company, kept by the people who run payroll, and
+   editing it should not require anyone to republish an HTML file. That was the
+   bug — the address on screen came from BRAND, so changing the Settings tab
+   moved the emailed payslip and left the one on screen alone.
+
+   BRAND stays the fallback, for two cases that both matter: the login screen,
+   which is drawn before there is a session to fetch settings with, and a page
+   newer than the script deployed behind it, which receives no settings at all.
+
+   The mismatch warning on the dashboard is deliberately left comparing against
+   BRAND. It is not about presentation — it catches a page pointed at another
+   company's Sheet, and it should still fire when it is. */
+function brandOrg(){
+  const s = STATE.settings || {};
+  return String(s.orgName || '').trim() || BRAND.org;
+}
+
+function brandApp(){
+  const s = STATE.settings || {};
+  return String(s.appName || '').trim() || BRAND.app;
+}
+
+/* Blank is a real answer here — a company that wants no address on its payslip
+   clears the setting — so only an ABSENT value falls back. An old script sends
+   nothing and gets BRAND; a cleared setting sends '' and gets ''. */
+function brandAddress(){
+  const s = STATE.settings || {};
+  if(s.orgAddress === undefined || s.orgAddress === null) return BRAND.address;
+  return String(s.orgAddress);
+}
+
 function newRegisterFilter(){
   return {q:'', grp:'', type:'', bu:'', purpose:'', status:'', sort:'name', dir:1, page:1, pageSize:50};
 }
@@ -1038,7 +1077,7 @@ function renderTopBar(){
       /* The organisation leads, because several deployments share a colour
          scheme and the header is the only thing on screen that tells a person
          whose payroll they are looking at. */
-      '<div class="top-h1">' + esc(BRAND.org) + ' &mdash; ' + esc(BRAND.app) + '</div>' +
+      '<div class="top-h1">' + esc(brandOrg()) + ' &mdash; ' + esc(brandApp()) + '</div>' +
       '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' + counts.sales + ' sales &nbsp;|&nbsp; ' +
         counts.support + ' support &nbsp;|&nbsp; ' + counts.tds + ' TD Services &nbsp;|&nbsp; ' +
         'all figures in naira (' + NAIRA + ')</div>' +
@@ -2792,7 +2831,9 @@ function modalPayslip(m){
   return modalShell({
     cls:'wide',
     title:'Payslip — ' + p.name,
-    sub:BRAND.address + ' · ' + p.label,
+    /* From the Sheet, so Settings is the one place an address is kept. When it
+       is blank the separator would dangle, so it goes too. */
+    sub:(brandAddress() ? brandAddress() + ' · ' : '') + p.label,
     body:
       '<div class="ps-emp">' +
         psField('Employee no', p.emp_no) + psField('Name', p.name) +
