@@ -180,7 +180,7 @@ var VAULT_BACKEND_URL = "https://script.google.com/macros/s/AKfycbyqUNx7w2db3TGd
 /* The oldest backend this page can work against. If the deployed Apps Script is
    older, the page says so at the top of every screen rather than letting a form
    fail with a message about an enum. Bump it here and in Code.gs together. */
-var REQUIRED_API_VERSION = 3;
+var REQUIRED_API_VERSION = 4;
 
 var SESSION_KEY = "vault::session";
 
@@ -886,12 +886,27 @@ function refKeyOf(ref) {
    runs the same fixture through both and compares every weekly closing balance,
    because a divergence here would move money into the wrong week silently. */
 function allocateFifo(invoices, pooledTotal, targeted) {
-  var work = invoices.map(function (inv) {
-    return Object.assign({}, inv, { remaining: inv.usd });
+  /* NEGATIVE LINES COME OUT OF THE CHAIN FIRST.
+
+     Uploads store a negative as-is, so the invoice list really can contain one.
+     Left in place, `Math.min(remaining, pool)` on a remaining of -5,971 takes
+     -5,971 from the pool — INFLATING it by that much and clearing invoices
+     nobody paid — and when the pool is empty the loop breaks before reaching it
+     and its value is silently lost (REQUIREMENTS D8, verified both ways).
+
+     Economically a negative line is a credit, so it is applied as one: against
+     the invoice whose reference it repeats, exactly like a targeted credit note,
+     and into the pool when it names none. The net balance is unchanged and the
+     week bucketing stays right. */
+  var work = [], lineCredits = [];
+  invoices.forEach(function (inv) {
+    var usd = Number(inv.usd) || 0;
+    if (usd < 0) lineCredits.push({ reference: inv.reference, usd: -usd });
+    else work.push(Object.assign({}, inv, { remaining: usd }));
   });
   var pool = pooledTotal;
 
-  (targeted || []).forEach(function (credit) {
+  (targeted || []).concat(lineCredits).forEach(function (credit) {
     var left = credit.usd;
     var key = refKeyOf(credit.reference);
     if (!key) { pool += left; return; }
@@ -1697,8 +1712,9 @@ function renderApp() {
     html += '<div class="tcf-alert">' + ico("alert", 16) +
       '<span><strong>This page is newer than the deployed script.</strong> ' +
       'It expects VAULT backend v' + REQUIRED_API_VERSION + ' but the deployment is v' +
-      state.apiVersion + ', so newer entry types — credit notes, and deleting several rows ' +
-      'at once — will be refused. Everything else works normally.<br>' +
+      state.apiVersion + ', so newer entry types — credit notes, deleting several rows ' +
+      'at once, and NEGATIVE AMOUNTS on debtor or OEM records — will be refused. ' +
+      'Everything else works normally.<br>' +
       'To fix it: in the Apps Script editor, paste the current Code.gs, then ' +
       '<strong>Deploy → Manage deployments → the pencil → Version: New version → Deploy</strong>, ' +
       'then run <strong>setupVault</strong> once to add the new columns.</span></div>';
@@ -2825,78 +2841,19 @@ var BULK_CONFIGS = {
   expense: { entity: "expense", fixed: {}, title: "Upload Daily Expenses", fields: EXPENSE_FIELDS, sampleRow: ["Diesel — Lagos warehouse generators", "Utilities", 1250, "USD", "2026-08-18"], description: "Columns: Description, Category (optional), Amount, Currency (optional, defaults USD), Date." }
 };
 
-/* A negative line has a meaning, and the meaning depends on which template it
-   arrived in. Rather than refusing it — losing data the business has — or
-   writing it raw into a FIFO tab — reintroducing the phantom-receipt bug — each
-   one is converted into the record type that already expresses it correctly,
-   and the preview names every conversion.
+/* A negative line is stored EXACTLY AS UPLOADED, in every template, with its
+   sign and its own record type intact. A returns file that says "-5,971 against
+   invoice 6501293751" is filed as that invoice line, negative, and reads back
+   the same way — it is not rewritten into a credit note, and the row the user
+   sent is the row on file.
 
-   The four ledger entities need no conversion: their arithmetic is a plain
-   signed sum, so a negative is simply a reversal of that line. */
-var NEGATIVE_MEANING = {
-  credit_sale: function (row) {
-    /* Less owed by the customer: a credit note against that invoice. */
-    return {
-      type: "credit_note", dueDate: "",
-      appliesToReference: row.reference || "",
-      reason: "Negative amount on import" + (row.reference ? " against " + row.reference : ""),
-      __became: "a credit note to the customer"
-    };
-  },
-  cash_receipt: function (row) {
-    /* Cash that came back — a bounced or reversed receipt. The customer owes it
-       again, from the day it reversed. */
-    return {
-      type: "credit_sale", dueDate: row.transactionDate,
-      __became: "an amount owed again, due " + row.transactionDate
-    };
-  },
-  ar_credit_note: function (row) {
-    /* A credit note reversed: the debt is re-instated. */
-    return {
-      type: "credit_sale", dueDate: row.transactionDate,
-      appliesToReference: "", reason: "",
-      __became: "a re-instated debt, due " + row.transactionDate
-    };
-  },
-  oem_invoice: function (row) {
-    /* Less owed to the OEM: a credit note from them. */
-    return {
-      type: "credit_note", creditNoteDate: row.invoiceDate || row.dueDate,
-      invoiceDate: "", dueDate: "",
-      appliesToReference: row.reference || "",
-      reason: "Negative amount on import" + (row.reference ? " against " + row.reference : ""),
-      __became: "a credit note from the OEM"
-    };
-  },
-  oem_payment: function (row) {
-    /* A payment that came back — we owe it again, from the day it reversed. */
-    return {
-      type: "invoice", invoiceDate: row.paymentDate, dueDate: row.paymentDate,
-      paymentDate: "", source: "new_invoice",
-      __became: "an obligation owed again, due " + row.paymentDate
-    };
-  },
-  ap_credit_note: function (row) {
-    return {
-      type: "invoice", invoiceDate: row.creditNoteDate, dueDate: row.creditNoteDate,
-      creditNoteDate: "", appliesToReference: "", reason: "", source: "new_invoice",
-      __became: "a re-instated obligation, due " + row.creditNoteDate
-    };
-  }
-};
-
-/* Applies the meaning above, flipping the amount positive. Returns null when the
-   row needs no conversion. */
-function convertNegative(key, row) {
-  var fn = NEGATIVE_MEANING[key];
-  if (!fn) return null;                       /* a ledger entity — a sign is fine */
-  var patch = fn(row);
-  var became = patch.__became;
-  delete patch.__became;
-  return { row: Object.assign({}, row, patch, { amount: Math.abs(Number(row.amount) || 0) }),
-    became: became };
-}
+   That is a storage decision, not an arithmetic one. The FIFO engines cannot
+   simply add a negative to the allocation pool — doing so acts as a PHANTOM
+   RECEIPT, clearing invoices nobody paid (REQUIREMENTS D8, verified) — so
+   allocateFifo lifts negative lines out of the chain and applies them as
+   credits against the reference they name, or against the oldest invoice when
+   they name none. The stored row keeps its sign; the ageing stays correct.
+   fifoPass_ in Code.gs does the same, and integration.test.js compares them. */
 
 function bulkConfig() { return BULK_CONFIGS[ui.bulk.key]; }
 
@@ -2984,11 +2941,11 @@ function parseImportDate(v, order) {
    a real treasury file carries returns, rebates and reversals as negative lines,
    and rejecting them loses data the business has.
 
-   A negative is never written to a FIFO tab as-is, because a negative credit
-   sale acts as a phantom receipt inside the allocation (REQUIREMENTS D8,
-   verified). It is converted into the record type that means the same thing —
-   a credit note, or a re-instated claim — by BULK_CONFIGS[...].onNegative
-   below, and every conversion is named in the preview.
+   The sign is KEPT. A negative row is written to its own tab as the record
+   type it arrived as, negative — nothing is reclassified. The phantom-receipt
+   risk it used to carry (REQUIREMENTS D8) is handled where it belongs, in
+   allocateFifo, which applies a negative line as a credit rather than adding
+   it to the payment pool.
 
    Zero is still refused: a zero-value row is a blank line, not a transaction.
    Accounting parentheses, "(500)", are read as -500. */
@@ -3035,7 +2992,7 @@ function processRawRows(headerRow, dataRows) {
   }
 
   var order = ui.bulk.dateOrder || "dmy";
-  var parsed = [], rowErrors = [], ambiguous = [], remapped = [], converted = [];
+  var parsed = [], rowErrors = [], ambiguous = [], remapped = [], negatives = [];
 
   dataRows.forEach(function (line, r) {
     if (!line || line.every(function (c) { return c === "" || c == null; })) return;
@@ -3078,14 +3035,9 @@ function processRawRows(headerRow, dataRows) {
 
     if (problems.length) { rowErrors.push({ row: rowNum, why: problems.join("; ") }); return; }
 
-    /* A negative line becomes the record type that means the same thing. */
-    if (Number(obj.amount) < 0) {
-      var conv = convertNegative(ui.bulk.key, obj);
-      if (conv) {
-        converted.push({ row: rowNum, amount: obj.amount, became: conv.became });
-        obj = conv.row;
-      }
-    }
+    /* Kept exactly as uploaded — sign, type and all. Recorded only so the
+       preview can say which rows carry one. */
+    if (Number(obj.amount) < 0) negatives.push({ row: rowNum, amount: obj.amount });
     parsed.push(obj);
   });
 
@@ -3093,7 +3045,7 @@ function processRawRows(headerRow, dataRows) {
   ui.bulk.errors = rowErrors;
   ui.bulk.ambiguous = ambiguous;
   ui.bulk.remapped = remapped;
-  ui.bulk.converted = converted;
+  ui.bulk.negatives = negatives;
   ui.bulk.duplicates = findDuplicates(parsed, cfg);
 }
 
@@ -3218,11 +3170,8 @@ function renderBulkModal() {
     '<p class="tcf-note" style="margin-top:8px">' + esc(cfg.description) + '</p>' +
     '<p class="tcf-note" style="margin-top:-4px"><strong>Negative amounts are accepted</strong> in ' +
     'any amount column — returns, rebates and reversals. ' +
-    (NEGATIVE_MEANING[b.key]
-      ? 'On this sheet a negative is turned into the entry that means the same thing (a credit note, ' +
-        'or an amount owed again), and every conversion is listed before you import.'
-      : 'On this sheet a negative is kept as-is: it simply reverses that line.') +
-    ' A zero is treated as a blank row and rejected.</p>' +
+    'A negative is saved exactly as you sent it — same row, same type, same sign — and ' +
+    'reverses that line. A zero is treated as a blank row and rejected.</p>' +
     '<div class="tcf-subtab-row">' +
     '<button class="tcf-subtab' + (b.mode === "file" ? " tcf-subtab-active" : "") + '" data-act="bulk-mode" data-mode="file">' + ico("uploadCloud", 13) + ' Upload a file</button>' +
     '<button class="tcf-subtab' + (b.mode === "paste" ? " tcf-subtab-active" : "") + '" data-act="bulk-mode" data-mode="paste">' + ico("clipboard", 13) + ' Paste from Excel</button>' +
@@ -3276,17 +3225,16 @@ function renderBulkModal() {
       '</div></div>';
   }
 
-  if (b.converted && b.converted.length) {
-    html += '<div class="tcf-warn-inline"><strong>' + b.converted.length + ' negative amount' +
-      (b.converted.length === 1 ? "" : "s") + ' found.</strong> ' +
-      'A negative cannot be written to an ageing ledger as-is — it would behave as a payment ' +
-      'nobody made — so each has been converted into the entry that means the same thing:<br>' +
-      b.converted.slice(0, 8).map(function (x) {
-        return '<span class="tcf-mono tcf-td-sub">Row ' + x.row + ': ' + esc(fmtUSD(x.amount)) +
-          ' → ' + esc(x.became) + '</span>';
+  if (b.negatives && b.negatives.length) {
+    html += '<div class="tcf-warn-inline"><strong>' + b.negatives.length + ' negative amount' +
+      (b.negatives.length === 1 ? "" : "s") + ' found.</strong> ' +
+      (b.negatives.length === 1 ? 'It will be saved' : 'They will be saved') +
+      ' as-is and net down what is owed:<br>' +
+      b.negatives.slice(0, 8).map(function (x) {
+        return '<span class="tcf-mono tcf-td-sub">Row ' + x.row + ': ' + esc(fmtUSD(x.amount)) + '</span>';
       }).join("<br>") +
-      (b.converted.length > 8 ? '<br><span class="tcf-td-sub">…and ' + (b.converted.length - 8) + ' more.</span>' : "") +
-      '<br>The preview below shows what will actually be saved.</div>';
+      (b.negatives.length > 8 ? '<br><span class="tcf-td-sub">…and ' + (b.negatives.length - 8) + ' more.</span>' : "") +
+      '</div>';
   }
 
   if (b.remapped && b.remapped.length) {
@@ -3434,7 +3382,10 @@ function renderEditModal() {
           return '<option value="' + attr(val) + '"' + (String(val) === String(v) ? " selected" : "") + '>' + esc(lab) + '</option>';
         }).join("") + '</select>';
     } else {
-      html += '<input class="tcf-input" type="' + f.type + '"' + (f.type === "number" ? ' min="0" step="any"' : "") +
+      /* No min="0" — a sign is valid on every amount now, and the attribute
+         would make a legitimate negative fail the browser's own validation
+         before the value ever reached us. */
+      html += '<input class="tcf-input" type="' + f.type + '"' + (f.type === "number" ? ' step="any"' : "") +
         ' data-edit="' + attr(f.key) + '" value="' + attr(v) + '" />';
     }
     html += '</div>';
@@ -4271,7 +4222,7 @@ appEl.addEventListener("click", function (ev) {
     /* ---- bulk upload ---- */
     case "bulk-open":
       ui.bulk = { key: el.getAttribute("data-bulk"), mode: "file", pasteText: "", rows: null,
-        errors: [], fileName: "", ambiguous: [], duplicates: [], remapped: [], converted: [],
+        errors: [], fileName: "", ambiguous: [], duplicates: [], remapped: [], negatives: [],
         dateOrder: "dmy" };
       render();
       break;
