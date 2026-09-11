@@ -357,6 +357,43 @@
   .line-item-row .li-subtotal, .li-head .li-subtotal {flex:0 0 126px;text-align:right;}
   .line-item-row .li-remove,   .li-head .li-gap      {flex:0 0 30px;}
 
+  /* ---- Optional pricing columns ----
+     FOB and CIF are alternative terms for the same goods; duration is the
+     licence term on a software line. Most quotes use neither, so the cells are
+     always in the DOM — which keeps the redraw snapshot simple — and the
+     wrapper decides whether they are shown. A quote that uses none of them
+     looks exactly as it always did. */
+  .line-item-row .li-fob,  .li-head .li-fob  {flex:0 1 108px;}
+  .line-item-row .li-cif,  .li-head .li-cif  {flex:0 1 108px;}
+  .line-item-row .li-dur,  .li-head .li-dur  {flex:0 1 96px;}
+  .li-grid:not(.show-alt) .li-fob,
+  .li-grid:not(.show-alt) .li-cif,
+  .li-grid:not(.show-dur) .li-dur{display:none;}
+  /* With three price columns in play everything else has to give ground, or
+     the row overflows to the right — the fault that made these fields
+     unusable once before. */
+  .li-grid.show-alt .line-item-row .li-sku,   .li-grid.show-alt .li-head .li-sku   {flex:0 1 88px;}
+  .li-grid.show-alt .line-item-row .li-price, .li-grid.show-alt .li-head .li-price {flex:0 1 108px;}
+  .li-grid.show-alt .line-item-row .li-subtotal,
+  .li-grid.show-alt .li-head .li-subtotal{flex:0 0 112px;}
+  .li-alt-sub{display:block;font-size:10.5px;color:var(--text-faint);line-height:1.45;}
+  /* Scoped through .field for the same reason the grid cells are: `.field
+     label{display:block}` and `.field input{width:100%}` both outrank a bare
+     class selector here, which otherwise tears the checkbox away from its
+     words and stretches it across the dialog. */
+  .field .li-toggles{display:flex;flex-wrap:wrap;gap:18px;margin-bottom:10px;}
+  .field .li-toggles label{
+    display:inline-flex;align-items:center;gap:7px;margin-bottom:0;
+    font-size:12px;font-weight:500;color:var(--text-soft);cursor:pointer;white-space:nowrap;
+  }
+  .field .li-toggles input[type="checkbox"]{
+    width:auto;flex:none;margin:0;padding:0;accent-color:var(--gold-deep);
+  }
+  /* Three price columns will not fit a standard dialog. The grid widens the
+     dialog it sits in; where :has() is unsupported the row merely compresses,
+     which is a degradation rather than a break. */
+  .modal:has(#li-grid.show-alt){max-width:1060px;}
+
   .li-sn{padding:8px 0;font-size:12px;color:var(--text-faint);text-align:center;}
   .li-head .li-sn{padding:0;}
   .line-item-row .li-subtotal{padding:8px 0;font-size:12.5px;color:var(--text-soft);}
@@ -412,6 +449,18 @@
     .line-item-row .li-desc{flex:1 1 calc(100% - 70px);}
     .line-item-row .li-sku{flex:1 1 100%;}
     .line-item-row .li-qty,.line-item-row .li-price{flex:1 1 38%;}
+    /* Wrapped, the DOM order would read qty, FOB, CIF, B2B — pairing the
+       quantity with a price it does not belong to. Reordered so each wrapped
+       line holds a pair that makes sense together. */
+    .line-item-row .li-dur{flex:1 1 100%;order:1;}
+    .line-item-row .li-qty{order:2;}
+    .line-item-row .li-price{order:3;}
+    .line-item-row .li-fob,.line-item-row .li-cif{flex:1 1 38%;order:4;}
+    .line-item-row .li-subtotal{order:5;}
+    .line-item-row .li-remove{order:6;}
+    .li-grid.show-alt .line-item-row .li-sku,
+    .li-grid.show-alt .line-item-row .li-price{flex:1 1 38%;}
+    .li-grid.show-alt .line-item-row .li-subtotal{flex:1 1 100%;}
     .line-item-row .li-subtotal{flex:1 1 auto;text-align:left;padding-top:8px;}
   }
   @media (max-width: 620px){
@@ -1310,7 +1359,10 @@ function snapshotLineItemRows(){
       description: row.querySelector('.li-desc').value,
       sku: row.querySelector('.li-sku').value,
       qty: row.querySelector('.li-qty').value,
-      unitPrice: row.querySelector('.li-price').value
+      unitPrice: row.querySelector('.li-price').value,
+      fobPrice: row.querySelector('.li-fob').value,
+      cifPrice: row.querySelector('.li-cif').value,
+      duration: row.querySelector('.li-dur').value
     };
   });
 }
@@ -3123,9 +3175,12 @@ function lineItemRowHtml(rowId, prefill){
   return '<div class="line-item-row" data-row-id="' + rowId + '">' +
     '<div class="li-sn">–</div>' +
     '<input type="text" class="li-desc" placeholder="Item / solution description" value="' + escapeHtml(p.description || '') + '">' +
-    '<input type="text" class="li-sku" placeholder="SKU / code" value="' + escapeHtml(p.sku || '') + '">' +
-    '<input type="number" class="li-qty" placeholder="Qty" min="0" step="any" value="' + (p.qty !== undefined && p.qty !== null ? escapeHtml(p.qty) : 1) + '">' +
-    '<input type="number" class="li-price" placeholder="Unit price" min="0" step="any" value="' + (p.unitPrice !== undefined && p.unitPrice !== null ? escapeHtml(p.unitPrice) : '') + '">' +
+    '<input type="text" class="li-sku" title="SKU / product code" placeholder="SKU / code" value="' + escapeHtml(p.sku || '') + '">' +
+    '<input type="text" class="li-dur" title="Term / duration — prints on the quote, does not change the price" placeholder="e.g. 12 months" maxlength="40" value="' + escapeHtml(p.duration || '') + '">' +
+    '<input type="number" class="li-qty" title="Quantity" placeholder="Qty" min="0" step="any" value="' + (p.qty !== undefined && p.qty !== null ? escapeHtml(p.qty) : 1) + '">' +
+    '<input type="number" class="li-fob" title="FOB unit price (optional)" placeholder="FOB" min="0" step="any" value="' + (p.fobPrice ? escapeHtml(p.fobPrice) : '') + '">' +
+    '<input type="number" class="li-cif" title="CIF unit price (optional)" placeholder="CIF" min="0" step="any" value="' + (p.cifPrice ? escapeHtml(p.cifPrice) : '') + '">' +
+    '<input type="number" class="li-price" title="B2B unit price — this is the quote\'s value" placeholder="B2B price" min="0" step="any" value="' + (p.unitPrice !== undefined && p.unitPrice !== null ? escapeHtml(p.unitPrice) : '') + '">' +
     '<div class="li-subtotal mono">—</div>' +
     '<button type="button" class="li-remove btn btn-ghost btn-sm" aria-label="Remove line">✕</button>' +
   '</div>';
@@ -3148,8 +3203,9 @@ function addLineItemRow(prefill){
   const rowId = 'li-' + lineItemSeq;
   container.insertAdjacentHTML('beforeend', lineItemRowHtml(rowId, prefill));
   const row = container.querySelector('[data-row-id="' + rowId + '"]');
-  row.querySelector('.li-qty').addEventListener('input', recalcQuoteTotal);
-  row.querySelector('.li-price').addEventListener('input', recalcQuoteTotal);
+  ['.li-qty', '.li-price', '.li-fob', '.li-cif'].forEach(function(sel){
+    row.querySelector(sel).addEventListener('input', recalcQuoteTotal);
+  });
   row.querySelector('.li-remove').addEventListener('click', function(){
     row.remove();
     recalcQuoteTotal();
@@ -3158,20 +3214,59 @@ function addLineItemRow(prefill){
   recalcQuoteTotal();
   renumberLineItems();
 }
+/* Whether the optional columns are on show. Driven by the two checkboxes above
+   the grid, and applied here because recalcQuoteTotal() is already called from
+   every place a row can appear — including the redraw restore — so there is one
+   thing to remember rather than five. */
+function syncLineItemColumns(){
+  const grid = document.getElementById('li-grid');
+  if(!grid) return;
+  const alt = document.getElementById('li-show-alt');
+  const dur = document.getElementById('li-show-dur');
+  grid.classList.toggle('show-alt', !!(alt && alt.checked));
+  grid.classList.toggle('show-dur', !!(dur && dur.checked));
+}
+
 function recalcQuoteTotal(){
+  syncLineItemColumns();
   const container = document.getElementById('line-items-container');
   const display = document.getElementById('quote-total-display');
   if(!container || !display) return;
-  let total = 0;
+  const showAlt = !!(document.getElementById('li-show-alt') || {}).checked;
+  let total = 0, fobTotal = 0, cifTotal = 0;
   container.querySelectorAll('.line-item-row').forEach(function(row){
     const qty = Number(row.querySelector('.li-qty').value) || 0;
     const price = Number(row.querySelector('.li-price').value) || 0;
+    const fob = Number(row.querySelector('.li-fob').value) || 0;
+    const cif = Number(row.querySelector('.li-cif').value) || 0;
     const subtotal = qty * price;
-    row.querySelector('.li-subtotal').textContent = subtotal ? currencySymbol() + fmtNumber(subtotal) : '—';
+    /* The B2B subtotal is the line's money; FOB and CIF ride underneath it in
+       smaller type so a rep can check all three without a wider row. */
+    row.querySelector('.li-subtotal').innerHTML =
+      (subtotal ? escapeHtml(currencySymbol() + fmtNumber(subtotal)) : '—') +
+      (showAlt && qty * fob ? '<span class="li-alt-sub">FOB ' + escapeHtml(currencySymbol() + fmtNumber(qty * fob)) + '</span>' : '') +
+      (showAlt && qty * cif ? '<span class="li-alt-sub">CIF ' + escapeHtml(currencySymbol() + fmtNumber(qty * cif)) + '</span>' : '');
     total += subtotal;
+    fobTotal += qty * fob;
+    cifTotal += qty * cif;
   });
   display.textContent = currencySymbol() + fmtNumber(total);
+  const fobEl = document.getElementById('fob-total-display');
+  const cifEl = document.getElementById('cif-total-display');
+  if(fobEl) fobEl.textContent = fobTotal ? currencySymbol() + fmtNumber(fobTotal) : '—';
+  if(cifEl) cifEl.textContent = cifTotal ? currencySymbol() + fmtNumber(cifTotal) : '—';
+  const altRow = document.getElementById('alt-total-row');
+  if(altRow) altRow.style.display = showAlt ? '' : 'none';
 }
+/* The two column toggles. recalcQuoteTotal() does the showing and hiding, so
+   this only has to tell it when something changed. */
+function wireLineItemToggles(){
+  ['li-show-alt', 'li-show-dur'].forEach(function(id){
+    const box = document.getElementById(id);
+    if(box) box.addEventListener('change', recalcQuoteTotal);
+  });
+}
+
 function collectLineItems(){
   const container = document.getElementById('line-items-container');
   const items = [];
@@ -3181,37 +3276,81 @@ function collectLineItems(){
     const sku = row.querySelector('.li-sku').value.trim();
     const qty = Number(row.querySelector('.li-qty').value) || 0;
     const unitPrice = Number(row.querySelector('.li-price').value) || 0;
+    const fobPrice = Number(row.querySelector('.li-fob').value) || 0;
+    const cifPrice = Number(row.querySelector('.li-cif').value) || 0;
+    const duration = row.querySelector('.li-dur').value.trim();
     /* Identified by what it is, not by what it costs — a zero price is a valid
        line. Rows with neither a description nor a SKU are the untouched blank
        row the form always leaves ready, and are not lines at all. */
     if(description || sku){
       items.push({
         description: description || sku, sku: sku, qty: qty,
-        unitPrice: unitPrice, subtotal: qty * unitPrice
+        unitPrice: unitPrice, subtotal: qty * unitPrice,
+        /* B2B is the quote's money; these two are the alternative terms and
+           never touch `subtotal`. Duration is text that prints, nothing more. */
+        fobPrice: fobPrice, fobSubtotal: qty * fobPrice,
+        cifPrice: cifPrice, cifSubtotal: qty * cifPrice,
+        duration: duration
       });
     }
   });
   return items;
 }
-function lineItemsBlock(scrollClass){
+/* True when the quote being edited or copied already carries one of the
+   optional columns — so reopening it shows the same grid the rep last saw,
+   rather than hiding prices they had entered. */
+function seedUsesAltPricing(seed){
+  return (seed || []).some(function(li){ return Number(li.fobPrice) || Number(li.cifPrice); });
+}
+function seedUsesDuration(seed){
+  return (seed || []).some(function(li){ return String(li.duration || '').trim(); });
+}
+
+function lineItemsBlock(scrollClass, seed){
+  const showAlt = seedUsesAltPricing(seed);
+  const showDur = seedUsesDuration(seed);
+  const check = function(id, label, on, hint){
+    return '<label title="' + escapeHtml(hint) + '"><input type="checkbox" id="' + id + '"' +
+      (on ? ' checked' : '') + '>' + escapeHtml(label) + '</label>';
+  };
   return '<div class="field">' +
       '<label>Quote line items</label>' +
       '<div class="field-hint" style="margin-bottom:8px;">Every line below belongs to this one quote — add as many as it needs. The total is calculated from them; nothing is pasted in from an outside document. Leave the price at 0 for a no-charge line such as a bundled accessory. Rows with no description are ignored.</div>' +
-      /* Same classes as the row itself, so the two stay aligned by construction. */
-      '<div class="li-head">' +
-        '<div class="li-sn">S/N</div>' +
-        '<div class="li-desc">Description</div>' +
-        '<div class="li-sku">SKU / Code</div>' +
-        '<div class="li-qty">Qty</div>' +
-        '<div class="li-price">Unit price</div>' +
-        '<div class="li-subtotal">Subtotal</div>' +
-        '<div class="li-gap"></div>' +
+      '<div class="li-toggles">' +
+        check('li-show-alt', 'Also quote FOB and CIF prices', showAlt,
+          'Adds an FOB and a CIF unit price to every line. Both are recorded and printed on the quote with their own subtotals and totals. The B2B price remains the quote\'s value.') +
+        check('li-show-dur', 'Lines have a term / duration', showDur,
+          'Adds a term to every line, for software and subscriptions. It prints on the quote and never changes the price.') +
       '</div>' +
-      '<div id="line-items-container" class="' + (scrollClass || 'li-scroll') + '" data-keep-scroll="lineitems"></div>' +
+      '<div id="li-grid" class="li-grid' + (showAlt ? ' show-alt' : '') + (showDur ? ' show-dur' : '') + '">' +
+        /* Same classes as the row itself, so the two stay aligned by construction. */
+        '<div class="li-head">' +
+          '<div class="li-sn">S/N</div>' +
+          '<div class="li-desc">Description</div>' +
+          '<div class="li-sku">SKU / Code</div>' +
+          '<div class="li-dur">Term</div>' +
+          '<div class="li-qty">Qty</div>' +
+          '<div class="li-fob">FOB</div>' +
+          '<div class="li-cif">CIF</div>' +
+          '<div class="li-price">B2B price</div>' +
+          '<div class="li-subtotal">Subtotal</div>' +
+          '<div class="li-gap"></div>' +
+        '</div>' +
+        '<div id="line-items-container" class="' + (scrollClass || 'li-scroll') + '" data-keep-scroll="lineitems"></div>' +
+      '</div>' +
       '<button type="button" class="btn btn-ghost btn-sm" id="add-line-item-btn" style="margin-top:6px;">＋ Add line</button>' +
     '</div>' +
-    '<div class="field"><label>Quote total</label>' +
-      '<div id="quote-total-display" class="mono total-display">₦0.00</div></div>';
+    '<div class="field"><label>Quote total (B2B)</label>' +
+      '<div id="quote-total-display" class="mono total-display">₦0.00</div></div>' +
+    /* Shown only when the alternative terms are in use. They are recorded and
+       printed for comparison; the pipeline, dashboard and every report use the
+       B2B total above and nothing else. */
+    '<div class="field-row" id="alt-total-row"' + (showAlt ? '' : ' style="display:none;"') + '>' +
+      '<div class="field"><label>FOB total</label>' +
+        '<div id="fob-total-display" class="mono total-display" style="background:var(--surface-2,#F4F5F8);">—</div></div>' +
+      '<div class="field"><label>CIF total</label>' +
+        '<div id="cif-total-display" class="mono total-display" style="background:var(--surface-2,#F4F5F8);">—</div></div>' +
+    '</div>';
 }
 
 /* ---------------- Opportunity form (raise & edit) ----------------
@@ -3316,7 +3455,8 @@ function renderOpportunityForm(mode){
           '<div class="field-hint">Vantage flags the quote as expired once this window passes.</div></div>' +
       '</div>' +
 
-      '<div id="quote-items-block"' + (noQuote ? ' style="display:none;"' : '') + '>' + lineItemsBlock() + '</div>' +
+      '<div id="quote-items-block"' + (noQuote ? ' style="display:none;"' : '') + '>' +
+        lineItemsBlock(null, isEdit && STATE.detail && STATE.detail.id === o.id ? STATE.detail.lineItems : []) + '</div>' +
 
       '<div id="no-quote-block"' + (noQuote ? '' : ' style="display:none;"') + '>' +
         '<div class="field"><label>Estimated opportunity value (optional)</label>' +
@@ -3524,18 +3664,51 @@ function renderDetailLineItems(o, d){
   if(!d.lineItems || !d.lineItems.length){
     return '<div class="field-hint">' + escapeHtml(o.productLine || 'No line items recorded for this opportunity.') + '</div>';
   }
+  /* Only quotes that actually use the alternative terms pay for the extra
+     columns — every other record reads exactly as it always did. */
+  const showFob = seedHasPrice(d.lineItems, 'fobSubtotal');
+  const showCif = seedHasPrice(d.lineItems, 'cifSubtotal');
+  const showDur = seedUsesDuration(d.lineItems);
+  /* Columns before the final subtotal: item, SKU, qty and the B2B price. */
+  const span = 4 + (showDur ? 1 : 0) + (showFob ? 2 : 0) + (showCif ? 2 : 0);
+  const money = function(v){ return fmtMoney(v, o.currency); };
+  const alt = function(v){ return Number(v) > 0 ? fmtMoney(v, o.currency) : '—'; };
   return '<div class="table-wrap"><table>' +
-    '<thead><tr><th>Item</th><th>SKU</th><th class="num-cell">Qty</th><th class="num-cell">Unit price</th><th class="num-cell">Subtotal</th></tr></thead>' +
+    '<thead><tr><th>Item</th><th>SKU</th>' +
+      (showDur ? '<th>Term</th>' : '') +
+      '<th class="num-cell">Qty</th>' +
+      (showFob ? '<th class="num-cell">FOB</th><th class="num-cell">FOB subtotal</th>' : '') +
+      (showCif ? '<th class="num-cell">CIF</th><th class="num-cell">CIF subtotal</th>' : '') +
+      '<th class="num-cell">B2B price</th><th class="num-cell">Subtotal</th></tr></thead>' +
     '<tbody>' +
       d.lineItems.map(function(li){
         return '<tr><td>' + escapeHtml(li.description) + '</td><td class="mono">' + escapeHtml(li.sku || '—') + '</td>' +
+          (showDur ? '<td>' + escapeHtml(li.duration || '—') + '</td>' : '') +
           '<td class="num-cell">' + fmtNumber(li.qty, 0) + '</td>' +
-          '<td class="num-cell mono">' + fmtMoney(li.unitPrice, o.currency) + '</td>' +
-          '<td class="num-cell mono">' + fmtMoney(li.subtotal, o.currency) + '</td></tr>';
+          (showFob ? '<td class="num-cell mono">' + alt(li.fobPrice) + '</td><td class="num-cell mono">' + alt(li.fobSubtotal) + '</td>' : '') +
+          (showCif ? '<td class="num-cell mono">' + alt(li.cifPrice) + '</td><td class="num-cell mono">' + alt(li.cifSubtotal) + '</td>' : '') +
+          '<td class="num-cell mono">' + money(li.unitPrice) + '</td>' +
+          '<td class="num-cell mono">' + money(li.subtotal) + '</td></tr>';
       }).join('') +
-      '<tr><td colspan="4" style="text-align:right;font-weight:700;">Total</td>' +
+      (showFob ? altTotalRow('FOB total', span, money(altTotal(d.lineItems, 'fobSubtotal'))) : '') +
+      (showCif ? altTotalRow('CIF total', span, money(altTotal(d.lineItems, 'cifSubtotal'))) : '') +
+      '<tr><td colspan="' + span + '" style="text-align:right;font-weight:700;">' +
+        (showFob || showCif ? 'Quote total (B2B)' : 'Total') + '</td>' +
         '<td class="num-cell mono" style="font-weight:700;">' + fmtMoney(o.value, o.currency) + '</td></tr>' +
     '</tbody></table></div>';
+}
+
+/* Shared by the detail table and the printable quote: does any line carry this
+   alternative price at all, and what do they add up to. */
+function seedHasPrice(lineItems, field){
+  return (lineItems || []).some(function(li){ return Number(li[field]) > 0; });
+}
+function altTotal(lineItems, field){
+  return (lineItems || []).reduce(function(a, li){ return a + (Number(li[field]) || 0); }, 0);
+}
+function altTotalRow(label, span, money){
+  return '<tr><td colspan="' + span + '" style="text-align:right;color:var(--text-soft);">' +
+    escapeHtml(label) + '</td><td class="num-cell mono" style="color:var(--text-soft);">' + money + '</td></tr>';
 }
 
 function detailActions(o, openActive){
@@ -3637,7 +3810,7 @@ function renderDuplicateModal(){
         '<div class="field"><label>Delivery terms (optional)</label>' +
           '<input type="text" id="dup-delivery" placeholder="e.g. D2D or FOB"></div>' +
       '</div>' +
-      lineItemsBlock() +
+      lineItemsBlock(null, (STATE.detail && STATE.detail.id === src.id) ? STATE.detail.lineItems : []) +
     '</div><div class="modal-foot">' +
       '<button type="button" class="btn btn-ghost" data-close-modal="1">Cancel</button>' +
       submitBtn('Create linked quote', 'Creating…') +
@@ -3662,10 +3835,15 @@ function plainTextQuoteBody(o, lineItems){
       (expiry ? ', valid until ' + fmtDate(expiry) + '.' : '.'),
     '',
     lines.map(function(li){
-      return '- ' + li.description + ' x' + li.qty + ' @ ' + fmtMoney(li.unitPrice, o.currency) +
+      return '- ' + li.description + (li.duration ? ' (' + li.duration + ')' : '') +
+        ' x' + li.qty + ' @ ' + fmtMoney(li.unitPrice, o.currency) +
         ' = ' + fmtMoney(li.subtotal, o.currency);
     }).join('\n'),
     '',
+    (seedHasPrice(lines, 'fobSubtotal')
+      ? 'Total on FOB terms: ' + fmtMoney(altTotal(lines, 'fobSubtotal'), o.currency) + '\n' : '') +
+    (seedHasPrice(lines, 'cifSubtotal')
+      ? 'Total on CIF terms: ' + fmtMoney(altTotal(lines, 'cifSubtotal'), o.currency) + '\n' : '') +
     'Total: ' + fmtMoney(o.value, o.currency),
     '',
     'The formatted quote document is attached.',
@@ -3944,8 +4122,95 @@ function renderBulkModal(){
    triggered from an anchor is unreliable. Writing into a window we opened
    ourselves is not sandboxed, so the download proceeds — and if the browser
    blocks the click, the user still has a visible link to press. */
-function deliverFile(filename, mime, content){
-  const win = window.open('', '_blank');
+/* Browsers only permit window.open while a user gesture is still "active" —
+   in Chrome that activation expires a few seconds after the click. Anything
+   opened *after* an awaited request is therefore blocked or not, depending
+   entirely on how quickly Apps Script answered that time. That is exactly how
+   "Generate Quote Document" came to work on some attempts and not others.
+
+   The cure is to claim the window synchronously, inside the handler, before
+   awaiting anything, and hand the reference on. reserveWindow() does that and
+   leaves a holding page in it so the blank tab is not alarming. */
+function reserveWindow(features){
+  let win = null;
+  try{ win = window.open('', '_blank', features || ''); }catch(e){ win = null; }
+  if(!win) return null;
+  try{
+    win.document.write(
+      '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Vantage</title></head>' +
+      '<body style="font-family:system-ui,sans-serif;padding:60px;text-align:center;color:#5B6472;">' +
+      'Preparing…</body></html>');
+  }catch(e){ /* a holding page is a courtesy, not a requirement */ }
+  return win;
+}
+
+/* Replace whatever a reserved window is showing with the finished document. */
+function writeIntoWindow(win, html){
+  try{
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    return true;
+  }catch(e){ return false; }
+}
+
+/* The last resort when pop-ups are blocked outright for the site: render into
+   an off-screen frame and open the print dialog from there. No pop-up is
+   involved, so "Save as PDF" still works even for a user who once clicked
+   Block and has long forgotten. */
+function printViaFrame(html){
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;';
+  frame.addEventListener('load', function(){
+    try{
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    }catch(e){
+      toast('Vantage could not open the print dialog. Allow pop-ups for this site and try again.', true);
+    }
+    /* Chrome's Save-as-PDF returns before the file is written, so the frame
+       has to outlive the call. */
+    setTimeout(function(){ if(frame.parentNode) frame.parentNode.removeChild(frame); }, 120000);
+  });
+  document.body.appendChild(frame);
+  frame.srcdoc = html;
+}
+
+/* A plain download link is the reliable path on an ordinary https origin. It
+   was avoided originally because the app was expected to run inside the
+   sandboxed Apps Script frame, where such a click is swallowed — so check for
+   that case rather than assuming it. */
+function canDownloadDirectly(){
+  try{
+    if(window.top !== window.self) return false;
+  }catch(e){ return false; }
+  return typeof Blob === 'function' &&
+    typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' &&
+    'download' in document.createElement('a');
+}
+
+function deliverFile(filename, mime, content, reserved){
+  if(canDownloadDirectly()){
+    try{
+      const url = URL.createObjectURL(new Blob([content], {type: mime + ';charset=utf-8'}));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function(){
+        if(a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 4000);
+      if(reserved) try{ reserved.close(); }catch(e){}
+      return;
+    }catch(e){ /* fall through to the window route */ }
+  }
+
+  const win = reserved || reserveWindow();
   if(!win){
     toast('Allow pop-ups for Vantage so files can be delivered, then try again.', true);
     return;
@@ -3959,6 +4224,7 @@ function deliverFile(filename, mime, content){
     return;
   }
   const href = 'data:' + mime + ';base64,' + b64;
+  win.document.open();
   win.document.write(
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + escapeHtml(filename) + '</title>' +
     '<style>body{font-family:system-ui,sans-serif;padding:50px;text-align:center;color:#101828;}' +
@@ -4005,6 +4271,9 @@ const EXPORT_COLUMNS = [
   ['Note', function(o){ return o.note; }],
   ['Product summary', function(o){ return o.productLine; }],
   ['Currency', function(o){ return o.currency; }],
+  /* Zero on the great majority of quotes, which are priced on B2B terms only. */
+  ['FOB total', function(o){ return Number(o.fobValue) || 0; }],
+  ['CIF total', function(o){ return Number(o.cifValue) || 0; }],
   ['Value (native)', function(o){ return Number(o.value) || 0; }],
   ['Value (USD)', function(o){ return Math.round(usdOf(o) * 100) / 100; }],
   ['FX rate used', function(){ return Number(STATE.settings.fxRate) || 0; }],
@@ -4054,6 +4323,9 @@ function exportOpportunitiesCsv(){
 async function exportWithLineItemsCsv(){
   const list = currentExportSet();
   if(!list.length){ toast('Nothing to export with the current filters.', true); return; }
+  /* Same gesture rule as the quote document: if this build has to deliver
+     through a window, claim it now rather than after the fetch. */
+  const reserved = canDownloadDirectly() ? null : reserveWindow();
   STATE.busy = 'Collecting line items…';
   render();
   try{
@@ -4064,22 +4336,28 @@ async function exportWithLineItemsCsv(){
       byOpp[li.oppId].push(li);
     });
     const rows = [['Reference', 'Customer', 'Business Group', 'Business Unit', 'Sales rep', 'Status',
-      'Pipeline', 'Currency', 'Line #', 'Description', 'SKU', 'Qty', 'Unit price', 'Subtotal', 'Quote total']];
+      'Pipeline', 'Currency', 'Line #', 'Description', 'SKU', 'Term', 'Qty',
+      'FOB price', 'FOB subtotal', 'CIF price', 'CIF subtotal',
+      'B2B price', 'B2B subtotal', 'Quote total (B2B)', 'FOB total', 'CIF total']];
     sortOpportunities(list).forEach(function(o){
       const items = (byOpp[o.id] || []).sort(function(a, b){ return (a.seq || 0) - (b.seq || 0); });
       const base = [displayRef(o), o.customerName, o.businessGroup, o.businessUnit, o.salesRep,
         o.status, o.pipeline || '', o.currency];
+      const tail = [Number(o.value) || 0, Number(o.fobValue) || 0, Number(o.cifValue) || 0];
       if(!items.length){
-        rows.push(base.concat(['', o.productLine || '(no line items)', '', '', '', '', Number(o.value) || 0]));
+        rows.push(base.concat(['', o.productLine || '(no line items)', '', '', '', '', '', '', '', '', ''], tail));
       }else{
         items.forEach(function(li){
-          rows.push(base.concat([li.seq, li.description, li.sku, li.qty, li.unitPrice, li.subtotal, Number(o.value) || 0]));
+          rows.push(base.concat([li.seq, li.description, li.sku, li.duration || '', li.qty,
+            li.fobPrice || 0, li.fobSubtotal || 0, li.cifPrice || 0, li.cifSubtotal || 0,
+            li.unitPrice, li.subtotal], tail));
         });
       }
     });
-    deliverFile('Vantage-line-items-' + stamp() + '.csv', 'text/csv', toCsv(rows));
+    deliverFile('Vantage-line-items-' + stamp() + '.csv', 'text/csv', toCsv(rows), reserved);
     toast('Exported ' + list.length + ' ' + pluralize(list.length, 'quote') + ' with their line items');
   }catch(err){
+    if(reserved) try{ reserved.close(); }catch(e){}
     toast(String(err.message || err), true);
   }finally{
     STATE.busy = null;
@@ -4154,7 +4432,14 @@ const HEADER_ALIASES = {
   itemDescription:  ['item description', 'description', 'product', 'product line', 'solution', 'item'],
   sku:              ['sku', 'product code', 'code', 'part number', 'part no'],
   quantity:         ['quantity', 'qty'],
-  unitPrice:        ['unit price', 'price', 'value', 'quote value', 'amount'],
+  unitPrice:        ['unit price', 'price', 'value', 'quote value', 'amount',
+                     'b2b price', 'b2b unit price', 'b2b'],
+  /* The optional parallel prices. Absent from most files, and absent is simply
+     zero — no line is ever rejected for lacking them. */
+  fobPrice:         ['fob price', 'fob unit price', 'fob'],
+  cifPrice:         ['cif price', 'cif unit price', 'cif'],
+  duration:         ['duration', 'term', 'licence term', 'license term', 'subscription term',
+                     'period', 'tenure'],
   currency:         ['currency', 'ccy'],
   dateRaised:       ['date raised', 'quote date', 'date'],
   expectedCloseDate:['expected close date', 'close date', 'expected close'],
@@ -4268,6 +4553,21 @@ function parseBulkRow(row, headerMap, rowIndex){
   const rawUnitPrice = get('unitPrice');
   const unitPriceBlank = (rawUnitPrice === '' || rawUnitPrice === null || rawUnitPrice === undefined);
   const unitPrice = parseAmount(rawUnitPrice);
+  /* FOB and CIF are genuinely optional: a blank column is not a mistake, it
+     just means the quote is not priced on those terms. A value that cannot be
+     read is still an error — silently importing it as zero would understate a
+     customer-facing total. */
+  const altPrice = function(field, label){
+    const raw = get(field);
+    if(raw === '' || raw === null || raw === undefined) return {value: 0, error: null};
+    const parsed = parseAmount(raw);
+    return (isNaN(parsed) || parsed < 0)
+      ? {value: 0, error: label + ' "' + raw + '" is not a valid amount'}
+      : {value: parsed, error: null};
+  };
+  const fob = altPrice('fobPrice', 'FOB price');
+  const cif = altPrice('cifPrice', 'CIF price');
+  const duration = String(get('duration') || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   let salesRep = String(get('salesRep') || '').trim();
   if(s.role === 'rep') salesRep = s.name;
   let pipeline = parseAmount(get('pipeline'));
@@ -4291,6 +4591,8 @@ function parseBulkRow(row, headerMap, rowIndex){
   }else if(!quantity || quantity <= 0){
     errors.push('Quantity must be greater than zero');
   }
+  if(fob.error) errors.push(fob.error);
+  if(cif.error) errors.push(cif.error);
   if(!salesRep) errors.push('Missing sales rep');
   if([1, 2, 3].indexOf(pipeline) < 0) errors.push('Invalid Pipeline value "' + String(get('pipeline') || '') + '" (must be 1, 2 or 3)');
 
@@ -4307,7 +4609,10 @@ function parseBulkRow(row, headerMap, rowIndex){
     lineItem: {
       description: itemDescription || skuValue,
       sku: skuValue,
-      qty: quantity, unitPrice: unitPrice, subtotal: quantity * unitPrice
+      qty: quantity, unitPrice: unitPrice, subtotal: quantity * unitPrice,
+      fobPrice: fob.value, fobSubtotal: quantity * fob.value,
+      cifPrice: cif.value, cifSubtotal: quantity * cif.value,
+      duration: duration
     },
     currency: (String(get('currency') || 'NGN').trim().toUpperCase() === 'USD') ? 'USD' : 'NGN',
     dateRaised: dateRaised,
@@ -4376,6 +4681,10 @@ function validateBulkGroup(group){
     },
     preview: {
       lineCount: rows.length, total: total, currency: first.currency, pipeline: first.pipeline,
+      /* Surfaced in the preview so a rep can check the alternative totals
+         before anything is written, not after. */
+      fobTotal: rows.reduce(function(a, r){ return a + (Number(r.lineItem.fobSubtotal) || 0); }, 0),
+      cifTotal: rows.reduce(function(a, r){ return a + (Number(r.lineItem.cifSubtotal) || 0); }, 0),
       itemSummary: rows.map(function(r){ return r.lineItem.description; }).slice(0, 3).join(', ') +
         (rows.length > 3 ? ', +' + (rows.length - 3) + ' more' : '')
     }
@@ -4467,7 +4776,10 @@ function processBulkRows(rows){
         '<td>' + escapeHtml(r.data.businessUnit || '') + '</td>' +
         '<td>' + escapeHtml(r.data.salesRep || '') + '</td>' +
         '<td>' + r.preview.lineCount + ' — ' + escapeHtml(r.preview.itemSummary) + '</td>' +
-        '<td class="mono num-cell">' + (r.preview.total ? fmtMoney(r.preview.total, r.preview.currency) : '') + '</td>' +
+        '<td class="mono num-cell">' + (r.preview.total ? fmtMoney(r.preview.total, r.preview.currency) : '') +
+          (r.preview.fobTotal ? '<span class="li-alt-sub">FOB ' + escapeHtml(fmtMoney(r.preview.fobTotal, r.preview.currency)) + '</span>' : '') +
+          (r.preview.cifTotal ? '<span class="li-alt-sub">CIF ' + escapeHtml(fmtMoney(r.preview.cifTotal, r.preview.currency)) + '</span>' : '') +
+        '</td>' +
         '<td>' + (r.preview.pipeline || '') + '</td>' +
         '<td>' + (r.ok
           ? '<span class="status-pill st-invoiced">Ready</span>'
@@ -4537,47 +4849,67 @@ function handleBulkFile(file){
 function downloadBulkTemplate(){
   const headers = ['Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
     'Contact Person', 'Contact Email', 'Opportunity Ref', 'Item Description', 'SKU', 'Quantity',
-    'Unit Price', 'Currency', 'Date Raised', 'Expected Close Date', 'Sales Rep', 'Probability',
-    'Pipeline', 'Validity', 'Notes'];
+    'Unit Price', 'FOB Price', 'CIF Price', 'Duration', 'Currency', 'Date Raised', 'Expected Close Date',
+    'Sales Rep', 'Probability', 'Pipeline', 'Validity', 'Notes'];
   const today = todayStr();
   const rows = [
     ['Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
-      '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
+      '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+      'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+      'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
+      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
+    /* FOB, CIF and Duration are optional — leave them blank, as above, unless
+       the quote is priced on those terms or the line is a subscription. */
     ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
-      '', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Confirmed, awaiting PO']
+      'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
+    ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
+      'Q-GLOBALNET-01', 'Network management licence', 'HW-NMS-12', '15', '60000', '', '', '12 months', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Duration prints on the quote; it does not multiply the price']
   ];
   deliverFile('TD_Vantage_Bulk_Upload_Template.csv', 'text/csv', toCsv([headers].concat(rows)));
 }
 
 /* ---------------- Printable quote document ---------------- */
 
-function generateQuoteDocument(id){
+/* `reserved` is a window claimed by the click handler before it awaited
+   anything — see reserveWindow(). Without it this call can land outside the
+   browser's user-gesture window and be blocked, which is what made the
+   document generate only sometimes. */
+function generateQuoteDocument(id, reserved){
+  const giveUp = function(){ if(reserved) try{ reserved.close(); }catch(e){} };
   const o = STATE.opportunities.filter(function(x){ return x.id === id; })[0];
-  if(!o) return;
+  if(!o){ giveUp(); return; }
   const d = STATE.detail && STATE.detail.id === id ? STATE.detail : {};
   const lines = (d.lineItems && d.lineItems.length)
     ? d.lineItems
     : [{description: o.productLine || 'Quoted solution', sku: '', qty: 1, unitPrice: o.value, subtotal: o.value}];
+  /* FOB and CIF print only when the quote actually carries them, so an ordinary
+     quote is the same one-price document it has always been. */
+  const showFob = seedHasPrice(lines, 'fobSubtotal');
+  const showCif = seedHasPrice(lines, 'cifSubtotal');
+  const showDur = seedUsesDuration(lines);
+  const multiPrice = showFob || showCif;
+  /* Columns before the final subtotal, which the total rows span. Base five:
+     S/N, description, SKU, qty and the B2B unit price. Off by one here puts
+     every total under the wrong heading on a customer-facing document. */
+  const cols = 5 + (showDur ? 1 : 0) + (showFob ? 2 : 0) + (showCif ? 2 : 0);
+  /* A line not quoted on FOB terms has no FOB price — printing ₦0.00 would
+     tell the customer it is free on those terms. */
+  const alt = function(v){ return Number(v) > 0 ? fmtMoney(v, o.currency) : '—'; };
   /* No fallback: the validity is chosen before this runs and stored on the
      record, so a missing value is a bug worth surfacing rather than papering
      over with a number the customer never agreed to. */
   const validity = Number(o.validityDays);
   if(!validity){
+    giveUp();
     toast('This quote has no validity recorded — choose one before generating the document.', true);
     return;
   }
   const expiry = expiryDateOf(o);
 
-  const win = window.open('', '_blank', 'width=880,height=1000');
-  if(!win){ toast('Allow pop-ups for Vantage to generate the quote document.', true); return; }
-
-  win.document.write(
+  const html =
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' +
       escapeHtml(displayRef(o)) + ' · ' + escapeHtml(o.customerName) + '</title><style>' +
     'body{font-family:Inter,Arial,sans-serif;color:#101828;padding:50px 60px;max-width:800px;margin:0 auto;}' +
@@ -4593,7 +4925,18 @@ function generateQuoteDocument(id){
     '.r{text-align:right;}' +
     '.total-row td{font-weight:700;font-size:15px;border-top:2px solid #101828;border-bottom:none;}' +
     '.footnote{font-size:11px;color:#8B93A1;margin-top:40px;border-top:1px solid #E3E6EC;padding-top:14px;line-height:1.6;}' +
+    '.alt-row td{color:#5B6472;border-bottom:none;padding-top:4px;padding-bottom:4px;}' +
     '@media print{body{padding:20px 30px;}}' +
+    /* Three price columns and their subtotals do not fit portrait. Ask for
+       landscape and tighten the type rather than let the table clip — a clipped
+       figure on a customer-facing quote is worse than a wide page. */
+    (multiPrice
+      ? '@page{size:A4 landscape;margin:14mm;}' +
+        'body{max-width:1100px;padding:36px 40px;}' +
+        'th,td{padding:6px 6px;font-size:11px;}' +
+        'th{font-size:9px;}' +
+        '.total-row td{font-size:13.5px;}'
+      : '') +
     '</style></head><body>' +
     '<div class="qhead">' +
       '<img class="qlogo" src="data:image/png;base64,' + TD_AFRICA_LOGO_B64 + '" alt="TD Africa">' +
@@ -4614,16 +4957,37 @@ function generateQuoteDocument(id){
     (o.note ? '<div class="block"><h4>Note</h4><div style="font-size:13px;white-space:pre-wrap;line-height:1.55;">' +
       escapeHtml(o.note) + '</div></div>' : '') +
     '<table><thead><tr><th>S/N</th><th>Description</th><th>SKU / Code</th>' +
-      '<th class="r">Qty</th><th class="r">Unit price</th><th class="r">Subtotal</th></tr></thead><tbody>' +
+      (showDur ? '<th>Term</th>' : '') +
+      '<th class="r">Qty</th>' +
+      (showFob ? '<th class="r">FOB unit</th><th class="r">FOB subtotal</th>' : '') +
+      (showCif ? '<th class="r">CIF unit</th><th class="r">CIF subtotal</th>' : '') +
+      '<th class="r">' + (multiPrice ? 'B2B unit' : 'Unit price') + '</th>' +
+      '<th class="r">' + (multiPrice ? 'B2B subtotal' : 'Subtotal') + '</th></tr></thead><tbody>' +
       lines.map(function(li, i){
         return '<tr><td>' + (i + 1) + '</td><td>' + escapeHtml(li.description) + '</td>' +
-          '<td>' + escapeHtml(li.sku || '—') + '</td><td class="r">' + fmtNumber(li.qty, 0) + '</td>' +
+          '<td>' + escapeHtml(li.sku || '—') + '</td>' +
+          (showDur ? '<td>' + escapeHtml(li.duration || '—') + '</td>' : '') +
+          '<td class="r">' + fmtNumber(li.qty, 0) + '</td>' +
+          (showFob ? '<td class="r">' + alt(li.fobPrice) + '</td>' +
+                     '<td class="r">' + alt(li.fobSubtotal) + '</td>' : '') +
+          (showCif ? '<td class="r">' + alt(li.cifPrice) + '</td>' +
+                     '<td class="r">' + alt(li.cifSubtotal) + '</td>' : '') +
           '<td class="r">' + fmtMoney(li.unitPrice, o.currency) + '</td>' +
           '<td class="r">' + fmtMoney(li.subtotal, o.currency) + '</td></tr>';
       }).join('') +
-      '<tr class="total-row"><td colspan="5">Total quote value</td>' +
+      (showFob ? '<tr class="alt-row"><td colspan="' + cols + '" class="r">Total on FOB terms</td>' +
+        '<td class="r">' + fmtMoney(altTotal(lines, 'fobSubtotal'), o.currency) + '</td></tr>' : '') +
+      (showCif ? '<tr class="alt-row"><td colspan="' + cols + '" class="r">Total on CIF terms</td>' +
+        '<td class="r">' + fmtMoney(altTotal(lines, 'cifSubtotal'), o.currency) + '</td></tr>' : '') +
+      '<tr class="total-row"><td colspan="' + cols + '">' +
+        (multiPrice ? 'Total quote value (B2B terms)' : 'Total quote value') + '</td>' +
         '<td class="r">' + fmtMoney(o.value, o.currency) + '</td></tr>' +
     '</tbody></table>' +
+    (multiPrice
+      ? '<div class="footnote" style="margin-top:14px;">This quote is priced on ' +
+        (showFob && showCif ? 'FOB, CIF and B2B terms' : (showFob ? 'FOB and B2B terms' : 'CIF and B2B terms')) +
+        '. Unless agreed otherwise in writing, the B2B total above is the contracted value.</div>'
+      : '') +
     '<div class="block" style="margin-top:22px;"><h4>Issued by</h4>' +
       '<div style="font-size:13px;">' + escapeHtml(o.salesRep) + ' · TD Africa</div></div>' +
     '<div class="footnote">This quote is issued through Vantage, TD Africa\'s quote management platform (reference ' +
@@ -4631,9 +4995,15 @@ function generateQuoteDocument(id){
       'Prices are subject to the terms and conditions of sale and are valid for ' + validity +
       ' days from the date of issue. Conversion to a Sales Order requires this reference number.</div>' +
     '<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>' +
-    '</body></html>'
-  );
-  win.document.close();
+    '</body></html>';
+
+  const win = reserved || reserveWindow('width=880,height=1000');
+  if(win && writeIntoWindow(win, html)) return;
+  /* Pop-ups blocked for the site altogether. Print from a hidden frame instead,
+     so the user still gets their PDF rather than an instruction they cannot
+     act on. */
+  printViaFrame(html);
+  toast('Pop-ups are blocked for this site, so Vantage opened the print dialog directly.');
 }
 </script>
 <script>
@@ -4894,7 +5264,7 @@ function wireAll(){
       loadImportBatches();
       toast(res.removed + ' ' + pluralize(res.removed, 'record') + ' removed' +
         (res.kept && res.kept.length ? ', ' + res.kept.length + ' kept' : ''));
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   /* Openers */
@@ -5044,6 +5414,7 @@ function wireOpportunityForm(){
   if(addBtn) addBtn.addEventListener('click', function(){ addLineItemRow(); });
   const ccy = document.getElementById('f-currency');
   if(ccy) ccy.addEventListener('change', recalcQuoteTotal);
+  wireLineItemToggles();
 
   /* Business Unit and the rep list both follow the selected Business Group. */
   const bg = document.getElementById('f-bg');
@@ -5169,7 +5540,7 @@ function wireOpportunityForm(){
           ? 'Opportunity booked as ' + res.opportunity.placeholderRef + ' — send the quote when it is ready'
           : 'Quote ' + res.opportunity.quoteNumber + ' raised and logged');
       }
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 }
 
@@ -5184,6 +5555,7 @@ function wireSecondaryForms(){
     if(addBtn) addBtn.addEventListener('click', function(){ addLineItemRow(); });
     const ccy = document.getElementById('f-currency');
     if(ccy) ccy.addEventListener('change', recalcQuoteTotal);
+    wireLineItemToggles();
     sendForm.addEventListener('submit', async function(e){
       e.preventDefault();
       const id = modalId();
@@ -5201,7 +5573,7 @@ function wireSecondaryForms(){
         upsertOpportunity(res.opportunity);
         toast('Quote ' + res.opportunity.quoteNumber + ' sent and numbered');
         openDetail(id);
-      }catch(err){ render(); }
+      }catch(err){ afterFailedSubmit(err); }
     });
   }
 
@@ -5217,9 +5589,15 @@ function wireSecondaryForms(){
     if(addBtn) addBtn.addEventListener('click', function(){ addLineItemRow(); });
     const ccy = document.getElementById('f-currency');
     if(ccy) ccy.addEventListener('change', recalcQuoteTotal);
+    wireLineItemToggles();
     dupForm.addEventListener('submit', async function(e){
       e.preventDefault();
       const sourceId = modalId();
+      /* The record being duplicated, for the fields the form does not ask for
+         again. This used to read a `src` that exists only inside
+         renderDuplicateModal() — a ReferenceError thrown before the request was
+         ever built, so the button silently did nothing at all. */
+      const src = STATE.opportunities.filter(function(x){ return x.id === sourceId; })[0] || {};
       const lineItems = collectLineItems();
       if(!lineItems.length){
         STATE.modalError = 'Add at least one line item with a quantity and a unit price.';
@@ -5242,7 +5620,7 @@ function wireSecondaryForms(){
         upsertOpportunity(res.opportunity);
         toast('Linked quote ' + res.opportunity.quoteNumber + ' created');
         openDetail(res.opportunity.id);
-      }catch(err){ render(); }
+      }catch(err){ afterFailedSubmit(err); }
     });
   }
 
@@ -5265,7 +5643,7 @@ function wireSecondaryForms(){
         upsertOpportunity(res.opportunity);
         toast(res.opportunity.customerName + ' marked closed lost');
         openDetail(id);
-      }catch(err){ render(); }
+      }catch(err){ afterFailedSubmit(err); }
     });
   }
 
@@ -5280,7 +5658,7 @@ function wireSecondaryForms(){
       upsertOpportunity(res.opportunity);
       toast('Sales Order ' + res.opportunity.soNumber + ' recorded — moved to Pipeline 1');
       openDetail(id);
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   const invForm = document.getElementById('invoice-form');
@@ -5294,7 +5672,7 @@ function wireSecondaryForms(){
       upsertOpportunity(res.opportunity);
       toast(res.opportunity.customerName + ' invoiced — closed won');
       openDetail(id);
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   const validityForm = document.getElementById('validity-form');
@@ -5318,6 +5696,10 @@ function wireSecondaryForms(){
         render();
         return;
       }
+      /* Claimed here, while the submit is still the browser's current user
+         gesture. Opening it after the round trip below worked only when Apps
+         Script happened to answer within a few seconds. */
+      const reserved = reserveWindow('width=880,height=1000');
       try{
         const res = await mutate('Recording validity…', 'setQuoteValidity',
           {id: id, validityDays: days}, {inModal: true});
@@ -5326,9 +5708,12 @@ function wireSecondaryForms(){
         STATE.modalError = null;
         render();
         /* Print from the saved record, so document and Vantage cannot disagree. */
-        generateQuoteDocument(id);
+        generateQuoteDocument(id, reserved);
         toast('Quote document generated, valid ' + days + ' days');
-      }catch(err){ render(); }
+      }catch(err){
+        if(reserved) try{ reserved.close(); }catch(e2){}
+        render();
+      }
     });
   }
 
@@ -5343,7 +5728,7 @@ function wireSecondaryForms(){
       upsertOpportunity(res.opportunity);
       toast('Reopened into Pipeline ' + res.opportunity.pipeline);
       openDetail(id);
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   const memberForm = document.getElementById('member-form');
@@ -5374,7 +5759,7 @@ function wireSecondaryForms(){
       }
       closeModal();
       toast('Team member updated' + (res.opportunitiesUpdated ? ' — ' + res.opportunitiesUpdated + ' quotes relabelled' : ''));
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   const settingsForm = document.getElementById('settings-form');
@@ -5392,7 +5777,7 @@ function wireSecondaryForms(){
       STATE.settings = res.settings;
       toast('Settings saved');
       render();
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 }
 
@@ -5421,7 +5806,7 @@ function wireRecordActions(){
         STATE.detail.notes = (STATE.detail.notes || []).concat([res.note]);
       }
       render();
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   on('[data-delete-opp]', 'click', async function(e){
@@ -5437,7 +5822,7 @@ function wireRecordActions(){
       STATE.activity = null;
       closeModal();
       toast(displayRef(o) + ' deleted');
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   on('[data-delete-lost]', 'click', async function(e){
@@ -5452,7 +5837,7 @@ function wireRecordActions(){
       if(STATE.activity) STATE.activity = null;
       toast(displayRef(o) + ' deleted');
       render();
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 }
 
@@ -5463,7 +5848,7 @@ async function doReprofile(id, pipeline){
     upsertOpportunity(res.opportunity);
     if(!res.unchanged) toast(res.opportunity.customerName + ' moved to Pipeline ' + res.opportunity.pipeline);
     render();
-  }catch(err){ render(); }
+  }catch(err){ afterFailedSubmit(err); }
 }
 
 /* ---------------- Directory & compliance ---------------- */
@@ -5521,7 +5906,7 @@ function wireDirectoryAndCompliance(){
       document.getElementById('atm-email').value = '';
       toast(res.member.name + ' added — they can now enter Vantage');
       render();
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   on('[data-disable-user]', 'click', async function(e){
@@ -5551,7 +5936,7 @@ function wireDirectoryAndCompliance(){
       upsertLeak(res.leak);
       toast('Off-platform order ' + res.leak.soNumber + ' logged for follow-up');
       render();
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 
   on('[data-resolve-leak]', 'click', function(e){ setLeakResolved(attr(e.currentTarget, 'data-resolve-leak'), true); });
@@ -5565,7 +5950,7 @@ function wireDirectoryAndCompliance(){
       STATE.leakage = STATE.leakage.filter(function(x){ return x.id !== id; });
       toast('Entry removed');
       render();
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 }
 
@@ -5576,7 +5961,7 @@ async function setMemberStatus(userId, status){
     upsertMember(res.member);
     toast(res.member.name + ' ' + (status === 'disabled' ? 'disabled' : 'enabled'));
     render();
-  }catch(err){ render(); }
+  }catch(err){ afterFailedSubmit(err); }
 }
 async function setLeakResolved(id, resolved){
   try{
@@ -5584,7 +5969,7 @@ async function setLeakResolved(id, resolved){
       {id: id, resolved: resolved}, {});
     upsertLeak(res.leak);
     render();
-  }catch(err){ render(); }
+  }catch(err){ afterFailedSubmit(err); }
 }
 
 /* ---------------- Bulk upload ---------------- */
@@ -5616,7 +6001,7 @@ function wireBulk(){
       }else{
         toast(res.created + ' ' + pluralize(res.created, 'quote') + ' imported into Vantage');
       }
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 }
 
@@ -5665,7 +6050,7 @@ function wireEmail(){
       toast('Email app opened for ' + to.length + ' ' + pluralize(to.length, 'recipient') +
         ' — attach the quote document before sending');
       openDetail(id);
-    }catch(err){ render(); }
+    }catch(err){ afterFailedSubmit(err); }
   });
 }
 
@@ -5779,6 +6164,43 @@ async function boot(){
 
 document.addEventListener('keydown', function(e){
   if(e.key === 'Escape' && STATE.modal && !STATE.modalBusy && !modalHoldsInput()) closeModal();
+});
+
+/* A fault inside an async click or submit handler rejects a promise nobody is
+   waiting on: no error, no toast, just a button that does nothing. That is how
+   "Create linked quote" could stop working without anyone being able to say
+   what had gone wrong. Surface it instead, clearly labelled as ours so the
+   report comes back with something to act on. */
+function reportInternalError(err){
+  const message = String((err && err.message) || err || 'unknown error');
+  console.error('Vantage internal error', err);
+  try{
+    STATE.modalBusy = false;
+    STATE.busy = null;
+    if(STATE.modal) STATE.modalError = 'Vantage hit an internal error: ' + message +
+      ' — this is a fault in the app, not in what you entered. Please report it.';
+    render();
+  }catch(e){ /* the toast below still gets through */ }
+  toast('Vantage hit an internal error — please report it: ' + message, true);
+}
+window.addEventListener('unhandledrejection', function(e){
+  reportInternalError(e.reason);
+});
+
+/* What a form handler should do when its try block fails.
+
+   A rejection from the server is ordinary — mutate() has already put the
+   reason on screen, so a redraw is all that is wanted. A ReferenceError or a
+   TypeError is ours, and it is raised while the *arguments* are still being
+   assembled, which puts it inside the same try. Redrawing on one of those
+   leaves a button that visibly does nothing and reports nothing, which is
+   precisely how "Create linked quote" broke and stayed broken. */
+function afterFailedSubmit(err){
+  if(err instanceof ReferenceError || err instanceof TypeError) reportInternalError(err);
+  else render();
+}
+window.addEventListener('error', function(e){
+  if(e && e.error) reportInternalError(e.error);
 });
 
 /* The test harness loads this file to exercise the pure logic and sets this
