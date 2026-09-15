@@ -180,7 +180,7 @@ var VAULT_BACKEND_URL = "https://script.google.com/macros/s/AKfycbyqUNx7w2db3TGd
 /* The oldest backend this page can work against. If the deployed Apps Script is
    older, the page says so at the top of every screen rather than letting a form
    fail with a message about an enum. Bump it here and in Code.gs together. */
-var REQUIRED_API_VERSION = 4;
+var REQUIRED_API_VERSION = 5;
 
 var SESSION_KEY = "vault::session";
 
@@ -1650,6 +1650,110 @@ function selectionBar(entity, allRows) {
     '</div>';
 }
 
+/* =========================================================================
+   ACCOUNT-level selection, for the AR ageing list.
+
+   A row there is not a record: it is one DEBTOR, summarising a ledger of sales,
+   receipts and credit notes. Ticking it means "this debtor and everything filed
+   under the name", so the selection is keyed by nameKey rather than by row id —
+   which is also what makes it safe to send. The transaction feed collapses
+   pre-cutoff history into carried-forward balances, so the ids in the browser
+   are only part of the story; the server resolves the name against the whole
+   tab. See deleteByCounterparty in Code.gs.
+   ========================================================================= */
+var ACCOUNT_SEL = "debtorAccount";
+
+function accountSelectBox(name) {
+  var on = !!selectionFor(ACCOUNT_SEL)[nameKeyOf(name)];
+  return '<input type="checkbox" data-act="account-select" data-nopreserve="1"' +
+    ' data-sel="' + attr(ACCOUNT_SEL) + '" data-key="' + attr(nameKeyOf(name)) + '"' +
+    (on ? " checked" : "") +
+    ' title="Select this debtor and every transaction filed under the name"' +
+    ' aria-label="Select ' + attr(name) + '" />';
+}
+
+function accountHeaderBox(names) {
+  if (!names.length) return '<th style="width:28px"></th>';
+  var sel = selectionFor(ACCOUNT_SEL);
+  var keys = names.map(nameKeyOf);
+  var allOn = keys.every(function (k) { return !!sel[k]; });
+  return '<th style="width:28px"><input type="checkbox" data-act="account-page-select" data-nopreserve="1"' +
+    ' data-sel="' + attr(ACCOUNT_SEL) + '" data-keys="' + attr(keys.join(",")) + '"' +
+    (allOn ? " checked" : "") +
+    ' title="Select every debtor on this page" aria-label="Select every debtor on this page" /></th>';
+}
+
+/* How many transactions the browser can actually SEE for these debtors. It is a
+   floor, not a total: anything before the feed cutoff was collapsed into a
+   carried-forward balance and is not in state.debtorTxns. The confirm says so
+   rather than quoting a number that would be wrong. */
+function visibleTxnsFor(keys) {
+  return state.debtorTxns.filter(function (r) {
+    return keys.indexOf(nameKeyOf(r.debtorName)) >= 0;
+  });
+}
+
+function accountSelectionBar(rowsOnScreen) {
+  var keys = selectedIds(ACCOUNT_SEL);
+  if (!keys.length) return "";
+  var picked = rowsOnScreen.filter(function (d) { return keys.indexOf(nameKeyOf(d.debtorName)) >= 0; });
+  var usd = picked.reduce(function (a, d) { return a + d.totalOutstanding; }, 0);
+  var seen = visibleTxnsFor(keys).length;
+  return '<div class="tcf-selbar">' + ico("alert", 14) +
+    '<span><strong>' + keys.length + ' debtor' + (keys.length === 1 ? "" : "s") + ' selected</strong>' +
+    (usd ? ' · ' + esc(fmtUSD(usd)) + ' outstanding' : "") +
+    ' · at least ' + seen + ' transaction' + (seen === 1 ? "" : "s") + '</span>' +
+    '<div class="tcf-nav-spacer"></div>' +
+    btn("account-sel-clear", "Clear", { cls: "tcf-btn-ghost" }) +
+    saveBtn("account-sel-delete", "Delete " + keys.length + " debtor" + (keys.length === 1 ? "" : "s"),
+      { cls: "tcf-btn-danger", icon: "trash" }) +
+    '</div>';
+}
+
+/* Builds the confirm for an account-level delete. Named, rather than inlined in
+   the click handler, because the WORDING is the safety feature here: it is the
+   only place the user is told that the delete reaches rows the page never
+   showed them. A test asserts every clause of it. */
+function buildAccountDeleteConfirm() {
+  var keys = selectedIds(ACCOUNT_SEL);
+  if (!keys.length) return false;
+  var rows = model.ageing.byDebtor.filter(function (d) {
+    return keys.indexOf(nameKeyOf(d.debtorName)) >= 0;
+  });
+  /* Sent as NAMES, not ids — see accountSelectBox. Taken from the ageing list
+     where possible, and from the transaction feed for a debtor whose balance has
+     netted to nothing and so has no ageing row at all. */
+  var names = rows.map(function (d) { return d.debtorName; });
+  keys.forEach(function (k) {
+    if (names.some(function (n) { return nameKeyOf(n) === k; })) return;
+    var hit = state.debtorTxns.filter(function (r) { return nameKeyOf(r.debtorName) === k; })[0];
+    if (hit) names.push(hit.debtorName);
+  });
+  if (!names.length) return false;
+  var usd = rows.reduce(function (a, d) { return a + d.totalOutstanding; }, 0);
+  var seen = visibleTxnsFor(keys).length;
+  var many = names.length !== 1;
+  ui.confirm = {
+    eyebrow: "Delete",
+    okLabel: "Delete " + names.length + " debtor" + (many ? "s" : ""),
+    title: "Delete " + names.length + " debtor" + (many ? "s" : "") +
+      " and every transaction filed under " + (many ? "those names" : "the name") + "?",
+    body: names.slice(0, 6).map(function (n) {
+        return '<span class="tcf-mono tcf-td-sub">' + esc(n) + '</span>';
+      }).join("<br>") +
+      (names.length > 6 ? '<br><span class="tcf-td-sub">…and ' + (names.length - 6) + ' more.</span>' : "") +
+      '<br><br>This deletes the <strong>credit sales, cash receipts and credit notes</strong> ' +
+      'for ' + (many ? "these names" : "this name") + ' — not just the ' + seen +
+      ' visible on this page. Anything older than the forecast window is summarised ' +
+      'rather than listed here, and it goes too' +
+      (usd ? ', clearing <span class="tcf-mono">' + esc(fmtUSD(usd)) + '</span> of outstanding AR' : "") +
+      '.<br><br>They stop counting towards the forecast immediately. Every one leaves a record ' +
+      'on the History tab, and you can undo the whole lot for a few seconds afterwards.',
+    action: "delete-accounts", names: names, error: ""
+  };
+  return true;
+}
+
 /* Edit only. Deletion is by tick box — see rowSelectBox. */
 function rowActions(entity, row) {
   if (!canEdit()) return "";
@@ -1713,7 +1817,8 @@ function renderApp() {
       '<span><strong>This page is newer than the deployed script.</strong> ' +
       'It expects VAULT backend v' + REQUIRED_API_VERSION + ' but the deployment is v' +
       state.apiVersion + ', so newer entry types — credit notes, deleting several rows ' +
-      'at once, and NEGATIVE AMOUNTS on debtor or OEM records — will be refused. ' +
+      'at once, NEGATIVE AMOUNTS on debtor or OEM records, and deleting a debtor ' +
+      'account with all its transactions — will be refused. ' +
       'Everything else works normally.<br>' +
       'To fix it: in the Apps Script editor, paste the current Code.gs, then ' +
       '<strong>Deploy → Manage deployments → the pencil → Version: New version → Deploy</strong>, ' +
@@ -2087,10 +2192,17 @@ function renderDebtors() {
       (canEdit() ? 'edit or delete' : 'delete') + ' existing entries.</div></section>';
   }
 
+  /* Deleting a debtor account is deleting its whole ledger, so the tick column
+     only appears for a role that may delete. */
+  var mayPick = canDeleteAny();
+  var pageNames = view.rows.map(function (d) { return d.debtorName; });
+
   html += '<section class="tcf-panel"><div class="tcf-panel-title">AR ageing by debtor</div>' +
     renderFilters(vkey, { searchFields: ["debtorName"], searchPlaceholder: "Debtor name" }) +
     renderCount(vkey, view) +
+    (mayPick ? accountSelectionBar(m.ageing.byDebtor) : "") +
     '<table class="tcf-table"><thead><tr>' +
+    (mayPick ? accountHeaderBox(pageNames) : "") +
     sortableTh(vkey, "debtorName", "Debtor") +
     sortableTh(vkey, "totalOutstanding", "Outstanding") +
     sortableTh(vkey, "overdue", "Overdue") +
@@ -2099,7 +2211,8 @@ function renderDebtors() {
     '<th>Unallocated</th><th title="Credit notes issued to this customer — these reduce the balance but are not cash">Credit notes</th><th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (d) {
-    html += '<tr>' +
+    html += '<tr' + (mayPick && selectionFor(ACCOUNT_SEL)[nameKeyOf(d.debtorName)] ? ' class="tcf-row-warn"' : "") + '>' +
+      (mayPick ? '<td>' + accountSelectBox(d.debtorName) + '</td>' : "") +
       '<td>' + esc(d.debtorName) + '</td>' +
       '<td class="tcf-mono">' + esc(fmtUSD(d.totalOutstanding)) + '</td>' +
       '<td class="tcf-mono ' + (d.overdue > 0 ? "tcf-neg" : "") + '">' + (d.overdue > 0 ? esc(fmtUSD(d.overdue)) : dash()) + '</td>' +
@@ -2109,7 +2222,7 @@ function renderDebtors() {
       '<td class="tcf-mono tcf-td-sub">' + (d.creditNotesUSD ? esc(fmtUSD(d.creditNotesUSD)) : dash()) + '</td>' +
       '<td>' + btn("drill", "Ledger", { cls: "tcf-btn-ghost", data: ' data-kind="debtor" data-name="' + attr(d.debtorName) + '"' }) + '</td></tr>';
   });
-  if (!view.rows.length) html += '<tr><td colspan="8" class="tcf-empty">' +
+  if (!view.rows.length) html += '<tr><td colspan="' + (mayPick ? 9 : 8) + '" class="tcf-empty">' +
     (m.ageing.byDebtor.length ? "Nothing matches these filters." : "No debtor transactions logged yet.") + '</td></tr>';
   html += '</tbody></table>' + renderPager(vkey, view) + '</section></div>';
   return html;
@@ -2982,11 +3095,13 @@ function resolveField(headerRaw, fields) {
    column, the offending value and the reason — not collapsed into a count. */
 function processRawRows(headerRow, dataRows) {
   var cfg = bulkConfig();
+  ui.bulk.fileError = "";
   var fields = cfg.fields;
   var keyMap = headerRow.map(function (h) { return resolveField(h, fields); });
   if (!keyMap.some(Boolean)) {
-    ui.bulk.errors = [{ row: 1, why: "None of the columns matched the expected headings. Expected: " +
-      fields.map(function (f) { return f.label; }).join(", ") + ". Use the template's column names." }];
+    ui.bulk.fileError = "None of the columns matched the expected headings. Expected: " +
+      fields.map(function (f) { return f.label; }).join(", ") + ". Use the template's column names.";
+    ui.bulk.errors = [];
     ui.bulk.rows = null;
     return;
   }
@@ -3070,9 +3185,56 @@ function findDuplicates(rows, cfg) {
   return out;
 }
 
+/* SheetJS speaks in file-format internals. "ECMA-376 Encrypted file missing
+   /EncryptionInfo" is a true statement about an OOXML container and a useless
+   one to a treasury analyst holding a spreadsheet — it names neither the cause
+   nor the fix, and nothing in it suggests the file is simply password-locked.
+
+   These are the failures a real upload actually hits. Anything unrecognised
+   falls through to describeError, which still distinguishes a bad file from a
+   bug in VAULT. */
+function describeSpreadsheetError(err) {
+  var raw = String((err && err.message) || err || "");
+
+  /* An encrypted workbook arrives as an OLE2 container holding an
+     EncryptedPackage stream. SheetJS cannot decrypt any of them — not with a
+     password, because the community build has no decryption at all — so the
+     only route is to remove the protection in Excel. Worth naming sensitivity
+     labels explicitly: on a managed laptop a file can be encrypted by policy
+     with nobody having typed a password, which makes "password-protected"
+     sound wrong to the person reading it. */
+  if (/ECMA-376 Encrypted|EncryptedPackage|EncryptionInfo|password/i.test(raw)) {
+    return "That file is encrypted, so it cannot be read — this is about the file's " +
+      "protection, not its contents. Usually it is either a password (File → Info → " +
+      "Protect Workbook → Encrypt with Password → clear the box) or a sensitivity label " +
+      "your organisation applies automatically (File → Info → Sensitivity → Public / " +
+      "General). Remove it, save, and upload again — or open the file, Save As .csv, " +
+      "and upload that instead, which drops the protection with it.";
+  }
+
+  /* Not a spreadsheet at all — a PDF renamed .xlsx, a truncated download, a
+     file still syncing from OneDrive. */
+  if (/Unsupported file|Unrecognized|unsupported ZIP|Corrupted zip|End of data|Bad compression|Cannot find file|not a zip|Invalid HTML|Unexpected token/i.test(raw)) {
+    return "That file is not a spreadsheet VAULT can read — it may be corrupt, still " +
+      "downloading, or saved in a format Excel does not actually produce (a .pdf or a " +
+      "web page renamed .xlsx does this). Open it in Excel to check it, then File → " +
+      "Save As → Excel Workbook (.xlsx) or CSV, and upload the saved copy.";
+  }
+
+  /* Old Works / Quattro / Lotus and other formats SheetJS knows by name but
+     cannot open in the browser build. */
+  if (/Unsupported \w+ file|Unsupported format/i.test(raw)) {
+    return "VAULT cannot read that spreadsheet format. Open it in Excel and use " +
+      "File → Save As → Excel Workbook (.xlsx) or CSV, then upload the saved copy.";
+  }
+
+  return describeError(err);
+}
+
 function handleBulkFile(file) {
   ui.bulk.fileName = file.name;
   ui.bulk.errors = [];
+  ui.bulk.fileError = "";
   ui.bulk.rows = null;
   var isCsv = /\.csv$/i.test(file.name);
   var reader = new FileReader();
@@ -3080,21 +3242,21 @@ function handleBulkFile(file) {
     try {
       if (isCsv || !hasXLSX()) {
         if (!isCsv && !hasXLSX()) {
-          ui.bulk.errors = [{ row: 0, why: "Spreadsheet support didn't load, so .xlsx files can't be read right now. " +
-            "Save the sheet as .csv and upload that, or use “Paste from Excel” instead." }];
+          ui.bulk.fileError = "Spreadsheet support didn't load, so .xlsx files can't be read right now. " +
+            "Save the sheet as .csv and upload that, or use “Paste from Excel” instead.";
           ui.bulk.rows = null;
           render();
           return;
         }
         var data = parseDelimitedText(String(e.target.result).trim());
-        if (!data.length) { ui.bulk.errors = [{ row: 0, why: "The file has no rows." }]; ui.bulk.rows = null; render(); return; }
+        if (!data.length) { ui.bulk.fileError = "The file has no rows."; ui.bulk.rows = null; render(); return; }
         ui.bulk.raw = data;
         processRawRows(data[0], data.slice(1));
       } else {
         var wb = XLSX.read(e.target.result, { type: "array", cellDates: false });
         var sheet = wb.Sheets[wb.SheetNames[0]];
         var raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-        if (!raw.length) { ui.bulk.errors = [{ row: 0, why: "The file has no rows." }]; ui.bulk.rows = null; render(); return; }
+        if (!raw.length) { ui.bulk.fileError = "The file has no rows."; ui.bulk.rows = null; render(); return; }
         ui.bulk.raw = raw;
         processRawRows(raw[0], raw.slice(1));
       }
@@ -3102,13 +3264,14 @@ function handleBulkFile(file) {
       /* "Your file is malformed" vs "VAULT hit an internal error" — reporting a
          ReferenceError as a bad CSV sent us hunting the wrong thing for two
          rounds on Vantage. */
-      ui.bulk.errors = [{ row: 0, why: describeError(err) }];
+      /* A file that will not open is not a row that failed validation. */
+      ui.bulk.fileError = describeSpreadsheetError(err);
       ui.bulk.rows = null;
     }
     render();
   };
   reader.onerror = function () {
-    ui.bulk.errors = [{ row: 0, why: "The browser could not read that file." }];
+    ui.bulk.fileError = "The browser could not read that file.";
     render();
   };
   if (isCsv || !hasXLSX()) reader.readAsText(file);
@@ -3117,17 +3280,19 @@ function handleBulkFile(file) {
 
 function handlePasteParse() {
   var text = (ui.bulk.pasteText || "").trim();
+  ui.bulk.errors = [];
+  ui.bulk.fileError = "";
   if (!text) {
-    ui.bulk.errors = [{ row: 0, why: "Paste some rows first — copy straight from Excel, including the header row." }];
+    ui.bulk.fileError = "Paste some rows first — copy straight from Excel, including the header row.";
     render(); return;
   }
   try {
     var data = parseDelimitedText(text);
-    if (!data.length) { ui.bulk.errors = [{ row: 0, why: "Couldn't find any rows in that paste." }]; ui.bulk.rows = null; render(); return; }
+    if (!data.length) { ui.bulk.fileError = "Couldn't find any rows in that paste."; ui.bulk.rows = null; render(); return; }
     ui.bulk.raw = data;
     processRawRows(data[0], data.slice(1));
   } catch (err) {
-    ui.bulk.errors = [{ row: 0, why: describeError(err) }];
+    ui.bulk.fileError = describeSpreadsheetError(err);
     ui.bulk.rows = null;
   }
   render();
@@ -3211,6 +3376,18 @@ function renderBulkModal() {
       btn("bulk-dateorder", "Month first — " + sample.raw + " means " + asMdy,
         { cls: b.dateOrder === "mdy" ? "tcf-btn-primary" : "tcf-btn-ghost", data: ' data-order="mdy"' }) +
       '</div>';
+  }
+
+  /* A file that would not open is NOT a rejected row. Reporting "1 row was
+     rejected" over a parser failure sent the user looking through 964 good
+     rows for a bad one that did not exist. */
+  if (b.fileError) {
+    html += '<div class="tcf-alert" style="margin-top:12px;flex-direction:column;align-items:flex-start;gap:6px">' +
+      '<div style="display:flex;gap:8px;align-items:center">' + ico("alert", 14) +
+      '<strong>The file could not be read</strong></div>' +
+      '<div style="font-size:12px">' + esc(b.fileError) + '</div>' +
+      '<div style="font-size:12px" class="tcf-td-sub">Nothing was imported, and no row was rejected — ' +
+      'VAULT never got as far as looking at the rows.</div></div>';
   }
 
   if (b.errors && b.errors.length) {
@@ -4001,6 +4178,30 @@ appEl.addEventListener("click", function (ev) {
       clearSelection(el.getAttribute("data-entity"));
       render();
       break;
+
+    /* ---- account (whole-debtor) selection ---- */
+    case "account-select": {
+      var asSel = selectionFor(ACCOUNT_SEL);
+      var asKey = el.getAttribute("data-key");
+      if (el.checked) asSel[asKey] = true; else delete asSel[asKey];
+      render();
+      break;
+    }
+    case "account-page-select": {
+      var apKeys = (el.getAttribute("data-keys") || "").split(",").filter(Boolean);
+      var apSel = selectionFor(ACCOUNT_SEL);
+      if (el.checked) apKeys.forEach(function (k) { apSel[k] = true; });
+      else apKeys.forEach(function (k) { delete apSel[k]; });
+      render();
+      break;
+    }
+    case "account-sel-clear":
+      clearSelection(ACCOUNT_SEL);
+      render();
+      break;
+    case "account-sel-delete":
+      if (buildAccountDeleteConfirm()) render();
+      break;
     case "sel-delete": {
       var sdEntity = el.getAttribute("data-entity");
       var sdIds = selectedIds(sdEntity);
@@ -4138,6 +4339,22 @@ appEl.addEventListener("click", function (ev) {
       ui.confirm = null; render(); break;
     case "confirm-go": {
       var c = ui.confirm;
+      if (c.action === "delete-accounts") {
+        mutate("deleteByCounterparty", { entity: "debtorTxn", names: c.names },
+          function (res) {
+            return "Deleted " + res.removed + " transaction" + (res.removed === 1 ? "" : "s") +
+              " across " + res.names + " debtor" + (res.names === 1 ? "" : "s");
+          },
+          {
+            undo: true,
+            onDone: function (res) {
+              ui.undo = { entity: "debtorTxn", rows: res.restored };
+              clearSelection(ACCOUNT_SEL);
+              ui.confirm = null;
+            },
+            onError: function (err) { ui.confirm.error = describeError(err); }
+          });
+      }
       if (c.action === "delete-selected") {
         mutate("deleteRecords", { entity: c.entity, ids: c.ids },
           function (res) {
@@ -4222,7 +4439,7 @@ appEl.addEventListener("click", function (ev) {
     /* ---- bulk upload ---- */
     case "bulk-open":
       ui.bulk = { key: el.getAttribute("data-bulk"), mode: "file", pasteText: "", rows: null,
-        errors: [], fileName: "", ambiguous: [], duplicates: [], remapped: [], negatives: [],
+        errors: [], fileError: "", fileName: "", ambiguous: [], duplicates: [], remapped: [], negatives: [],
         dateOrder: "dmy" };
       render();
       break;
@@ -4248,7 +4465,7 @@ appEl.addEventListener("click", function (ev) {
       mutate("createRecords", { entity: cfg.entity, rows: payloadRows },
         "Imported " + n + " row" + (n === 1 ? "" : "s"),
         { onDone: function () { ui.bulk = null; },
-          onError: function (err) { ui.bulk.errors = [{ row: 0, why: describeError(err) }]; } });
+          onError: function (err) { ui.bulk.fileError = describeError(err); } });
       break;
     }
 
