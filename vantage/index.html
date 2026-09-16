@@ -144,6 +144,11 @@
   }
   .policy-banner b{color:#fff;}
   .policy-banner .banner-act{margin-left:auto;flex:none;}
+  /* A ghost button borrows the page's ink colour, and these sit on the dark
+     banner — which left "Review them" and "Open" as near-black on near-black,
+     readable only by knowing they were there. */
+  .policy-banner .btn-ghost{color:#DDE3EE;border-color:rgba(221,227,238,.38);}
+  .policy-banner .btn-ghost:hover:not(:disabled){background:rgba(255,255,255,.12);}
 
   /* Non-blocking alert strip for save failures and stale data */
   .alert-strip{
@@ -339,7 +344,12 @@
      `.li-sku{width:110px}` on specificity — which stretched every cell to the
      full row width and, with flex-shrink:0, overflowed the row to the right.
      Header and row share one set of numbers so they cannot drift apart. */
-  .line-item-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;}
+  /* A line is now two rows: the money across the top, matching the header
+     above it, and an optional detail strip beneath carrying what the thing is
+     rather than what it costs. Four more columns in the top row would not fit
+     any dialog that fits a laptop. */
+  .line-item-row{margin-bottom:8px;}
+  .li-main{display:flex;gap:8px;align-items:flex-start;}
   .li-head{display:flex;gap:8px;padding:0 0 4px 0;font-size:10.5px;text-transform:uppercase;color:var(--text-faint);font-weight:700;}
   .line-item-row input{
     min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:7px;
@@ -365,17 +375,51 @@
      looks exactly as it always did. */
   .line-item-row .li-fob,  .li-head .li-fob  {flex:0 1 108px;}
   .line-item-row .li-cif,  .li-head .li-cif  {flex:0 1 108px;}
-  .line-item-row .li-dur,  .li-head .li-dur  {flex:0 1 96px;}
   .li-grid:not(.show-alt) .li-fob,
-  .li-grid:not(.show-alt) .li-cif,
-  .li-grid:not(.show-dur) .li-dur{display:none;}
+  .li-grid:not(.show-alt) .li-cif{display:none;}
+
+  /* ---- Detail strip ----
+     Platform, serial number and the cover period. Labelled inline, because
+     there is no header row above them to do it. Indented to sit under the
+     description it belongs to. */
+  .li-detail{display:flex;flex-wrap:wrap;gap:8px 12px;padding:6px 0 2px 34px;}
+  .field .li-detail label{
+    display:flex;flex-direction:column;gap:3px;margin-bottom:0;
+    font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--text-faint);font-weight:700;
+  }
+  .field .li-detail input{
+    width:100%;padding:6px 9px;border:1px solid var(--border);border-radius:7px;
+    font-size:12px;background:var(--surface);color:var(--text);font-weight:400;
+    text-transform:none;letter-spacing:normal;
+  }
+  .li-f-platform{flex:1 1 180px;}
+  .li-f-serial  {flex:1 1 210px;}
+  .li-f-term    {flex:0 1 120px;}
+  .li-f-start,.li-f-end{flex:0 1 146px;}
+  .li-grid:not(.show-asset) .li-f-platform,
+  .li-grid:not(.show-asset) .li-f-serial,
+  .li-grid:not(.show-term) .li-f-term,
+  .li-grid:not(.show-term) .li-f-start,
+  .li-grid:not(.show-term) .li-f-end{display:none;}
+  .li-grid:not(.show-asset):not(.show-term) .li-detail{display:none;}
+  /* With a detail strip under each line, two lines butt up against each other
+     and it stops being obvious where one ends. A rule between them costs
+     nothing and is only drawn when the strip is actually there. */
+  .li-grid.show-asset .line-item-row,
+  .li-grid.show-term  .line-item-row{padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:12px;}
+  .li-grid.show-asset .line-item-row:last-child,
+  .li-grid.show-term  .line-item-row:last-child{border-bottom:none;margin-bottom:4px;}
   /* With three price columns in play everything else has to give ground, or
      the row overflows to the right — the fault that made these fields
      unusable once before. */
-  .li-grid.show-alt .line-item-row .li-sku,   .li-grid.show-alt .li-head .li-sku   {flex:0 1 88px;}
+  .li-grid.show-alt .line-item-row .li-sku,   .li-grid.show-alt .li-head .li-sku   {flex:0 1 104px;}
   .li-grid.show-alt .line-item-row .li-price, .li-grid.show-alt .li-head .li-price {flex:0 1 108px;}
   .li-grid.show-alt .line-item-row .li-subtotal,
   .li-grid.show-alt .li-head .li-subtotal{flex:0 0 112px;}
+  /* The detail strip below makes each line taller, so give the list more room
+     before it starts scrolling. */
+  .li-grid.show-asset .li-scroll,.li-grid.show-term .li-scroll{max-height:400px;}
   .li-alt-sub{display:block;font-size:10.5px;color:var(--text-faint);line-height:1.45;}
   /* Scoped through .field for the same reason the grid cells are: `.field
      label{display:block}` and `.field input{width:100%}` both outrank a bare
@@ -445,19 +489,24 @@
     /* Narrow screens: the row wraps into S/N + description, then SKU, then
        qty / price / subtotal. Scoped to match the desktop rules above. */
     .li-head{display:none;}
-    .line-item-row{flex-wrap:wrap;}
+    .li-main{flex-wrap:wrap;}
+    .li-detail{padding-left:0;}
     .line-item-row .li-desc{flex:1 1 calc(100% - 70px);}
     .line-item-row .li-sku{flex:1 1 100%;}
     .line-item-row .li-qty,.line-item-row .li-price{flex:1 1 38%;}
     /* Wrapped, the DOM order would read qty, FOB, CIF, B2B — pairing the
        quantity with a price it does not belong to. Reordered so each wrapped
        line holds a pair that makes sense together. */
-    .line-item-row .li-dur{flex:1 1 100%;order:1;}
     .line-item-row .li-qty{order:2;}
-    .line-item-row .li-price{order:3;}
-    .line-item-row .li-fob,.line-item-row .li-cif{flex:1 1 38%;order:4;}
-    .line-item-row .li-subtotal{order:5;}
-    .line-item-row .li-remove{order:6;}
+    /* Same left-to-right order as the desktop headings — FOB, CIF, then the
+       B2B price — so a rep reading a wrapped row is not looking at the columns
+       in one order on a laptop and another on a tablet. */
+    .line-item-row .li-fob{order:3;}
+    .line-item-row .li-cif{order:4;}
+    .line-item-row .li-fob,.line-item-row .li-cif{flex:1 1 38%;}
+    .line-item-row .li-price{order:5;}
+    .line-item-row .li-subtotal{order:6;}
+    .line-item-row .li-remove{order:7;}
     .li-grid.show-alt .line-item-row .li-sku,
     .li-grid.show-alt .line-item-row .li-price{flex:1 1 38%;}
     .li-grid.show-alt .line-item-row .li-subtotal{flex:1 1 100%;}
@@ -1038,8 +1087,10 @@ function needsReprofile(o){
    sidebar wants the counts, then the view wants the same figures again. They are
    pure functions of state, so the answer is kept for the duration of a single
    render and discarded at the start of the next. */
-let renderMemo = {key: null, scoped: null, analytics: null};
-function resetRenderMemo(){ renderMemo = {key: null, scoped: null, analytics: null}; }
+let renderMemo = {key: null, scoped: null, analytics: null, dash: null, dashKey: null};
+function resetRenderMemo(){
+  renderMemo = {key: null, scoped: null, analytics: null, dash: null, dashKey: null};
+}
 
 /* Keyed on who is asking, so swapping user can never be served another
    person's cached view. Data changes are handled by the explicit resets in
@@ -1052,7 +1103,8 @@ function memoKey(){
 function scopedOpportunities(){
   const key = memoKey();
   if(renderMemo.scoped && renderMemo.key === key) return renderMemo.scoped;
-  renderMemo = {key: key, scoped: computeScopedOpportunities(), analytics: null};
+  renderMemo = {key: key, scoped: computeScopedOpportunities(), analytics: null,
+    dash: null, dashKey: null};
   return renderMemo.scoped;
 }
 
@@ -1062,6 +1114,28 @@ function analytics(){
   const list = scopedOpportunities();
   if(!renderMemo.analytics) renderMemo.analytics = computeAnalytics(list);
   return renderMemo.analytics;
+}
+
+/* The dashboard's own figures, which honour its filter bar. Kept separate from
+   analytics() on purpose: the Analytics view and the sidebar counts have no
+   filter bar of their own, and should not quietly change because someone
+   narrowed the dashboard to one Business Unit.
+   Memoised under a key that includes the filters, or changing a dropdown would
+   redraw the page with the previous selection's numbers. */
+function dashboardAnalytics(){
+  const f = STATE.filters;
+  const key = [memoKey(), f.bg, f.unit, f.rep, f.dateField || 'dateRaised', f.from, f.to].join('|');
+  if(!renderMemo.dash || renderMemo.dashKey !== key){
+    /* Computed into a local first. On a cache miss scopedOpportunities()
+       replaces renderMemo wholesale, and `renderMemo.dash = …` resolves its
+       target before evaluating the right-hand side — so assigning directly
+       writes the result into the object that was just thrown away, and this
+       returns null. */
+    const computed = computeAnalytics(applyDashboardFilters(scopedOpportunities()));
+    renderMemo.dash = computed;
+    renderMemo.dashKey = key;
+  }
+  return renderMemo.dash;
 }
 
 /* Mirrors scopeOpportunitiesForActor_ on the server, which is what actually
@@ -1164,6 +1238,13 @@ function canDelete(o){
   if(o.status === 'lost'){
     const daysLost = o.lostAt ? daysBetween(String(o.lostAt).slice(0, 10), todayStr()) : null;
     if(daysLost !== null && daysLost >= (Number(STATE.settings.lostDeleteAfterDays) || 90)) return true;
+  }
+  /* An expired quote can be removed outright: its prices no longer stand and
+     nothing was raised against it. The mistake window below never reaches one,
+     since a quote has to outlive its own validity before it can expire. */
+  if(o.status === 'open' && isExpired(o)){
+    const since = -daysToExpiry(o);
+    if(since >= (Number(STATE.settings.expiredDeleteAfterDays) || 0)) return true;
   }
   const age = o.createdAt ? daysBetween(String(o.createdAt).slice(0, 10), todayStr()) : null;
   return age !== null && age <= (Number(STATE.settings.mistakeWindowDays) || 30);
@@ -1362,7 +1443,11 @@ function snapshotLineItemRows(){
       unitPrice: row.querySelector('.li-price').value,
       fobPrice: row.querySelector('.li-fob').value,
       cifPrice: row.querySelector('.li-cif').value,
-      duration: row.querySelector('.li-dur').value
+      duration: row.querySelector('.li-dur').value,
+      platform: row.querySelector('.li-platform').value,
+      serialNumber: row.querySelector('.li-serial').value,
+      startDate: row.querySelector('.li-start').value,
+      endDate: row.querySelector('.li-end').value
     };
   });
 }
@@ -2093,11 +2178,12 @@ function renderOppMiniTable(list, mode){
 
 function renderDashboard(){
   const s = STATE.session;
-  const scoped = scopedOpportunities();
-  const a = analytics();
+  const inScope = scopedOpportunities();
+  const scoped = applyDashboardFilters(inScope);
+  const a = dashboardAnalytics();
   const isRep = s.role === 'rep';
 
-  let out = renderHealthBar(a);
+  let out = renderDashboardFilterBar(scoped.length, inScope.length) + renderHealthBar(a);
 
   if(isRep){
     out += '<div class="grid kpi-row">' +
@@ -2131,7 +2217,8 @@ function renderDashboard(){
   if(a.expired.length){
     out += '<div class="policy-banner" style="border-left-color:var(--danger);background:#221012;">' +
       '<span>⌛</span><span><b>' + a.expired.length + ' ' + pluralize(a.expired.length, 'quote') +
-      '</b> ' + (a.expired.length === 1 ? 'has' : 'have') + ' passed its validity window and may need re-quoting.</span>' +
+      '</b> ' + (a.expired.length === 1 ? 'has passed its' : 'have passed their') +
+      ' validity window and may need re-quoting.</span>' +
       '<span class="banner-act"><button class="btn btn-ghost btn-sm" data-nav-filter="expired">Review them</button></span></div>';
   }
   if(a.noQuoteYet.length){
@@ -2140,7 +2227,12 @@ function renderDashboard(){
       '</b> booked with no quote sent yet. Open one and use Send Quote when it is priced.</span></div>';
   }
   if(!isRep){
-    const openLeaks = scopedLeakage().filter(function(l){ return !l.resolved; });
+    /* Narrowed the same way, so the count agrees with everything above it. */
+    const openLeaks = scopedLeakage().filter(function(l){
+      return !l.resolved &&
+        (STATE.filters.bg === 'all' || l.businessGroup === STATE.filters.bg) &&
+        withinDateRange(l.dateDetected, STATE.filters.from, STATE.filters.to);
+    });
     if(openLeaks.length){
       out += '<div class="policy-banner" style="border-left-color:var(--danger);background:#221012;">' +
         '<span>⚑</span><span><b>' + openLeaks.length + ' off-platform ' + pluralize(openLeaks.length, 'order') +
@@ -2204,43 +2296,38 @@ function renderPager(view, p, noun){
   '</div>';
 }
 
-function renderFilterBar(list, summaryHtml){
-  const s = STATE.session;
-  const scoped = scopedOpportunities();
-  const reps = repsInScope(scoped);
+/* The individual controls, shared by every bar that offers them, so the
+   Dashboard and All Opportunities cannot drift apart on what "Business Unit"
+   means or which reps are on offer. Each returns '' when it does not apply to
+   this session — a rep has no rep filter to choose from. */
+function filterSelectBg(){
+  if(STATE.session.role !== 'admin') return '';
+  return '<select id="filter-bg"><option value="all">All Business Groups</option>' +
+    businessGroupsAvailable().map(function(bg){
+      return '<option value="' + escapeHtml(bg) + '"' + (STATE.filters.bg === bg ? ' selected' : '') + '>' +
+        escapeHtml(bg) + '</option>';
+    }).join('') + '</select>';
+}
+function filterSelectRep(){
+  if(STATE.session.role === 'rep') return '';
+  return '<select id="filter-rep"><option value="all">All Sales Reps</option>' +
+    repsInScope(scopedOpportunities()).map(function(r){
+      return '<option value="' + escapeHtml(r) + '"' + (STATE.filters.rep === r ? ' selected' : '') + '>' +
+        escapeHtml(r) + '</option>';
+    }).join('') + '</select>';
+}
+function filterSelectUnit(){
   const bgs = businessGroupsAvailable();
-  return '<div class="filters">' +
-    '<input type="text" id="filter-q" placeholder="Search customer, ref, product, SO…" value="' +
-      escapeHtml(STATE.filters.q) + '">' +
-    (s.role === 'admin'
-      ? '<select id="filter-bg"><option value="all">All Business Groups</option>' +
-        bgs.map(function(bg){
-          return '<option value="' + escapeHtml(bg) + '"' + (STATE.filters.bg === bg ? ' selected' : '') + '>' +
-            escapeHtml(bg) + '</option>';
-        }).join('') + '</select>'
-      : '') +
-    (s.role !== 'rep'
-      ? '<select id="filter-rep"><option value="all">All Sales Reps</option>' +
-        reps.map(function(r){
-          return '<option value="' + escapeHtml(r) + '"' + (STATE.filters.rep === r ? ' selected' : '') + '>' +
-            escapeHtml(r) + '</option>';
-        }).join('') + '</select>'
-      : '') +
-    '<select id="filter-status">' +
-      ['open|Open only', 'all|All statuses', 'invoiced|Invoiced', 'lost|Closed lost'].map(function(pair){
-        const parts = pair.split('|');
-        return '<option value="' + parts[0] + '"' + (STATE.filters.status === parts[0] ? ' selected' : '') + '>' +
-          parts[1] + '</option>';
-      }).join('') +
-    '</select>' +
-    (bgs.length > 1 || (STATE.refData.businessUnitMap[bgs[0]] || []).length > 1
-      ? '<select id="filter-unit"><option value="all">All Business Units</option>' +
-        unitsInScope().map(function(u){
-          return '<option value="' + escapeHtml(u) + '"' + (STATE.filters.unit === u ? ' selected' : '') + '>' +
-            escapeHtml(u) + '</option>';
-        }).join('') + '</select>'
-      : '') +
-    '<select id="filter-date-field">' +
+  /* Pointless where there is only ever one unit to choose. */
+  if(!(bgs.length > 1 || (STATE.refData.businessUnitMap[bgs[0]] || []).length > 1)) return '';
+  return '<select id="filter-unit"><option value="all">All Business Units</option>' +
+    unitsInScope().map(function(u){
+      return '<option value="' + escapeHtml(u) + '"' + (STATE.filters.unit === u ? ' selected' : '') + '>' +
+        escapeHtml(u) + '</option>';
+    }).join('') + '</select>';
+}
+function filterDateControls(){
+  return '<select id="filter-date-field">' +
       [['dateRaised', 'Date raised'], ['expectedCloseDate', 'Expected close'], ['updatedAt', 'Last touched']]
         .map(function(pair){
           return '<option value="' + pair[0] + '"' + (STATE.filters.dateField === pair[0] ? ' selected' : '') + '>' +
@@ -2248,10 +2335,62 @@ function renderFilterBar(list, summaryHtml){
         }).join('') +
     '</select>' +
     '<input type="date" id="filter-from" value="' + escapeHtml(STATE.filters.from) + '" title="From">' +
-    '<input type="date" id="filter-to" value="' + escapeHtml(STATE.filters.to) + '" title="To">' +
+    '<input type="date" id="filter-to" value="' + escapeHtml(STATE.filters.to) + '" title="To">';
+}
+
+function renderFilterBar(list, summaryHtml){
+  return '<div class="filters">' +
+    '<input type="text" id="filter-q" placeholder="Search customer, ref, product, SO…" value="' +
+      escapeHtml(STATE.filters.q) + '">' +
+    filterSelectBg() +
+    filterSelectRep() +
+    '<select id="filter-status">' +
+      ['open|Open only', 'all|All statuses', 'invoiced|Invoiced', 'lost|Closed lost'].map(function(pair){
+        const parts = pair.split('|');
+        return '<option value="' + parts[0] + '"' + (STATE.filters.status === parts[0] ? ' selected' : '') + '>' +
+          parts[1] + '</option>';
+      }).join('') +
+    '</select>' +
+    filterSelectUnit() +
+    filterDateControls() +
     (filtersActive() ? '<button class="btn btn-ghost btn-sm" data-clear-filters="1">Clear filters</button>' : '') +
     '<div class="flex-spacer"></div>' +
     '<span class="filter-summary">' + summaryHtml + '</span>' +
+  '</div>';
+}
+
+/* ---------------- Dashboard filters ----------------
+   The same four dimensions as All Opportunities, minus status and the search
+   box. Both are deliberate: the dashboard summarises open pipeline, so a
+   status filter would silently zero out the very figures it is reporting, and
+   there is nothing on the page to search through. The rest of STATE.filters is
+   shared, so narrowing to a Business Unit here and switching view keeps it. */
+function dashboardFiltersActive(){
+  const f = STATE.filters;
+  return f.bg !== 'all' || f.unit !== 'all' || f.rep !== 'all' || !!f.from || !!f.to;
+}
+function applyDashboardFilters(list){
+  const f = STATE.filters;
+  return list.filter(function(o){
+    if(f.bg !== 'all' && o.businessGroup !== f.bg) return false;
+    if(f.rep !== 'all' && o.salesRep !== f.rep) return false;
+    if(f.unit !== 'all' && o.businessUnit !== f.unit) return false;
+    if(!withinDateRange(o[f.dateField || 'dateRaised'], f.from, f.to)) return false;
+    return true;
+  });
+}
+function renderDashboardFilterBar(shown, total){
+  const controls = filterSelectBg() + filterSelectRep() + filterSelectUnit();
+  return '<div class="filters">' +
+    controls +
+    filterDateControls() +
+    (dashboardFiltersActive() ? '<button class="btn btn-ghost btn-sm" data-clear-filters="1">Clear filters</button>' : '') +
+    '<div class="flex-spacer"></div>' +
+    '<span class="filter-summary">' +
+      (dashboardFiltersActive()
+        ? shown + ' of ' + total + ' ' + pluralize(total, 'record') + ' — every figure below is for this selection'
+        : total + ' ' + pluralize(total, 'record') + ' in your scope') +
+    '</span>' +
   '</div>';
 }
 
@@ -3172,17 +3311,31 @@ let lineItemSeq = 0;
 
 function lineItemRowHtml(rowId, prefill){
   const p = prefill || {};
+  /* A labelled field on the detail strip. There is no header row over these,
+     so each carries its own label. */
+  const detail = function(cls, field, label, attrs, value){
+    return '<label class="li-f li-f-' + cls + '"><span>' + escapeHtml(label) + '</span>' +
+      '<input class="li-' + field + '" ' + attrs + ' value="' + escapeHtml(value || '') + '"></label>';
+  };
   return '<div class="line-item-row" data-row-id="' + rowId + '">' +
-    '<div class="li-sn">–</div>' +
-    '<input type="text" class="li-desc" placeholder="Item / solution description" value="' + escapeHtml(p.description || '') + '">' +
-    '<input type="text" class="li-sku" title="SKU / product code" placeholder="SKU / code" value="' + escapeHtml(p.sku || '') + '">' +
-    '<input type="text" class="li-dur" title="Term / duration — prints on the quote, does not change the price" placeholder="e.g. 12 months" maxlength="40" value="' + escapeHtml(p.duration || '') + '">' +
-    '<input type="number" class="li-qty" title="Quantity" placeholder="Qty" min="0" step="any" value="' + (p.qty !== undefined && p.qty !== null ? escapeHtml(p.qty) : 1) + '">' +
-    '<input type="number" class="li-fob" title="FOB unit price (optional)" placeholder="FOB" min="0" step="any" value="' + (p.fobPrice ? escapeHtml(p.fobPrice) : '') + '">' +
-    '<input type="number" class="li-cif" title="CIF unit price (optional)" placeholder="CIF" min="0" step="any" value="' + (p.cifPrice ? escapeHtml(p.cifPrice) : '') + '">' +
-    '<input type="number" class="li-price" title="B2B unit price — this is the quote\'s value" placeholder="B2B price" min="0" step="any" value="' + (p.unitPrice !== undefined && p.unitPrice !== null ? escapeHtml(p.unitPrice) : '') + '">' +
-    '<div class="li-subtotal mono">—</div>' +
-    '<button type="button" class="li-remove btn btn-ghost btn-sm" aria-label="Remove line">✕</button>' +
+    '<div class="li-main">' +
+      '<div class="li-sn">–</div>' +
+      '<input type="text" class="li-desc" placeholder="Item / solution description" value="' + escapeHtml(p.description || '') + '">' +
+      '<input type="text" class="li-sku" title="SKU / product code" placeholder="SKU / code" value="' + escapeHtml(p.sku || '') + '">' +
+      '<input type="number" class="li-qty" title="Quantity" placeholder="Qty" min="0" step="any" value="' + (p.qty !== undefined && p.qty !== null ? escapeHtml(p.qty) : 1) + '">' +
+      '<input type="number" class="li-fob" title="FOB unit price (optional)" placeholder="FOB" min="0" step="any" value="' + (p.fobPrice ? escapeHtml(p.fobPrice) : '') + '">' +
+      '<input type="number" class="li-cif" title="CIF unit price (optional)" placeholder="CIF" min="0" step="any" value="' + (p.cifPrice ? escapeHtml(p.cifPrice) : '') + '">' +
+      '<input type="number" class="li-price" title="B2B unit price — this is the quote\'s value" placeholder="B2B price" min="0" step="any" value="' + (p.unitPrice !== undefined && p.unitPrice !== null ? escapeHtml(p.unitPrice) : '') + '">' +
+      '<div class="li-subtotal mono">—</div>' +
+      '<button type="button" class="li-remove btn btn-ghost btn-sm" aria-label="Remove line">✕</button>' +
+    '</div>' +
+    '<div class="li-detail">' +
+      detail('platform', 'platform', 'Platform', 'type="text" maxlength="60" placeholder="e.g. Huawei OceanStor"', p.platform) +
+      detail('serial', 'serial', 'Serial number', 'type="text" maxlength="120" placeholder="e.g. 2102351BSN10K2000123"', p.serialNumber) +
+      detail('term', 'dur', 'Term', 'type="text" maxlength="40" placeholder="e.g. 12 months"', p.duration) +
+      detail('start', 'start', 'Start date', 'type="date"', p.startDate) +
+      detail('end', 'end', 'End date', 'type="date"', p.endDate) +
+    '</div>' +
   '</div>';
 }
 function currencySymbol(){
@@ -3221,10 +3374,13 @@ function addLineItemRow(prefill){
 function syncLineItemColumns(){
   const grid = document.getElementById('li-grid');
   if(!grid) return;
-  const alt = document.getElementById('li-show-alt');
-  const dur = document.getElementById('li-show-dur');
-  grid.classList.toggle('show-alt', !!(alt && alt.checked));
-  grid.classList.toggle('show-dur', !!(dur && dur.checked));
+  const on = function(id){
+    const box = document.getElementById(id);
+    return !!(box && box.checked);
+  };
+  grid.classList.toggle('show-alt', on('li-show-alt'));
+  grid.classList.toggle('show-term', on('li-show-term'));
+  grid.classList.toggle('show-asset', on('li-show-asset'));
 }
 
 function recalcQuoteTotal(){
@@ -3261,7 +3417,7 @@ function recalcQuoteTotal(){
 /* The two column toggles. recalcQuoteTotal() does the showing and hiding, so
    this only has to tell it when something changed. */
 function wireLineItemToggles(){
-  ['li-show-alt', 'li-show-dur'].forEach(function(id){
+  ['li-show-alt', 'li-show-term', 'li-show-asset'].forEach(function(id){
     const box = document.getElementById(id);
     if(box) box.addEventListener('change', recalcQuoteTotal);
   });
@@ -3279,6 +3435,10 @@ function collectLineItems(){
     const fobPrice = Number(row.querySelector('.li-fob').value) || 0;
     const cifPrice = Number(row.querySelector('.li-cif').value) || 0;
     const duration = row.querySelector('.li-dur').value.trim();
+    const platform = row.querySelector('.li-platform').value.trim();
+    const serialNumber = row.querySelector('.li-serial').value.trim();
+    const startDate = row.querySelector('.li-start').value;
+    const endDate = row.querySelector('.li-end').value;
     /* Identified by what it is, not by what it costs — a zero price is a valid
        line. Rows with neither a description nor a SKU are the untouched blank
        row the form always leaves ready, and are not lines at all. */
@@ -3290,7 +3450,9 @@ function collectLineItems(){
            never touch `subtotal`. Duration is text that prints, nothing more. */
         fobPrice: fobPrice, fobSubtotal: qty * fobPrice,
         cifPrice: cifPrice, cifSubtotal: qty * cifPrice,
-        duration: duration
+        /* Descriptive only — none of these touches a figure. */
+        duration: duration, platform: platform, serialNumber: serialNumber,
+        startDate: startDate, endDate: endDate
       });
     }
   });
@@ -3302,13 +3464,22 @@ function collectLineItems(){
 function seedUsesAltPricing(seed){
   return (seed || []).some(function(li){ return Number(li.fobPrice) || Number(li.cifPrice); });
 }
-function seedUsesDuration(seed){
-  return (seed || []).some(function(li){ return String(li.duration || '').trim(); });
+/* The term column now covers a period as well as a plain duration. */
+function seedUsesTerm(seed){
+  return (seed || []).some(function(li){
+    return String(li.duration || '').trim() || String(li.startDate || '').trim() || String(li.endDate || '').trim();
+  });
+}
+function seedUsesAssetDetail(seed){
+  return (seed || []).some(function(li){
+    return String(li.platform || '').trim() || String(li.serialNumber || '').trim();
+  });
 }
 
 function lineItemsBlock(scrollClass, seed){
   const showAlt = seedUsesAltPricing(seed);
-  const showDur = seedUsesDuration(seed);
+  const showTerm = seedUsesTerm(seed);
+  const showAsset = seedUsesAssetDetail(seed);
   const check = function(id, label, on, hint){
     return '<label title="' + escapeHtml(hint) + '"><input type="checkbox" id="' + id + '"' +
       (on ? ' checked' : '') + '>' + escapeHtml(label) + '</label>';
@@ -3319,16 +3490,18 @@ function lineItemsBlock(scrollClass, seed){
       '<div class="li-toggles">' +
         check('li-show-alt', 'Also quote FOB and CIF prices', showAlt,
           'Adds an FOB and a CIF unit price to every line. Both are recorded and printed on the quote with their own subtotals and totals. The B2B price remains the quote\'s value.') +
-        check('li-show-dur', 'Lines have a term / duration', showDur,
-          'Adds a term to every line, for software and subscriptions. It prints on the quote and never changes the price.') +
+        check('li-show-term', 'Lines have a term or cover period', showTerm,
+          'Adds a term and a start and end date to every line, for software, subscriptions and support cover. They print on the quote and never change the price.') +
+        check('li-show-asset', 'Lines have a platform or serial number', showAsset,
+          'Adds a platform and a serial number to every line, for renewals and support against equipment already installed.') +
       '</div>' +
-      '<div id="li-grid" class="li-grid' + (showAlt ? ' show-alt' : '') + (showDur ? ' show-dur' : '') + '">' +
+      '<div id="li-grid" class="li-grid' + (showAlt ? ' show-alt' : '') +
+        (showTerm ? ' show-term' : '') + (showAsset ? ' show-asset' : '') + '">' +
         /* Same classes as the row itself, so the two stay aligned by construction. */
         '<div class="li-head">' +
           '<div class="li-sn">S/N</div>' +
           '<div class="li-desc">Description</div>' +
           '<div class="li-sku">SKU / Code</div>' +
-          '<div class="li-dur">Term</div>' +
           '<div class="li-qty">Qty</div>' +
           '<div class="li-fob">FOB</div>' +
           '<div class="li-cif">CIF</div>' +
@@ -3668,22 +3841,22 @@ function renderDetailLineItems(o, d){
      columns — every other record reads exactly as it always did. */
   const showFob = seedHasPrice(d.lineItems, 'fobSubtotal');
   const showCif = seedHasPrice(d.lineItems, 'cifSubtotal');
-  const showDur = seedUsesDuration(d.lineItems);
   /* Columns before the final subtotal: item, SKU, qty and the B2B price. */
-  const span = 4 + (showDur ? 1 : 0) + (showFob ? 2 : 0) + (showCif ? 2 : 0);
+  const span = 4 + (showFob ? 2 : 0) + (showCif ? 2 : 0);
   const money = function(v){ return fmtMoney(v, o.currency); };
   const alt = function(v){ return Number(v) > 0 ? fmtMoney(v, o.currency) : '—'; };
   return '<div class="table-wrap"><table>' +
     '<thead><tr><th>Item</th><th>SKU</th>' +
-      (showDur ? '<th>Term</th>' : '') +
       '<th class="num-cell">Qty</th>' +
       (showFob ? '<th class="num-cell">FOB</th><th class="num-cell">FOB subtotal</th>' : '') +
       (showCif ? '<th class="num-cell">CIF</th><th class="num-cell">CIF subtotal</th>' : '') +
       '<th class="num-cell">B2B price</th><th class="num-cell">Subtotal</th></tr></thead>' +
     '<tbody>' +
       d.lineItems.map(function(li){
-        return '<tr><td>' + escapeHtml(li.description) + '</td><td class="mono">' + escapeHtml(li.sku || '—') + '</td>' +
-          (showDur ? '<td>' + escapeHtml(li.duration || '—') + '</td>' : '') +
+        const sub = lineItemDetailText(li);
+        return '<tr><td>' + escapeHtml(li.description) +
+            (sub ? '<div class="field-hint" style="margin-top:2px;">' + escapeHtml(sub) + '</div>' : '') +
+          '</td><td class="mono">' + escapeHtml(li.sku || '—') + '</td>' +
           '<td class="num-cell">' + fmtNumber(li.qty, 0) + '</td>' +
           (showFob ? '<td class="num-cell mono">' + alt(li.fobPrice) + '</td><td class="num-cell mono">' + alt(li.fobSubtotal) + '</td>' : '') +
           (showCif ? '<td class="num-cell mono">' + alt(li.cifPrice) + '</td><td class="num-cell mono">' + alt(li.cifSubtotal) + '</td>' : '') +
@@ -3700,6 +3873,22 @@ function renderDetailLineItems(o, d){
 
 /* Shared by the detail table and the printable quote: does any line carry this
    alternative price at all, and what do they add up to. */
+/* Everything that describes a line rather than pricing it, as one muted
+   sentence under the item name. As five more columns these would make the
+   record table cramped and the customer-facing quote unprintable. */
+function lineItemDetailText(li){
+  const bits = [];
+  if(li.platform) bits.push('Platform: ' + li.platform);
+  if(li.serialNumber) bits.push('S/N: ' + li.serialNumber);
+  if(li.duration) bits.push('Term: ' + li.duration);
+  const from = li.startDate ? fmtDate(li.startDate) : '';
+  const to = li.endDate ? fmtDate(li.endDate) : '';
+  if(from && to) bits.push('Cover: ' + from + ' — ' + to);
+  else if(from) bits.push('From: ' + from);
+  else if(to) bits.push('Until: ' + to);
+  return bits.join(' · ');
+}
+
 function seedHasPrice(lineItems, field){
   return (lineItems || []).some(function(li){ return Number(li[field]) > 0; });
 }
@@ -3835,9 +4024,10 @@ function plainTextQuoteBody(o, lineItems){
       (expiry ? ', valid until ' + fmtDate(expiry) + '.' : '.'),
     '',
     lines.map(function(li){
-      return '- ' + li.description + (li.duration ? ' (' + li.duration + ')' : '') +
-        ' x' + li.qty + ' @ ' + fmtMoney(li.unitPrice, o.currency) +
-        ' = ' + fmtMoney(li.subtotal, o.currency);
+      const sub = lineItemDetailText(li);
+      return '- ' + li.description + ' x' + li.qty + ' @ ' + fmtMoney(li.unitPrice, o.currency) +
+        ' = ' + fmtMoney(li.subtotal, o.currency) +
+        (sub ? '\n  ' + sub : '');
     }).join('\n'),
     '',
     (seedHasPrice(lines, 'fobSubtotal')
@@ -4336,7 +4526,8 @@ async function exportWithLineItemsCsv(){
       byOpp[li.oppId].push(li);
     });
     const rows = [['Reference', 'Customer', 'Business Group', 'Business Unit', 'Sales rep', 'Status',
-      'Pipeline', 'Currency', 'Line #', 'Description', 'SKU', 'Term', 'Qty',
+      'Pipeline', 'Currency', 'Line #', 'Description', 'SKU',
+      'Platform', 'Serial number', 'Term', 'Start date', 'End date', 'Qty',
       'FOB price', 'FOB subtotal', 'CIF price', 'CIF subtotal',
       'B2B price', 'B2B subtotal', 'Quote total (B2B)', 'FOB total', 'CIF total']];
     sortOpportunities(list).forEach(function(o){
@@ -4345,10 +4536,13 @@ async function exportWithLineItemsCsv(){
         o.status, o.pipeline || '', o.currency];
       const tail = [Number(o.value) || 0, Number(o.fobValue) || 0, Number(o.cifValue) || 0];
       if(!items.length){
-        rows.push(base.concat(['', o.productLine || '(no line items)', '', '', '', '', '', '', '', '', ''], tail));
+        rows.push(base.concat(['', o.productLine || '(no line items)',
+          '', '', '', '', '', '', '', '', '', '', '', '', ''], tail));
       }else{
         items.forEach(function(li){
-          rows.push(base.concat([li.seq, li.description, li.sku, li.duration || '', li.qty,
+          rows.push(base.concat([li.seq, li.description, li.sku,
+            li.platform || '', li.serialNumber || '', li.duration || '',
+            li.startDate || '', li.endDate || '', li.qty,
             li.fobPrice || 0, li.fobSubtotal || 0, li.cifPrice || 0, li.cifSubtotal || 0,
             li.unitPrice, li.subtotal], tail));
         });
@@ -4440,6 +4634,10 @@ const HEADER_ALIASES = {
   cifPrice:         ['cif price', 'cif unit price', 'cif'],
   duration:         ['duration', 'term', 'licence term', 'license term', 'subscription term',
                      'period', 'tenure'],
+  platform:         ['platform', 'platform name', 'solution platform'],
+  serialNumber:     ['serial number', 'serial', 'serial no', 'serial nos', 'sn', 's/n', 'device serial'],
+  startDate:        ['start date', 'start', 'cover start', 'commencement date', 'effective date'],
+  endDate:          ['end date', 'end', 'cover end', 'expiry date', 'expiration date'],
   currency:         ['currency', 'ccy'],
   dateRaised:       ['date raised', 'quote date', 'date'],
   expectedCloseDate:['expected close date', 'close date', 'expected close'],
@@ -4568,6 +4766,21 @@ function parseBulkRow(row, headerMap, rowIndex){
   const fob = altPrice('fobPrice', 'FOB price');
   const cif = altPrice('cifPrice', 'CIF price');
   const duration = String(get('duration') || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const platform = String(get('platform') || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const serialNumber = String(get('serialNumber') || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  /* Accepts whatever the spreadsheet wrote — the same reader the quote dates
+     already use — and normalises to yyyy-MM-dd. A value that cannot be read is
+     named rather than dropped, since a wrong cover period would print on a
+     customer's quote. */
+  const coverDate = function(field, label){
+    const raw = get(field);
+    if(raw === '' || raw === null || raw === undefined) return {value: '', error: null};
+    const parsed = parseFlexibleDate(raw);
+    return parsed ? {value: parsed, error: null}
+                  : {value: '', error: label + ' "' + raw + '" is not a date Vantage can read'};
+  };
+  const startDate = coverDate('startDate', 'Start date');
+  const endDate = coverDate('endDate', 'End date');
   let salesRep = String(get('salesRep') || '').trim();
   if(s.role === 'rep') salesRep = s.name;
   let pipeline = parseAmount(get('pipeline'));
@@ -4593,6 +4806,11 @@ function parseBulkRow(row, headerMap, rowIndex){
   }
   if(fob.error) errors.push(fob.error);
   if(cif.error) errors.push(cif.error);
+  if(startDate.error) errors.push(startDate.error);
+  if(endDate.error) errors.push(endDate.error);
+  if(startDate.value && endDate.value && endDate.value < startDate.value){
+    errors.push('The cover period ends before it starts (' + startDate.value + ' → ' + endDate.value + ')');
+  }
   if(!salesRep) errors.push('Missing sales rep');
   if([1, 2, 3].indexOf(pipeline) < 0) errors.push('Invalid Pipeline value "' + String(get('pipeline') || '') + '" (must be 1, 2 or 3)');
 
@@ -4612,7 +4830,8 @@ function parseBulkRow(row, headerMap, rowIndex){
       qty: quantity, unitPrice: unitPrice, subtotal: quantity * unitPrice,
       fobPrice: fob.value, fobSubtotal: quantity * fob.value,
       cifPrice: cif.value, cifSubtotal: quantity * cif.value,
-      duration: duration
+      duration: duration, platform: platform, serialNumber: serialNumber,
+      startDate: startDate.value, endDate: endDate.value
     },
     currency: (String(get('currency') || 'NGN').trim().toUpperCase() === 'USD') ? 'USD' : 'NGN',
     dateRaised: dateRaised,
@@ -4849,24 +5068,36 @@ function handleBulkFile(file){
 function downloadBulkTemplate(){
   const headers = ['Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
     'Contact Person', 'Contact Email', 'Opportunity Ref', 'Item Description', 'SKU', 'Quantity',
-    'Unit Price', 'FOB Price', 'CIF Price', 'Duration', 'Currency', 'Date Raised', 'Expected Close Date',
+    'Unit Price', 'FOB Price', 'CIF Price', 'Duration', 'Platform', 'Serial Number',
+    'Start Date', 'End Date', 'Currency', 'Date Raised', 'Expected Close Date',
     'Sales Rep', 'Probability', 'Pipeline', 'Validity', 'Notes'];
   const today = todayStr();
+  /* A year on from today, so the sample cover period is a realistic one. */
+  const nextYear = (function(){
+    const d = new Date(today + 'T00:00:00');
+    d.setFullYear(d.getFullYear() + 1);
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
   const rows = [
     ['Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
-      '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
+      '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+      'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+      'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
+      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
     /* FOB, CIF and Duration are optional — leave them blank, as above, unless
        the quote is priced on those terms or the line is a subscription. */
     ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
-      'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
+      'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', '', '', '', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
+    /* Platform, Serial Number, Start Date and End Date are optional too, and
+       describe the line rather than pricing it. */
     ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
-      'Q-GLOBALNET-01', 'Network management licence', 'HW-NMS-12', '15', '60000', '', '', '12 months', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Duration prints on the quote; it does not multiply the price']
+      'Q-GLOBALNET-01', 'Network management licence', 'HW-NMS-12', '15', '60000', '', '', '12 months',
+      'Huawei eSight', '2102351BSN10K2000123', today, nextYear,
+      'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Term and cover period print on the quote; they do not multiply the price']
   ];
   deliverFile('TD_Vantage_Bulk_Upload_Template.csv', 'text/csv', toCsv([headers].concat(rows)));
 }
@@ -4889,12 +5120,11 @@ function generateQuoteDocument(id, reserved){
      quote is the same one-price document it has always been. */
   const showFob = seedHasPrice(lines, 'fobSubtotal');
   const showCif = seedHasPrice(lines, 'cifSubtotal');
-  const showDur = seedUsesDuration(lines);
   const multiPrice = showFob || showCif;
   /* Columns before the final subtotal, which the total rows span. Base five:
      S/N, description, SKU, qty and the B2B unit price. Off by one here puts
      every total under the wrong heading on a customer-facing document. */
-  const cols = 5 + (showDur ? 1 : 0) + (showFob ? 2 : 0) + (showCif ? 2 : 0);
+  const cols = 5 + (showFob ? 2 : 0) + (showCif ? 2 : 0);
   /* A line not quoted on FOB terms has no FOB price — printing ₦0.00 would
      tell the customer it is free on those terms. */
   const alt = function(v){ return Number(v) > 0 ? fmtMoney(v, o.currency) : '—'; };
@@ -4926,6 +5156,7 @@ function generateQuoteDocument(id, reserved){
     '.total-row td{font-weight:700;font-size:15px;border-top:2px solid #101828;border-bottom:none;}' +
     '.footnote{font-size:11px;color:#8B93A1;margin-top:40px;border-top:1px solid #E3E6EC;padding-top:14px;line-height:1.6;}' +
     '.alt-row td{color:#5B6472;border-bottom:none;padding-top:4px;padding-bottom:4px;}' +
+    '.itemsub{font-size:10.5px;color:#5B6472;margin-top:2px;line-height:1.45;}' +
     '@media print{body{padding:20px 30px;}}' +
     /* Three price columns and their subtotals do not fit portrait. Ask for
        landscape and tighten the type rather than let the table clip — a clipped
@@ -4957,16 +5188,17 @@ function generateQuoteDocument(id, reserved){
     (o.note ? '<div class="block"><h4>Note</h4><div style="font-size:13px;white-space:pre-wrap;line-height:1.55;">' +
       escapeHtml(o.note) + '</div></div>' : '') +
     '<table><thead><tr><th>S/N</th><th>Description</th><th>SKU / Code</th>' +
-      (showDur ? '<th>Term</th>' : '') +
       '<th class="r">Qty</th>' +
       (showFob ? '<th class="r">FOB unit</th><th class="r">FOB subtotal</th>' : '') +
       (showCif ? '<th class="r">CIF unit</th><th class="r">CIF subtotal</th>' : '') +
       '<th class="r">' + (multiPrice ? 'B2B unit' : 'Unit price') + '</th>' +
       '<th class="r">' + (multiPrice ? 'B2B subtotal' : 'Subtotal') + '</th></tr></thead><tbody>' +
       lines.map(function(li, i){
-        return '<tr><td>' + (i + 1) + '</td><td>' + escapeHtml(li.description) + '</td>' +
+        const sub = lineItemDetailText(li);
+        return '<tr><td>' + (i + 1) + '</td>' +
+          '<td>' + escapeHtml(li.description) +
+            (sub ? '<div class="itemsub">' + escapeHtml(sub) + '</div>' : '') + '</td>' +
           '<td>' + escapeHtml(li.sku || '—') + '</td>' +
-          (showDur ? '<td>' + escapeHtml(li.duration || '—') + '</td>' : '') +
           '<td class="r">' + fmtNumber(li.qty, 0) + '</td>' +
           (showFob ? '<td class="r">' + alt(li.fobPrice) + '</td>' +
                      '<td class="r">' + alt(li.fobSubtotal) + '</td>' : '') +
