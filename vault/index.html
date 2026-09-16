@@ -180,7 +180,7 @@ var VAULT_BACKEND_URL = "https://script.google.com/macros/s/AKfycbyqUNx7w2db3TGd
 /* The oldest backend this page can work against. If the deployed Apps Script is
    older, the page says so at the top of every screen rather than letting a form
    fail with a message about an enum. Bump it here and in Code.gs together. */
-var REQUIRED_API_VERSION = 5;
+var REQUIRED_API_VERSION = 6;
 
 var SESSION_KEY = "vault::session";
 
@@ -285,7 +285,32 @@ function mondayOfIso(iso) {
   return msIso(ms + ((day === 0 ? -6 : 1) - day) * 86400000);
 }
 function isValidIso(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").slice(0, 10)); }
+
+/* The forecast window is shown as two dates but STORED as a start plus a week
+   count — see saveSettings in Code.gs. These two convert between the shapes, and
+   must agree with forecastEndIso_ / weeksBetween_ on the server exactly. */
+function forecastEndIso(startDate, numWeeks) {
+  return addDaysIso(mondayOfIso(startDate), numWeeks * 7 - 1);
+}
+/* Both ends snapped OUTWARDS — start back to its Monday, end forward to its
+   Sunday — so a date the user typed is always inside the window. Rounding
+   inward would quietly drop a week they asked for. */
+function weeksBetweenIso(startIso, endIso) {
+  return Math.round((dMs(mondayOfIso(endIso)) - dMs(mondayOfIso(startIso))) / (7 * 86400000)) + 1;
+}
 /* Display only. Formatted from the UTC parts, so it can never drift a day. */
+/* "Mon 05 Oct 2026" — used where a date must be unambiguous at a glance, such
+   as the forecast window, where the WEEKDAY is the point being made. Formatted
+   from UTC parts like fmtDateShort, so it can never drift a day. */
+function fmtDateLong(iso) {
+  var DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (!isValidIso(iso)) return String(iso || "");
+  var d = new Date(dMs(iso));
+  return DAY[d.getUTCDay()] + " " + String(d.getUTCDate()).padStart(2, "0") + " " +
+    MON[d.getUTCMonth()] + " " + d.getUTCFullYear();
+}
+
 function fmtDateShort(iso) {
   var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var d = new Date(dMs(iso));
@@ -649,7 +674,14 @@ function resetDrafts() {
     positions: state.position
       ? Object.assign({}, state.position, { note: "" })
       : { usdGlobal: "", usdNigeria: "", usdGhana: "", ngnPosition: "", ghsPosition: "", asOfDate: today, note: "" },
-    settings: Object.assign({}, state.settings),
+    /* endDate is DERIVED, never stored — see saveSettings in Code.gs. The server
+       sends it, but it is recomputed here so a stale or missing value from an
+       older deployment cannot leave the two date boxes disagreeing. */
+    settings: Object.assign({}, state.settings, {
+      endDate: isValidIso(state.settings.startDate)
+        ? forecastEndIso(state.settings.startDate, Number(state.settings.numWeeks) || 12)
+        : ""
+    }),
     member: { name: "", email: "", role: "analyst" }
   };
 }
@@ -985,7 +1017,7 @@ function computeModel() {
   var rawWeeks = s.numWeeks;
   var n = (rawWeeks === "" || rawWeeks === null || rawWeeks === undefined) ? 12 : Number(rawWeeks);
   if (!isFinite(n)) n = 12;
-  n = Math.max(1, Math.min(16, n));
+  n = Math.max(1, Math.min(52, n));
   var startDate = isValidIso(s.startDate) ? s.startDate : mondayOfIso(today);
 
   var weeks = [];
@@ -1651,62 +1683,87 @@ function selectionBar(entity, allRows) {
 }
 
 /* =========================================================================
-   ACCOUNT-level selection, for the AR ageing list.
+   ACCOUNT-level selection, for the two AGEING lists — debtors and OEMs.
 
-   A row there is not a record: it is one DEBTOR, summarising a ledger of sales,
-   receipts and credit notes. Ticking it means "this debtor and everything filed
-   under the name", so the selection is keyed by nameKey rather than by row id —
-   which is also what makes it safe to send. The transaction feed collapses
-   pre-cutoff history into carried-forward balances, so the ids in the browser
-   are only part of the story; the server resolves the name against the whole
-   tab. See deleteByCounterparty in Code.gs.
+   A row on either is not a record: it is one COUNTERPARTY, summarising a ledger
+   (sales/receipts/credit notes for a debtor; invoices/payments/credit notes for
+   an OEM). Ticking it means "this account and everything filed under the name",
+   so the selection is keyed by nameKey rather than by row id — which is also
+   what makes it safe to send. The transaction feed collapses pre-cutoff history
+   into carried-forward balances, so the ids in the browser are only part of the
+   story; the server resolves the name against the whole tab. See
+   deleteByCounterparty in Code.gs.
+
+   ONE code path for both, deliberately. Two would be two places for the
+   permission rules and the warning wording to drift apart.
    ========================================================================= */
-var ACCOUNT_SEL = "debtorAccount";
+var ACCOUNT_KINDS = {
+  debtor: {
+    sel: "debtorAccount", entity: "debtorTxn", noun: "debtor", nameOf: function (r) { return r.debtorName; },
+    ageing: function () { return model.ageing.byDebtor; },
+    feed: function () { return state.debtorTxns; },
+    holds: "credit sales, cash receipts and credit notes"
+  },
+  oem: {
+    sel: "oemAccount", entity: "oemTxn", noun: "OEM", nameOf: function (r) { return r.oem; },
+    ageing: function () { return model.oemAgeing.byOem; },
+    feed: function () { return state.oemInvoices; },
+    holds: "invoices, payments and credit notes"
+  }
+};
 
-function accountSelectBox(name) {
-  var on = !!selectionFor(ACCOUNT_SEL)[nameKeyOf(name)];
+function accountKind(kind) { return ACCOUNT_KINDS[kind]; }
+
+function accountSelectBox(kind, name) {
+  var k = accountKind(kind);
+  var on = !!selectionFor(k.sel)[nameKeyOf(name)];
   return '<input type="checkbox" data-act="account-select" data-nopreserve="1"' +
-    ' data-sel="' + attr(ACCOUNT_SEL) + '" data-key="' + attr(nameKeyOf(name)) + '"' +
+    ' data-kind="' + attr(kind) + '" data-key="' + attr(nameKeyOf(name)) + '"' +
     (on ? " checked" : "") +
-    ' title="Select this debtor and every transaction filed under the name"' +
+    ' title="Select this ' + attr(k.noun) + ' and every transaction filed under the name"' +
     ' aria-label="Select ' + attr(name) + '" />';
 }
 
-function accountHeaderBox(names) {
+function accountHeaderBox(kind, names) {
   if (!names.length) return '<th style="width:28px"></th>';
-  var sel = selectionFor(ACCOUNT_SEL);
+  var k = accountKind(kind);
+  var sel = selectionFor(k.sel);
   var keys = names.map(nameKeyOf);
-  var allOn = keys.every(function (k) { return !!sel[k]; });
+  var allOn = keys.every(function (key) { return !!sel[key]; });
   return '<th style="width:28px"><input type="checkbox" data-act="account-page-select" data-nopreserve="1"' +
-    ' data-sel="' + attr(ACCOUNT_SEL) + '" data-keys="' + attr(keys.join(",")) + '"' +
+    ' data-kind="' + attr(kind) + '" data-keys="' + attr(keys.join(",")) + '"' +
     (allOn ? " checked" : "") +
-    ' title="Select every debtor on this page" aria-label="Select every debtor on this page" /></th>';
+    ' title="Select every ' + attr(k.noun) + ' on this page"' +
+    ' aria-label="Select every ' + attr(k.noun) + ' on this page" /></th>';
 }
 
-/* How many transactions the browser can actually SEE for these debtors. It is a
-   floor, not a total: anything before the feed cutoff was collapsed into a
-   carried-forward balance and is not in state.debtorTxns. The confirm says so
-   rather than quoting a number that would be wrong. */
-function visibleTxnsFor(keys) {
-  return state.debtorTxns.filter(function (r) {
-    return keys.indexOf(nameKeyOf(r.debtorName)) >= 0;
+/* How many transactions the browser can actually SEE for these accounts. It is
+   a FLOOR, not a total: anything before the feed cutoff was collapsed into a
+   carried-forward balance and is not in the feed at all. Everything that shows
+   this number says "at least", because quoting it as a total would be wrong. */
+function visibleTxnsFor(kind, keys) {
+  var k = accountKind(kind);
+  return k.feed().filter(function (r) {
+    return keys.indexOf(nameKeyOf(k.nameOf(r))) >= 0;
   });
 }
 
-function accountSelectionBar(rowsOnScreen) {
-  var keys = selectedIds(ACCOUNT_SEL);
+function accountSelectionBar(kind, rowsOnScreen) {
+  var k = accountKind(kind);
+  var keys = selectedIds(k.sel);
   if (!keys.length) return "";
-  var picked = rowsOnScreen.filter(function (d) { return keys.indexOf(nameKeyOf(d.debtorName)) >= 0; });
-  var usd = picked.reduce(function (a, d) { return a + d.totalOutstanding; }, 0);
-  var seen = visibleTxnsFor(keys).length;
+  var picked = rowsOnScreen.filter(function (r) { return keys.indexOf(nameKeyOf(k.nameOf(r))) >= 0; });
+  var usd = picked.reduce(function (a, r) { return a + r.totalOutstanding; }, 0);
+  var seen = visibleTxnsFor(kind, keys).length;
+  var many = keys.length !== 1;
   return '<div class="tcf-selbar">' + ico("alert", 14) +
-    '<span><strong>' + keys.length + ' debtor' + (keys.length === 1 ? "" : "s") + ' selected</strong>' +
+    '<span><strong>' + keys.length + ' ' + esc(k.noun) + (many ? "s" : "") + ' selected</strong>' +
     (usd ? ' · ' + esc(fmtUSD(usd)) + ' outstanding' : "") +
     ' · at least ' + seen + ' transaction' + (seen === 1 ? "" : "s") + '</span>' +
     '<div class="tcf-nav-spacer"></div>' +
-    btn("account-sel-clear", "Clear", { cls: "tcf-btn-ghost" }) +
-    saveBtn("account-sel-delete", "Delete " + keys.length + " debtor" + (keys.length === 1 ? "" : "s"),
-      { cls: "tcf-btn-danger", icon: "trash" }) +
+    btn("account-sel-clear", "Clear", { cls: "tcf-btn-ghost", data: ' data-kind="' + attr(kind) + '"' }) +
+    saveBtn("account-sel-delete", "Delete " + keys.length + " " + k.noun + (many ? "s" : ""),
+      { cls: "tcf-btn-danger", icon: "trash", data: ' data-kind="' + attr(kind) + '"' }) +
     '</div>';
 }
 
@@ -1714,42 +1771,43 @@ function accountSelectionBar(rowsOnScreen) {
    the click handler, because the WORDING is the safety feature here: it is the
    only place the user is told that the delete reaches rows the page never
    showed them. A test asserts every clause of it. */
-function buildAccountDeleteConfirm() {
-  var keys = selectedIds(ACCOUNT_SEL);
+function buildAccountDeleteConfirm(kind) {
+  var k = accountKind(kind);
+  if (!k) return false;
+  var keys = selectedIds(k.sel);
   if (!keys.length) return false;
-  var rows = model.ageing.byDebtor.filter(function (d) {
-    return keys.indexOf(nameKeyOf(d.debtorName)) >= 0;
-  });
+  var rows = k.ageing().filter(function (r) { return keys.indexOf(nameKeyOf(k.nameOf(r))) >= 0; });
   /* Sent as NAMES, not ids — see accountSelectBox. Taken from the ageing list
-     where possible, and from the transaction feed for a debtor whose balance has
-     netted to nothing and so has no ageing row at all. */
-  var names = rows.map(function (d) { return d.debtorName; });
-  keys.forEach(function (k) {
-    if (names.some(function (n) { return nameKeyOf(n) === k; })) return;
-    var hit = state.debtorTxns.filter(function (r) { return nameKeyOf(r.debtorName) === k; })[0];
-    if (hit) names.push(hit.debtorName);
+     where possible, and from the transaction feed for an account whose balance
+     has netted to nothing and so has no ageing row at all. */
+  var names = rows.map(function (r) { return k.nameOf(r); });
+  keys.forEach(function (key) {
+    if (names.some(function (n) { return nameKeyOf(n) === key; })) return;
+    var hit = k.feed().filter(function (r) { return nameKeyOf(k.nameOf(r)) === key; })[0];
+    if (hit) names.push(k.nameOf(hit));
   });
   if (!names.length) return false;
-  var usd = rows.reduce(function (a, d) { return a + d.totalOutstanding; }, 0);
-  var seen = visibleTxnsFor(keys).length;
+  var usd = rows.reduce(function (a, r) { return a + r.totalOutstanding; }, 0);
+  var seen = visibleTxnsFor(kind, keys).length;
   var many = names.length !== 1;
+  var owed = kind === "debtor" ? "outstanding AR" : "owed to " + (many ? "those OEMs" : "that OEM");
   ui.confirm = {
     eyebrow: "Delete",
-    okLabel: "Delete " + names.length + " debtor" + (many ? "s" : ""),
-    title: "Delete " + names.length + " debtor" + (many ? "s" : "") +
+    okLabel: "Delete " + names.length + " " + k.noun + (many ? "s" : ""),
+    title: "Delete " + names.length + " " + k.noun + (many ? "s" : "") +
       " and every transaction filed under " + (many ? "those names" : "the name") + "?",
     body: names.slice(0, 6).map(function (n) {
         return '<span class="tcf-mono tcf-td-sub">' + esc(n) + '</span>';
       }).join("<br>") +
       (names.length > 6 ? '<br><span class="tcf-td-sub">…and ' + (names.length - 6) + ' more.</span>' : "") +
-      '<br><br>This deletes the <strong>credit sales, cash receipts and credit notes</strong> ' +
+      '<br><br>This deletes the <strong>' + esc(k.holds) + '</strong> ' +
       'for ' + (many ? "these names" : "this name") + ' — not just the ' + seen +
       ' visible on this page. Anything older than the forecast window is summarised ' +
       'rather than listed here, and it goes too' +
-      (usd ? ', clearing <span class="tcf-mono">' + esc(fmtUSD(usd)) + '</span> of outstanding AR' : "") +
+      (usd ? ', clearing <span class="tcf-mono">' + esc(fmtUSD(usd)) + '</span> of ' + esc(owed) : "") +
       '.<br><br>They stop counting towards the forecast immediately. Every one leaves a record ' +
       'on the History tab, and you can undo the whole lot for a few seconds afterwards.',
-    action: "delete-accounts", names: names, error: ""
+    action: "delete-accounts", kind: kind, entity: k.entity, names: names, error: ""
   };
   return true;
 }
@@ -1817,8 +1875,9 @@ function renderApp() {
       '<span><strong>This page is newer than the deployed script.</strong> ' +
       'It expects VAULT backend v' + REQUIRED_API_VERSION + ' but the deployment is v' +
       state.apiVersion + ', so newer entry types — credit notes, deleting several rows ' +
-      'at once, NEGATIVE AMOUNTS on debtor or OEM records, and deleting a debtor ' +
-      'account with all its transactions — will be refused. ' +
+      'at once, NEGATIVE AMOUNTS on debtor or OEM records, deleting a debtor or OEM ' +
+      'account with all its transactions, and the forecast from/to window — will be ' +
+      'refused. ' +
       'Everything else works normally.<br>' +
       'To fix it: in the Apps Script editor, paste the current Code.gs, then ' +
       '<strong>Deploy → Manage deployments → the pencil → Version: New version → Deploy</strong>, ' +
@@ -2200,9 +2259,9 @@ function renderDebtors() {
   html += '<section class="tcf-panel"><div class="tcf-panel-title">AR ageing by debtor</div>' +
     renderFilters(vkey, { searchFields: ["debtorName"], searchPlaceholder: "Debtor name" }) +
     renderCount(vkey, view) +
-    (mayPick ? accountSelectionBar(m.ageing.byDebtor) : "") +
+    (mayPick ? accountSelectionBar("debtor", m.ageing.byDebtor) : "") +
     '<table class="tcf-table"><thead><tr>' +
-    (mayPick ? accountHeaderBox(pageNames) : "") +
+    (mayPick ? accountHeaderBox("debtor", pageNames) : "") +
     sortableTh(vkey, "debtorName", "Debtor") +
     sortableTh(vkey, "totalOutstanding", "Outstanding") +
     sortableTh(vkey, "overdue", "Overdue") +
@@ -2211,8 +2270,8 @@ function renderDebtors() {
     '<th>Unallocated</th><th title="Credit notes issued to this customer — these reduce the balance but are not cash">Credit notes</th><th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (d) {
-    html += '<tr' + (mayPick && selectionFor(ACCOUNT_SEL)[nameKeyOf(d.debtorName)] ? ' class="tcf-row-warn"' : "") + '>' +
-      (mayPick ? '<td>' + accountSelectBox(d.debtorName) + '</td>' : "") +
+    html += '<tr' + (mayPick && selectionFor(ACCOUNT_KINDS.debtor.sel)[nameKeyOf(d.debtorName)] ? ' class="tcf-row-warn"' : "") + '>' +
+      (mayPick ? '<td>' + accountSelectBox("debtor", d.debtorName) + '</td>' : "") +
       '<td>' + esc(d.debtorName) + '</td>' +
       '<td class="tcf-mono">' + esc(fmtUSD(d.totalOutstanding)) + '</td>' +
       '<td class="tcf-mono ' + (d.overdue > 0 ? "tcf-neg" : "") + '">' + (d.overdue > 0 ? esc(fmtUSD(d.overdue)) : dash()) + '</td>' +
@@ -2344,10 +2403,17 @@ function renderOem() {
     html += '</section>';
   }
 
+  /* Same as the AR list: deleting an OEM account is deleting its whole ledger,
+     so the tick column only appears for a role that may delete. */
+  var mayPick = canDeleteAny();
+  var pageNames = view.rows.map(function (o) { return o.oem; });
+
   html += '<section class="tcf-panel"><div class="tcf-panel-title">Balances by OEM</div>' +
     renderFilters(vkey, { searchFields: ["oem"], searchPlaceholder: "OEM name" }) +
     renderCount(vkey, view) +
+    (mayPick ? accountSelectionBar("oem", m.oemAgeing.byOem) : "") +
     '<table class="tcf-table"><thead><tr>' +
+    (mayPick ? accountHeaderBox("oem", pageNames) : "") +
     sortableTh(vkey, "oem", "OEM") +
     sortableTh(vkey, "totalOutstanding", "Outstanding") +
     sortableTh(vkey, "overdue", "Overdue") +
@@ -2357,7 +2423,8 @@ function renderOem() {
     '<th title="Credit notes received from this OEM — these reduce what we owe but no cash moved">Credit notes</th><th></th></tr></thead><tbody>';
 
   view.rows.forEach(function (o) {
-    html += '<tr>' +
+    html += '<tr' + (mayPick && selectionFor(ACCOUNT_KINDS.oem.sel)[nameKeyOf(o.oem)] ? ' class="tcf-row-warn"' : "") + '>' +
+      (mayPick ? '<td>' + accountSelectBox("oem", o.oem) + '</td>' : "") +
       '<td>' + esc(o.oem) + '</td>' +
       '<td class="tcf-mono">' + esc(fmtUSD(o.totalOutstanding)) + '</td>' +
       '<td class="tcf-mono ' + (o.overdue > 0 ? "tcf-neg" : "") + '">' + (o.overdue > 0 ? esc(fmtUSD(o.overdue)) : dash()) + '</td>' +
@@ -2368,7 +2435,7 @@ function renderOem() {
       '<td class="tcf-mono tcf-td-sub">' + (o.creditNotesUSD ? esc(fmtUSD(o.creditNotesUSD)) : dash()) + '</td>' +
       '<td>' + btn("drill", "Ledger", { cls: "tcf-btn-ghost", data: ' data-kind="oem" data-name="' + attr(o.oem) + '"' }) + '</td></tr>';
   });
-  if (!view.rows.length) html += '<tr><td colspan="8" class="tcf-empty">' +
+  if (!view.rows.length) html += '<tr><td colspan="' + (mayPick ? 9 : 8) + '" class="tcf-empty">' +
     (m.oemAgeing.byOem.length ? "Nothing matches these filters." : "No OEM invoices logged yet.") + '</td></tr>';
   html += '</tbody></table>' + renderPager(vkey, view) + '</section></div>';
   return html;
@@ -2833,11 +2900,13 @@ function renderSettings() {
     '<section class="tcf-panel"><div class="tcf-panel-title">Forecast assumptions</div><div class="tcf-form-grid">' +
     fieldNum("Default AR collection rate (%)", "settings.collectionRatePct", "%") +
     fieldNum("Minimum cash buffer (USD)", "settings.minBufferUSD", "$") +
-    '<div class="tcf-field"><label>Forecast start (Monday)</label>' +
-    '<input class="tcf-input" type="date" data-draft="settings.startDate" value="' + attr(drafts.settings.startDate) + '" />' +
-    '<div class="tcf-field-sub">Snapped to the Monday of whatever week you pick.</div></div>' +
-    fieldNum("Number of weeks shown", "settings.numWeeks", "#", "1 to 16.") +
+    '<div class="tcf-field"><label>Forecast from</label>' +
+    '<input class="tcf-input" type="date" data-draft="settings.startDate" data-live="forecast" value="' + attr(drafts.settings.startDate) + '" />' +
     '</div>' +
+    '<div class="tcf-field"><label>Forecast to</label>' +
+    '<input class="tcf-input" type="date" data-draft="settings.endDate" data-live="forecast" value="' + attr(drafts.settings.endDate) + '" />' +
+    '</div>' +
+    '</div>' + forecastWindowNote() +
     (may ? '<div style="display:flex;justify-content:flex-end;margin-top:12px">' + saveBtn("settings-save", "Save settings", {}) + '</div>' : "") +
     '</section>';
 
@@ -3327,6 +3396,52 @@ function downloadTemplate() {
   }
 }
 
+/* The line under the two date boxes. The forecast runs in whole Mon-Sun weeks,
+   so a range typed mid-week is widened to cover them — and that is exactly the
+   thing the old single "Forecast start" field did SILENTLY, which is why it read
+   as "the date I set does not stick". Here the resulting window is spelled out
+   before anything is saved, and the snap is named when it actually happened. */
+function forecastWindowNote() {
+  return '<div id="tcf-forecast-window">' + forecastWindowInner() + '</div>';
+}
+
+/* Patched in place as the dates change — a full render() on every keystroke
+   would take focus out of the date input mid-edit, which is the same reason
+   updatePositionsLive exists. */
+function updateForecastWindowLive() {
+  var host = document.getElementById("tcf-forecast-window");
+  if (host) host.innerHTML = forecastWindowInner();
+}
+
+function forecastWindowInner() {
+  var from = drafts.settings.startDate, to = drafts.settings.endDate;
+  if (!isValidIso(from) || !isValidIso(to)) {
+    return '<p class="tcf-note" style="margin-top:8px">Pick both dates to set the forecast window.</p>';
+  }
+  var weeks = weeksBetweenIso(from, to);
+  if (weeks < 1) {
+    return '<p class="tcf-note tcf-neg" style="margin-top:8px">' + ico("alert", 13) +
+      ' <strong>“To” is before “From”.</strong> The forecast needs at least one week.</p>';
+  }
+  if (weeks > 52) {
+    return '<p class="tcf-note tcf-neg" style="margin-top:8px">' + ico("alert", 13) +
+      ' <strong>That window is ' + weeks + ' weeks.</strong> The forecast covers at most 52 — ' +
+      'bring the end date back, or move the start forward.</p>';
+  }
+  var realStart = mondayOfIso(from);
+  var realEnd = forecastEndIso(realStart, weeks);
+  var snapped = realStart !== from || realEnd !== to;
+  return '<p class="tcf-note" style="margin-top:8px">' +
+    '<strong>' + weeks + ' week' + (weeks === 1 ? "" : "s") + '</strong> · ' +
+    esc(fmtDateLong(realStart)) + ' → ' + esc(fmtDateLong(realEnd)) +
+    (snapped
+      ? ' <span class="tcf-td-sub">— widened to whole Monday–Sunday weeks, so both dates you ' +
+        'picked fall inside the window. The ledger, the weekly collection rates and the ' +
+        'closed-week rule all work in whole weeks.</span>'
+      : ' <span class="tcf-td-sub">— already whole weeks.</span>') +
+    '</p>';
+}
+
 function renderBulkModal() {
   var b = ui.bulk, cfg = bulkConfig();
   var html = '<div class="tcf-modal-backdrop" data-act="bulk-close-bg"><div class="tcf-modal tcf-modal-lg" data-stop="1">' +
@@ -3635,7 +3750,10 @@ function buildExportSheets() {
   return {
     "Settings": [{
       ngnRate: s.ngnRate, ghsRate: s.ghsRate, collectionRatePct: s.collectionRatePct,
-      minBufferUSD: s.minBufferUSD, numWeeks: s.numWeeks, startDate: s.startDate,
+      minBufferUSD: s.minBufferUSD, numWeeks: s.numWeeks,
+      "Forecast From": s.startDate,
+      "Forecast To": isValidIso(s.startDate) ? forecastEndIso(s.startDate, Number(s.numWeeks) || 12) : "",
+      startDate: s.startDate,
       serverDate: state.today, exportedBy: state.actor.name, exportedAt: new Date().toISOString()
     }],
     "Collection Overrides": Object.keys(state.collectionOverrides).sort().map(function (k) {
@@ -4179,9 +4297,9 @@ appEl.addEventListener("click", function (ev) {
       render();
       break;
 
-    /* ---- account (whole-debtor) selection ---- */
+    /* ---- account (whole-counterparty) selection: debtors and OEMs ---- */
     case "account-select": {
-      var asSel = selectionFor(ACCOUNT_SEL);
+      var asSel = selectionFor(accountKind(el.getAttribute("data-kind")).sel);
       var asKey = el.getAttribute("data-key");
       if (el.checked) asSel[asKey] = true; else delete asSel[asKey];
       render();
@@ -4189,18 +4307,18 @@ appEl.addEventListener("click", function (ev) {
     }
     case "account-page-select": {
       var apKeys = (el.getAttribute("data-keys") || "").split(",").filter(Boolean);
-      var apSel = selectionFor(ACCOUNT_SEL);
+      var apSel = selectionFor(accountKind(el.getAttribute("data-kind")).sel);
       if (el.checked) apKeys.forEach(function (k) { apSel[k] = true; });
       else apKeys.forEach(function (k) { delete apSel[k]; });
       render();
       break;
     }
     case "account-sel-clear":
-      clearSelection(ACCOUNT_SEL);
+      clearSelection(accountKind(el.getAttribute("data-kind")).sel);
       render();
       break;
     case "account-sel-delete":
-      if (buildAccountDeleteConfirm()) render();
+      if (buildAccountDeleteConfirm(el.getAttribute("data-kind"))) render();
       break;
     case "sel-delete": {
       var sdEntity = el.getAttribute("data-entity");
@@ -4260,9 +4378,19 @@ appEl.addEventListener("click", function (ev) {
       break;
 
     /* ---- settings ---- */
-    case "settings-save":
+    case "settings-save": {
+      /* Caught here as well as on the server: the window is the one setting a
+         person can get wrong by typing two perfectly valid dates, and a round
+         trip to be told so is a worse answer than saying it under the field. */
+      var wf = drafts.settings.startDate, wt = drafts.settings.endDate;
+      if (isValidIso(wf) && isValidIso(wt)) {
+        var wn = weeksBetweenIso(wf, wt);
+        if (wn < 1) { flashToast("error", "The forecast “to” date is before the “from” date."); return; }
+        if (wn > 52) { flashToast("error", "That window is " + wn + " weeks. The forecast covers at most 52."); return; }
+      }
       mutate("saveSettings", { settings: drafts.settings }, "Settings saved");
       break;
+    }
 
     /* ---- adds ---- */
     case "debtor-add":
@@ -4340,16 +4468,17 @@ appEl.addEventListener("click", function (ev) {
     case "confirm-go": {
       var c = ui.confirm;
       if (c.action === "delete-accounts") {
-        mutate("deleteByCounterparty", { entity: "debtorTxn", names: c.names },
+        var ak = accountKind(c.kind);
+        mutate("deleteByCounterparty", { entity: c.entity, names: c.names },
           function (res) {
             return "Deleted " + res.removed + " transaction" + (res.removed === 1 ? "" : "s") +
-              " across " + res.names + " debtor" + (res.names === 1 ? "" : "s");
+              " across " + res.names + " " + ak.noun + (res.names === 1 ? "" : "s");
           },
           {
             undo: true,
             onDone: function (res) {
-              ui.undo = { entity: "debtorTxn", rows: res.restored };
-              clearSelection(ACCOUNT_SEL);
+              ui.undo = { entity: c.entity, rows: res.restored };
+              clearSelection(ak.sel);
               ui.confirm = null;
             },
             onError: function (err) { ui.confirm.error = describeError(err); }
@@ -4576,6 +4705,7 @@ function handleBinding(ev) {
   if (t.hasAttribute("data-draft")) {
     setDraft(t.getAttribute("data-draft"), t.value);
     if (t.getAttribute("data-live") === "positions") updatePositionsLive();
+    if (t.getAttribute("data-live") === "forecast") updateForecastWindowLive();
     if (t.hasAttribute("data-rerender")) render();
   }
 }
