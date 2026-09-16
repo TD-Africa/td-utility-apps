@@ -681,6 +681,28 @@ function purposeList(){
    The mismatch warning on the dashboard is deliberately left comparing against
    BRAND. It is not about presentation — it catches a page pointed at another
    company's Sheet, and it should still fire when it is. */
+/* The Sheet's own name for a pay element, where it has one. Task Systems calls
+   230115 "Staff transport deduction" and TD Africa calls it "Staff purchase";
+   the column, the arithmetic and the posting are identical and only the word
+   differs, so the word is a setting rather than a fork.
+
+   A Sheet that has never set one sends an empty map and every label here
+   resolves to the built-in text — which is why this is safe to call from every
+   heading without changing anything for anybody. */
+/* The staff types this Sheet uses. A company that has not listed any gets the
+   built-in three, which is also what an older script sends. */
+const BUILTIN_STAFF_TYPES = ['SALES', 'SUPPORT', 'TD SERVICES'];
+
+function staffTypeList(){
+  const ref = STATE.refData || {};
+  return (ref.staffTypes && ref.staffTypes.length) ? ref.staffTypes : BUILTIN_STAFF_TYPES;
+}
+
+function fieldLabel(field, builtIn){
+  const m = (STATE.settings && STATE.settings.fieldLabels) || {};
+  return m[field] || builtIn;
+}
+
 function brandOrg(){
   const s = STATE.settings || {};
   return String(s.orgName || '').trim() || BRAND.org;
@@ -1083,9 +1105,16 @@ function renderTopBar(){
          scheme and the header is the only thing on screen that tells a person
          whose payroll they are looking at. */
       '<div class="top-h1">' + esc(brandOrg()) + ' &mdash; ' + esc(brandApp()) + '</div>' +
-      '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' + counts.sales + ' sales &nbsp;|&nbsp; ' +
-        counts.support + ' support &nbsp;|&nbsp; ' + counts.tds + ' TD Services &nbsp;|&nbsp; ' +
-        'all figures in naira (' + NAIRA + ')</div>' +
+      /* One entry per staff type this company actually uses, in the order
+         RefData lists them. The old three-way split is the fallback for a
+         script older than this page. */
+      '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' +
+        (Array.isArray(counts.byType) && counts.byType.length
+          ? counts.byType.map(function(t){
+              return t.count + ' ' + esc(String(t.type).toLowerCase()); }).join(' &nbsp;|&nbsp; ')
+          : counts.sales + ' sales &nbsp;|&nbsp; ' + counts.support + ' support &nbsp;|&nbsp; ' +
+            counts.tds + ' TD Services') +
+        ' &nbsp;|&nbsp; all figures in naira (' + NAIRA + ')</div>' +
     '</div></div>' +
     '<div class="top-r">' +
       '<button class="top-mon' + (closed ? ' closed' : '') + '" data-act="open-periods">' +
@@ -1649,8 +1678,8 @@ function registerControls(mode){
       'data-filter="reg.' + mode + ':q" value="' + attr(f.q) + '">' +
     selectHtml(mode + '-grp', [['','All salary groups']].concat((ref.salaryGroups || [])
       .map(function(g){ return [g, g]; })), f.grp, {act:'filter:reg.' + mode + ':grp'}) +
-    selectHtml(mode + '-type', [['','Sales + support + TDS'],['SALES','Sales only'],
-      ['SUPPORT','Support only'],['TD SERVICES','TD Services']], f.type,
+    selectHtml(mode + '-type', [['','All staff types']].concat(staffTypeList()
+      .map(function(t){ return [t, t]; })), f.type,
       {act:'filter:reg.' + mode + ':type'}) +
     selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
       .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'}) +
@@ -1800,8 +1829,8 @@ function viewRegister(mode){
         sortHeader(mode, 'other_allow', 'Other allow', 'r') +
         sortHeader(mode, 'sec_total_earn', 'Total earnings', 'r') +
         sortHeader(mode, 'vol_pension', 'Vol pension 230111', 'r') +
-        sortHeader(mode, 'staff_purchase', 'Staff purch 230115', 'r') +
-        sortHeader(mode, 'contract_welfare', 'Ctr welfare 230102', 'r') +
+        sortHeader(mode, 'staff_purchase', fieldLabel('staff_purchase', 'Staff purch 230115'), 'r') +
+        sortHeader(mode, 'contract_welfare', fieldLabel('contract_welfare', 'Ctr welfare 230102'), 'r') +
         /* Device financing is device financing only. The prototype added the
            laptop scheme into this column AND showed it again under its own
            heading, double-counting it on screen (defect D21). */
@@ -1878,7 +1907,8 @@ function viewRegister(mode){
   return '<div class="sec-title">' + esc(REGISTER_TITLES[mode]) +
       ' <span class="sub">' + esc(periodLabel(STATE.period)) + '</span>' +
       (canEditNow('editStaff')
-        ? '<button class="btn btn-f" data-act="new-staff">+ Add staff</button>' : '') +
+        ? '<button class="btn btn-f" data-act="new-staff">+ Add staff</button>' +
+          '<button class="btn btn-w" data-act="staff-upload">Import staff</button>' : '') +
     '</div>' +
     registerControls(mode) +
     (p.total === 0
@@ -2787,10 +2817,179 @@ function renderOverlay(){
     user: modalUser, period: modalPeriod, controls: modalControls,
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
     bulkPayslip: modalBulkPayslip, renumber: modalRenumber, schemeEdit: modalSchemeEdit,
-    fieldChange: modalFieldChange,
+    fieldChange: modalFieldChange, staffUpload: modalStaffUpload,
     diagnostics: modalDiagnostics
   }[m.kind];
   box.innerHTML = body ? body(m) : '';
+}
+
+/* ============================================================
+   BULK STAFF UPLOAD
+   ------------------------------------------------------------
+   A block pasted straight out of Excel arrives tab-separated; one saved as a
+   file arrives comma-separated with quotes. Both are common and neither is
+   worth asking a person to convert, so both are read.
+   ============================================================ */
+
+/* Tabs win when the first line has more of them than commas. Staff names are
+   held "SURNAME, FIRST" — the comma is in the data — so counting commas alone
+   would read a tab-separated paste as CSV and split every name in half. */
+function parsePasted(text){
+  const body = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if(!body) return [];
+  const first = body.split('\n')[0];
+  const tabs = (first.match(/\t/g) || []).length;
+  const commas = (first.match(/,/g) || []).length;
+  if(tabs >= commas){
+    return body.split('\n').map(function(line){ return line.split('\t')
+      .map(function(c){ return c.trim(); }); });
+  }
+  /* CSV, quotes and all. A doubled quote inside a quoted field is one quote. */
+  const rows = [];
+  let row = [], cell = '', inQ = false;
+  for(let i = 0; i < body.length; i++){
+    const ch = body[i];
+    if(inQ){
+      if(ch === '"'){
+        if(body[i+1] === '"'){ cell += '"'; i++; } else inQ = false;
+      } else cell += ch;
+    } else if(ch === '"'){ inQ = true; }
+    else if(ch === ','){ row.push(cell.trim()); cell = ''; }
+    else if(ch === '\n'){ row.push(cell.trim()); rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  row.push(cell.trim());
+  if(row.length > 1 || row[0] !== '') rows.push(row);
+  return rows;
+}
+
+async function downloadStaffTemplate(){
+  try{
+    const t = await rpc('staffUploadTemplate', {});
+    /* Header only. A template with example rows in it gets imported by
+       somebody in a hurry. */
+    downloadCsv('PaySync_staff_template.csv', [t.columns]);
+    toast('Template downloaded — ' + t.columns.length + ' columns, emp_no and name required.');
+  }catch(err){ toast(String(err.message || err), true); }
+}
+
+async function checkStaffUpload(){
+  const text = val('su-text');
+  const table = parsePasted(text);
+  if(table.length < 2){
+    STATE.modalError = 'Paste at least a header line and one row under it.';
+    return render();
+  }
+  STATE.modal = {kind:'staffUpload', stage:'loading', text:text, table:table};
+  render();
+  try{
+    const preview = await rpc('previewStaffUpload', {period:STATE.period, table:table});
+    STATE.modal = {kind:'staffUpload', stage:'preview', text:text, table:table, preview:preview};
+  }catch(err){
+    STATE.modal = {kind:'staffUpload', stage:'paste', text:text};
+    STATE.modalError = String(err.message || err);
+  }
+  render();
+}
+
+async function commitStaffUpload(){
+  const m = STATE.modal;
+  STATE.busy = 'Importing staff';
+  render();
+  try{
+    const res = await rpc('commitStaffUpload', {period:STATE.period, table:m.table});
+    STATE.modal = null;
+    toast(res.message);
+    await reload();
+  }catch(err){
+    toast(String(err.message || err), true);
+  }finally{
+    STATE.busy = null;
+    render();
+  }
+}
+
+function modalStaffUpload(m){
+  if(m.stage === 'loading'){
+    return modalShell({cls:'narrow', title:'Import staff',
+      body:'<div class="empty">Checking the rows…</div>'});
+  }
+
+  if(m.stage === 'preview'){
+    const p = m.preview;
+    const bad = p.errors.length > 0;
+    return modalShell({
+      cls:'wide', title:'Import staff', sub:p.label,
+      body:
+        (bad
+          ? '<div class="note red"><strong>' + p.errors.length + ' row(s) cannot be read, so ' +
+            'nothing will be imported.</strong><br>One bad row stops the whole file — importing ' +
+            'the rest would leave you working out which person is missing.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr><th class="hc r">Line</th>' +
+            '<th class="hc">Employee</th><th class="hc">What is wrong</th></tr></thead><tbody>' +
+            p.errors.slice(0, 40).map(function(e){
+              return '<tr><td class="r muted">' + esc(e.row) + '</td><td>' +
+                esc(e.emp_no || '') + '</td><td>' + esc(e.message) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>' +
+            (p.errors.length > 40 ? '<div class="note">…and ' + (p.errors.length - 40) +
+              ' more.</div>' : '')
+          : '<div class="rec" style="margin:0 0 12px">' +
+              '<div class="rr"><span class="rlbl">New records</span><span class="rval">' +
+                p.creates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Existing records updated</span>' +
+                '<span class="rval">' + p.updates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Total net pay now</span><span class="rval">' +
+                esc(money(p.netBefore)) + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Total net pay after</span><span class="rval">' +
+                esc(money(p.netAfter)) + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Change</span><span class="rval" style="color:' +
+                (p.netChange > 0 ? 'var(--grn)' : p.netChange < 0 ? 'var(--red)' : 'inherit') +
+                '">' + esc(signed(p.netChange)) + '</span></div>' +
+            '</div>' +
+            '<div class="sub" style="margin-bottom:6px">First ' + p.sample.length +
+              ' rows, as they will be recorded. Business group, purpose and every total are ' +
+              'worked out here, not taken from the file.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr>' +
+              '<th class="hc r">Line</th><th class="hc">Action</th><th class="hc">Emp no</th>' +
+              '<th class="hc">Name</th><th class="hc">Staff type</th>' +
+              '<th class="hc">Business group</th><th class="hc">Purpose</th>' +
+              '<th class="hc r">Net payroll</th><th class="hc r">Net security</th>' +
+            '</tr></thead><tbody>' +
+            p.sample.map(function(s){
+              return '<tr><td class="r muted">' + esc(s.line) + '</td>' +
+                '<td><span class="bdg ' + (s.action === 'create' ? 'bNEW' : 'bEXI') + '">' +
+                  esc(s.action) + '</span></td>' +
+                '<td class="muted">' + esc(s.emp_no) + '</td><td class="nm">' + esc(s.name) + '</td>' +
+                '<td>' + esc(s.staff_type) + '</td><td>' + esc(s.bg || '—') + '</td>' +
+                '<td>' + esc(s.purpose || '—') + '</td>' +
+                '<td class="net">' + esc(money(s.netPay)) + '</td>' +
+                '<td class="net">' + esc(money(s.netSecurity)) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>'),
+      footer:
+        '<button class="btn btn-ghost" data-act="staff-upload-back">Back</button>' +
+        (bad ? '' :
+          '<button class="btn btn-f" data-act="staff-upload-commit">Import ' +
+            (p.creates + p.updates) + ' record(s)</button>')
+    });
+  }
+
+  return modalShell({
+    cls:'wide', title:'Import staff', sub:periodLabel(STATE.period),
+    body:
+      '<div class="note">Paste straight out of Excel, or paste a CSV. The first line must name ' +
+      'the columns — <strong>emp_no</strong> and <strong>name</strong> are required and every ' +
+      'other column is optional. A column you leave out keeps whatever the record already has.' +
+      '<br><br>Business group, net pay and every total are worked out from what you send, not ' +
+      'read from it, so they cannot disagree with the register.</div>' +
+      '<div class="fld"><label>Rows</label>' +
+      '<textarea id="su-text" rows="12" spellcheck="false" ' +
+      'style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px" ' +
+      'placeholder="emp_no&#9;name&#9;grade&#9;staff_type&#9;purpose&#10;' +
+      'TD0001&#9;SURNAME, FIRST NAME&#9;C10&#9;SUPPORT&#9;Financial"></textarea></div>',
+    footer:
+      '<button class="btn btn-w" data-act="staff-upload-template">Download the template</button>' +
+      '<button class="btn btn-f" data-act="staff-upload-check">Check the rows</button>'
+  });
 }
 
 function modalShell(opts){
@@ -2952,8 +3151,8 @@ function modalMovement(m){
             })), '') +
           '<span class="hint">Their pay comes from this grade’s salary structure.</span></div>' +
         '<div class="fld"><label>Staff type</label>' +
-          selectHtml('mv-nh-type', [['SUPPORT','SUPPORT'],['SALES','SALES'],
-            ['TD SERVICES','TD SERVICES']], 'SUPPORT') + '</div>' +
+          selectHtml('mv-nh-type', staffTypeList().map(function(t){ return [t, t]; }),
+            'SUPPORT') + '</div>' +
         '<div class="fld"><label>SAL_Dept</label>' +
           selectHtml('mv-nh-bu', [['','— none —']].concat((ref.businessUnits || [])
             .map(function(b){ return [b, b]; })), '') + '</div>' +
@@ -3026,6 +3225,9 @@ const REGISTER_FIELDS = {
     { field: 'vol_pension', label: 'Voluntary pension', code: '230111', effect: 'ded' },
     { field: 'staff_purchase', label: 'Staff purchase', code: '230115', effect: 'ded' },
     { field: 'contract_welfare', label: 'Contract welfare', code: '230102', effect: 'ded' },
+    /* Labels above are the built-in names, kept identical to the server's copy
+       so the equality test still holds. The Sheet's own names are applied when
+       the form is drawn, not here — see fieldLabel(). */
     { field: 'device_financing', label: 'Device financing', code: '230115', effect: 'ded' },
     { field: 'sec_tax', label: 'Security tax', code: '230103', effect: 'ded' },
     { field: 'sec_penalties', label: 'Security penalties', code: 'EMP account', effect: 'ded' },
@@ -3054,6 +3256,8 @@ const FIELD_LABELS = {
   special_sec:'Special security', commission:'Commission', contract_sec:'Contract staff security',
   other_allow:'Other security allowance', vol_pension:'Voluntary pension (230111)',
   staff_purchase:'Staff purchase (230115)', contract_welfare:'Contract welfare (230102)',
+  /* FIELD_LABELS is the built-in text; fieldLabelOf() below applies the Sheet's
+     overrides on top of it. */
   device_financing:'Device financing (230115)', sec_tax:'Security tax (230103)',
   sec_penalties:'Security penalties', laptop_scheme:'Laptop ownership scheme',
   simba_loan:'Simba fund loan', car_scheme1:'Car scheme', car_scheme2:'Car scheme (2)'
@@ -3101,8 +3305,8 @@ function modalStaff(m){
           selectHtml('st-salary_group', [['','—']].concat((ref.salaryGroups || [])
             .map(function(g){ return [g, g]; })), e ? e.salary_group : '') + '</div>' +
         '<div class="fld"><label>Staff type</label>' +
-          selectHtml('st-staff_type', [['SUPPORT','SUPPORT'],['SALES','SALES'],
-            ['TD SERVICES','TD SERVICES']], e ? e.staff_type : 'SUPPORT') + '</div>' +
+          selectHtml('st-staff_type', staffTypeList().map(function(t){ return [t, t]; }),
+            e ? e.staff_type : 'SUPPORT') + '</div>' +
         '<div class="fld"><label>SAL_Dept</label>' +
           selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
             .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
@@ -4691,6 +4895,18 @@ async function handleAction(act, arg, ev, el){
       case 'clear-selection':
         STATE.sel = {};
         return render();
+      case 'staff-upload':
+        STATE.modal = {kind:'staffUpload', stage:'paste'};
+        return render();
+      case 'staff-upload-back':
+        STATE.modal = {kind:'staffUpload', stage:'paste', text:STATE.modal.text};
+        return render();
+      case 'staff-upload-template':
+        return downloadStaffTemplate();
+      case 'staff-upload-check':
+        return checkStaffUpload();
+      case 'staff-upload-commit':
+        return commitStaffUpload();
       case 'bulk-payslip':
         if(!selCount()){ toast('Select some staff first.', true); return; }
         return openBulkPayslip(false);
