@@ -142,6 +142,11 @@
     background:var(--ink);color:#DDE3EE;border-radius:var(--radius);padding:11px 16px;font-size:12.5px;
     display:flex;align-items:flex-start;gap:10px;margin-bottom:20px;border-left:3px solid var(--gold);line-height:1.5;
   }
+  /* Target progress: billed, then open pipeline behind it on the same track. */
+  .tgt-track{position:relative;display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--border);}
+  .tgt-done{background:var(--p4);}
+  .tgt-open{background:var(--p2-line);}
+
   .policy-banner b{color:#fff;}
   .policy-banner .banner-act{margin-left:auto;flex:none;}
   /* A ghost button borrows the page's ink colour, and these sit on the dark
@@ -552,10 +557,13 @@ const STATE = {
   unlocking: false,
 
   refData: {businessGroups:[], businessUnitMap:{}, orderTypes:[], lossReasons:[], quoteValidityOptions:[], roles:[]},
-  settings: {fxRate:1650, agingThresholdDays:30, lostDeleteAfterDays:90, mistakeWindowDays:30, repScope:'unit'},
+  settings: {fxRate:1650, agingThresholdDays:30, lostDeleteAfterDays:90, mistakeWindowDays:30,
+    expiredDeleteAfterDays:0, repScope:'unit'},
   directory: [],
   opportunities: [],
   leakage: [],
+  targets: [],               // one per Business Unit per financial year, in USD
+  financialYear: {label:'', startDate:'', endDate:''},
   activity: null,           // lazily loaded by the Activity view
   importBatches: null,      // lazily loaded by the Settings view
   spreadsheetUrl: '',
@@ -1148,7 +1156,9 @@ function computeScopedOpportunities(){
   if(s.role === 'head'){
     return STATE.opportunities.filter(function(o){ return o.businessGroup === s.businessGroup; });
   }
-  const ownOnly = (STATE.settings.repScope !== 'unit') || !s.businessUnit;
+  /* A Business Unit Head always sees their whole unit; repScope only ever
+     narrows a rep. Mirrors scopeOpportunitiesForActor_. */
+  const ownOnly = !s.businessUnit || (s.role === 'rep' && STATE.settings.repScope !== 'unit');
   return STATE.opportunities.filter(function(o){
     if(o.businessGroup !== s.businessGroup) return false;
     if(s.businessUnit && o.businessUnit !== s.businessUnit) return false;
@@ -1216,11 +1226,16 @@ function repsInScope(list){
   list.forEach(function(o){ if(o.salesRep) names[o.salesRep] = true; });
   return Object.keys(names).sort();
 }
-/* The units a session may file against: their own if they are a rep, otherwise
-   every unit of the selected group. */
+/* Roles that live inside one Business Unit. Mirrors UNIT_BOUND_ROLES on the
+   server: a Rep and a Business Unit Head are both bounded by their unit and
+   differ only in what they may do there. */
+function isUnitBound(role){ return role === 'rep' || role === 'bu_head'; }
+
+/* The units a session may file against: their own if they work inside one,
+   otherwise every unit of the selected group. */
 function businessUnitsAvailable(businessGroup){
   const s = STATE.session;
-  if(s && s.role === 'rep' && s.businessUnit) return [s.businessUnit];
+  if(s && isUnitBound(s.role) && s.businessUnit) return [s.businessUnit];
   return STATE.refData.businessUnitMap[businessGroup] || [];
 }
 
@@ -1250,13 +1265,109 @@ function canDelete(o){
   return age !== null && age <= (Number(STATE.settings.mistakeWindowDays) || 30);
 }
 
-/* Whether this session may act on a record. Heads and admins may act within
-   their scope; a rep only on their own. Mirrored on the server. */
+/* Whether this session may act on a record. Admins, Group Heads and Business
+   Unit Heads may act anywhere within their scope — which scopedOpportunities()
+   has already narrowed — while a rep only on records they own. Mirrored on the
+   server, which decides regardless. */
 function canAct(o){
   const s = STATE.session;
   if(!s) return false;
   if(s.role !== 'rep') return true;
   return o.salesRepId ? o.salesRepId === s.userId : o.salesRep === s.name;
+}
+
+/* Who may set a target. Mirrors canManageTargets_ — deliberately not a
+   Business Unit Head, whose own unit the number measures. */
+function canManageTargets(){
+  const s = STATE.session;
+  return !!s && (s.role === 'admin' || s.role === 'head');
+}
+
+/* ---------------- Targets ----------------
+   A target is what a Business Unit is expected to bill in a financial year, in
+   USD. Attainment reads the targets and the pipeline side by side; no figure
+   here is ever written onto a quote.
+
+   Three numbers, and they mean different things:
+     achieved  invoiced inside the financial year window. Money in.
+     open      open pipeline in that unit right now. Money that might come in.
+     coverage  (achieved + open) against target — whether there is even enough
+               in play to get there, which is the number that gives a unit time
+               to react. */
+
+function targetsInScope(){
+  const fy = STATE.financialYear.label;
+  /* With no current year named there is no year to report against. Falling back
+     to "all of them" would add FY26 and FY27 together and overstate every
+     target in the company. */
+  if(!fy) return [];
+  return (STATE.targets || []).filter(function(t){ return t.financialYear === fy; });
+}
+
+/* The window is deliberately not guessed. Without it, money in cannot be
+   attributed to a year, so attainment is withheld rather than estimated. */
+function fyWindowSet(){
+  return !!(STATE.financialYear.startDate && STATE.financialYear.endDate);
+}
+
+function invoicedInFinancialYear(o){
+  if(o.status !== 'invoiced' || !o.invoicedAt) return false;
+  return withinDateRange(o.invoicedAt, STATE.financialYear.startDate, STATE.financialYear.endDate);
+}
+
+/* One row per Business Unit that has either a target or activity. A unit with a
+   target and no pipeline at all is exactly the row a Head needs to see, so it is
+   never dropped for being empty. */
+function computeTargetAttainment(list){
+  const byUnit = {};
+  const touch = function(bg, bu){
+    const key = bg + '\u0000' + bu;
+    if(!byUnit[key]){
+      byUnit[key] = {businessGroup: bg, businessUnit: bu, targetUsd: 0,
+        achievedUsd: 0, openUsd: 0, targetId: '', note: ''};
+    }
+    return byUnit[key];
+  };
+
+  targetsInScope().forEach(function(t){
+    const row = touch(t.businessGroup, t.businessUnit);
+    row.targetUsd += Number(t.targetUsd) || 0;
+    row.targetId = t.id;
+    row.note = t.note || '';
+  });
+
+  list.forEach(function(o){
+    if(!o.businessUnit) return;
+    const row = touch(o.businessGroup, o.businessUnit);
+    if(invoicedInFinancialYear(o)) row.achievedUsd += usdOf(o);
+    else if(isOpenActive(o)) row.openUsd += usdOf(o);
+  });
+
+  const rows = Object.keys(byUnit).map(function(k){ return byUnit[k]; });
+  rows.forEach(function(r){
+    r.gapUsd = Math.max(0, r.targetUsd - r.achievedUsd);
+    r.attainment = r.targetUsd > 0 ? (r.achievedUsd / r.targetUsd) * 100 : null;
+    r.coverage = r.targetUsd > 0 ? ((r.achievedUsd + r.openUsd) / r.targetUsd) * 100 : null;
+  });
+  rows.sort(function(a, b){
+    return b.targetUsd - a.targetUsd || a.businessUnit.localeCompare(b.businessUnit);
+  });
+
+  const sum = function(field){
+    return rows.reduce(function(acc, r){ return acc + r[field]; }, 0);
+  };
+  const targetUsd = sum('targetUsd');
+  const achievedUsd = sum('achievedUsd');
+  const openUsd = sum('openUsd');
+  return {
+    rows: rows,
+    targetUsd: targetUsd, achievedUsd: achievedUsd, openUsd: openUsd,
+    gapUsd: Math.max(0, targetUsd - achievedUsd),
+    attainment: targetUsd > 0 ? (achievedUsd / targetUsd) * 100 : null,
+    coverage: targetUsd > 0 ? ((achievedUsd + openUsd) / targetUsd) * 100 : null,
+    unitsWithTarget: rows.filter(function(r){ return r.targetUsd > 0; }).length,
+    windowSet: fyWindowSet()
+  };
 }
 
 /* ---------------- Analytics ---------------- */
@@ -2008,6 +2119,7 @@ function renderSidebar(){
       navItem('list', '≡', 'All Opportunities', scoped.length) +
       (!isRep ? navItem('analytics', '▦', 'Analytics') : '') +
       navItem('orders', '⇄', 'Orders &amp; Invoices') +
+      navItem('targets', '◎', 'Targets') +
       (!isRep ? navItem('compliance', '⚑', 'Compliance', openLeaks, openLeaks > 0) : '') +
       (!isRep ? navItem('directory', '☰', 'Team Directory', STATE.directory.length) : '') +
       (!isRep ? navItem('activity', '⏱', 'Activity Log') : '') +
@@ -2075,6 +2187,7 @@ function renderCurrentView(){
     case 'compliance': return renderCompliance();
     case 'directory': return renderDirectory();
     case 'activity': return renderActivity();
+    case 'targets': return renderTargets();
     case 'settings': return renderSettings();
     default: return renderDashboard();
   }
@@ -2203,6 +2316,11 @@ function renderDashboard(){
       kpiCard('Pipeline 3 · Aging quotes', fmtUSD(a.p3Value), 'p3', a.p3.length + ' ' + pluralize(a.p3.length, 'quote')) +
     '</div>';
   }
+
+  /* Where the numbers above are going: how the units are tracking against what
+     they committed to. Above the action nudges, because it is the question a
+     Head opens the dashboard to answer. */
+  out += renderDashboardTargets();
 
   /* Action nudges. Vantage never moves or expires a record on its own, so
      anything needing a decision is surfaced here instead. */
@@ -2392,6 +2510,93 @@ function renderDashboardFilterBar(shown, total){
         : total + ' ' + pluralize(total, 'record') + ' in your scope') +
     '</span>' +
   '</div>';
+}
+
+/* Targets on the dashboard.
+   A target is a per-unit, per-year commitment, so this block honours the
+   Business Group and Business Unit filters and deliberately ignores the rep and
+   date filters. Narrowing to one rep would measure part of a unit against the
+   whole unit's target; narrowing the dates would measure part of a year against
+   a whole year's. Either would read as a shortfall that is not there, so both
+   are stated rather than silently applied. */
+function dashboardTargetScope(){
+  const f = STATE.filters;
+  return scopedOpportunities().filter(function(o){
+    if(f.bg !== 'all' && o.businessGroup !== f.bg) return false;
+    if(f.unit !== 'all' && o.businessUnit !== f.unit) return false;
+    return true;
+  });
+}
+
+function renderDashboardTargets(){
+  const f = STATE.filters;
+  const a = computeTargetAttainment(dashboardTargetScope());
+  /* Every unit with pipeline produces a row, target or not. Showing the block
+     for a selection that carries no target at all would put a $0.00 target and
+     a meaningless attainment on the dashboard of anyone who has not set one. */
+  if(a.targetUsd <= 0) return '';
+
+  const fyLabel = STATE.financialYear.label || 'the financial year';
+  const ignoring = [];
+  if(f.rep !== 'all') ignoring.push('the sales rep filter');
+  if(f.from || f.to) ignoring.push('the date filter');
+
+  let out = '<div class="section-title"><h2>Target · ' + escapeHtml(fyLabel) + '</h2>' +
+    '<span class="hint">' + (a.windowSet
+      ? 'Billed against target, with open pipeline behind it'
+      : 'Attainment needs the financial year dates') + '</span></div>';
+
+  if(!a.windowSet){
+    out += '<div class="policy-banner" style="border-left-color:var(--p3);">' +
+      '<span>◎</span><span><b>' + fmtUSD(a.targetUsd) + '</b> of targets are set, but the financial year ' +
+      'dates are not — so Vantage cannot tell which invoices count towards them. ' +
+      'Open Targets to set the window.</span>' +
+      '<span class="banner-act"><button class="btn btn-ghost btn-sm" data-nav="targets">Open Targets</button></span></div>';
+  }
+
+  out += '<div class="grid kpi-row">' +
+    kpiCard('Target (USD)', fmtUSD(a.targetUsd), 'gold',
+      a.unitsWithTarget + ' ' + pluralize(a.unitsWithTarget, 'Business Unit') + ' in this selection') +
+    kpiCard('Billed (USD)', a.windowSet ? fmtUSD(a.achievedUsd) : '—', 'p4',
+      a.windowSet ? 'Invoiced inside ' + escapeHtml(fyLabel) : 'Needs the year dates') +
+    kpiCard('Attainment', a.windowSet ? pctText(a.attainment) : '—', 'p2',
+      a.windowSet ? fmtUSD(a.gapUsd) + ' still to find' : '') +
+    kpiCard('Coverage', a.windowSet ? pctText(a.coverage) : '—', 'p3',
+      'Billed plus open pipeline against target') +
+  '</div>';
+
+  if(ignoring.length){
+    out += '<div class="field-hint" style="margin:-8px 0 16px;line-height:1.6;">A target belongs to a Business ' +
+      'Unit for a whole financial year, so this block ignores ' + ignoring.join(' and ') + ' — applying ' +
+      (ignoring.length > 1 ? 'them' : 'it') + ' would measure part of a unit against all of its target and ' +
+      'read as a shortfall that is not there. Everything above this section does honour ' +
+      (ignoring.length > 1 ? 'them' : 'it') + '.</div>';
+  }
+
+  /* The per-unit table is the useful part for a Head; a rep with one unit gets
+     the cards above and no table to scroll past. */
+  const worth = a.rows.filter(function(r){ return r.targetUsd > 0; });
+  if(worth.length > 1){
+    out += '<div class="card table-wrap" style="margin-bottom:20px;"><table class="data-table"><thead><tr>' +
+        '<th>Business Unit</th><th class="num-cell">Target</th><th class="num-cell">Billed</th>' +
+        '<th class="num-cell">Attainment</th><th style="min-width:150px;">Progress</th>' +
+        '<th class="num-cell">Open</th><th class="num-cell">Coverage</th>' +
+      '</tr></thead><tbody>' +
+      worth.map(function(r){
+        return '<tr>' +
+          '<td><b>' + escapeHtml(r.businessUnit) + '</b></td>' +
+          '<td class="mono num-cell">' + fmtUSD(r.targetUsd) + '</td>' +
+          '<td class="mono num-cell">' + (a.windowSet ? fmtUSD(r.achievedUsd) : '—') + '</td>' +
+          '<td class="mono num-cell">' + (a.windowSet ? pctText(r.attainment) : '—') + '</td>' +
+          '<td>' + (a.windowSet ? attainmentBar(r.attainment, r.coverage - r.attainment)
+            : '<span class="field-hint">—</span>') + '</td>' +
+          '<td class="mono num-cell">' + fmtUSD(r.openUsd) + '</td>' +
+          '<td class="mono num-cell">' + (a.windowSet ? pctText(r.coverage) : '—') + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+  }
+  return out;
 }
 
 /* ---------------- Pipeline Board ---------------- */
@@ -2953,6 +3158,171 @@ function renderCompliance(){
     '</tbody></table>' + renderPager('lost', pagedLost, 'lost records') + '</div>';
 }
 
+/* ---------------- Targets ---------------- */
+
+function renderFinancialYearModal(){
+  const fy = STATE.financialYear;
+  return overlay(
+    modalHead('Financial year', 'What attainment is measured over') +
+    '<form id="fy-form"><div class="modal-body">' +
+      modalErrorBlock() +
+      '<div class="field-hint" style="margin-bottom:14px;line-height:1.6;">Vantage counts an invoice towards a ' +
+        'target when its invoice date falls inside this window. Moving it changes every attainment figure in the ' +
+        'company at once, so it is deliberately a separate, deliberate step.</div>' +
+      '<div class="field"><label>Name</label>' +
+        '<input type="text" id="fy-label" maxlength="20" value="' + escapeHtml(fy.label) + '" placeholder="FY27" required>' +
+        '<div class="field-hint">Whatever the business calls it. Targets are filed under this name.</div></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label>Starts</label>' +
+          '<input type="date" id="fy-start" value="' + escapeHtml(fy.startDate) + '"></div>' +
+        '<div class="field"><label>Ends</label>' +
+          '<input type="date" id="fy-end" value="' + escapeHtml(fy.endDate) + '"></div>' +
+      '</div>' +
+      '<div class="field-hint">Set both or neither. Leaving them blank keeps the targets but withholds ' +
+        'attainment, rather than reporting it against a window nobody chose.</div>' +
+    '</div><div class="modal-foot">' +
+      '<button type="button" class="btn btn-ghost" data-close-modal="1">Cancel</button>' +
+      submitBtn('Save financial year', 'Saving…') +
+    '</div></form>'
+  );
+}
+
+function attainmentBar(pct, extraPct){
+  /* Two segments on one track: what has been billed, and what is still only in
+     the pipeline behind it. Capped at 100% of the track so an over-achieving
+     unit does not push the bar through the side of the card; the figure beside
+     it still reads over 100. */
+  const done = Math.max(0, Math.min(100, pct || 0));
+  const open = Math.max(0, Math.min(100 - done, extraPct || 0));
+  return '<div class="tgt-track" role="img" aria-label="' + Math.round(pct || 0) + '% attained">' +
+    '<span class="tgt-done" style="width:' + done + '%;"></span>' +
+    '<span class="tgt-open" style="width:' + open + '%;"></span>' +
+  '</div>';
+}
+
+function pctText(value){
+  return value === null || value === undefined ? '—' : fmtNumber(value, 1) + '%';
+}
+
+function renderFinancialYearPanel(){
+  const fy = STATE.financialYear;
+  const isAdmin = STATE.session.role === 'admin';
+  const window = fyWindowSet()
+    ? fmtDate(fy.startDate) + ' — ' + fmtDate(fy.endDate)
+    : '<span style="color:var(--danger);">not set</span>';
+  return '<div class="card card-pad" style="margin-bottom:20px;">' +
+    '<div style="display:flex;align-items:center;gap:32px;flex-wrap:wrap;">' +
+      '<div><div class="kpi-label">Financial year</div>' +
+        '<div style="font-size:19px;font-weight:700;">' + escapeHtml(fy.label || '— not named —') + '</div></div>' +
+      '<div style="border-left:1px solid var(--border);padding-left:32px;">' +
+        '<div class="kpi-label">Counts invoices between</div>' +
+        '<div style="font-size:13px;margin-top:3px;">' + window + '</div></div>' +
+      '<div class="flex-spacer"></div>' +
+      (isAdmin ? '<button class="btn btn-ghost btn-sm" data-open-fy="1">Change financial year</button>' : '') +
+    '</div>' +
+    (fyWindowSet()
+      ? ''
+      : '<div class="field-hint" style="margin-top:12px;line-height:1.6;">Targets can be entered and edited now. ' +
+        '<b>Attainment needs these dates</b> — until they are set, Vantage will not say what share of a target has ' +
+        'been billed, because it has no way to tell which invoices belong to this year. ' +
+        (isAdmin ? 'Set them above.' : 'Ask an Executive / Admin to set them.') + '</div>') +
+  '</div>';
+}
+
+function renderTargets(){
+  const s = STATE.session;
+  const manage = canManageTargets();
+  const a = computeTargetAttainment(scopedOpportunities());
+  const fyLabel = STATE.financialYear.label || 'this year';
+
+  let out = '<div class="section-title"><h2>Targets</h2>' +
+    '<span class="hint">What each Business Unit is expected to bill in ' + escapeHtml(fyLabel) + ', in USD</span></div>' +
+    renderFinancialYearPanel();
+
+  out += '<div class="grid kpi-row">' +
+    kpiCard('Total target (USD)', fmtUSD(a.targetUsd), 'gold',
+      a.unitsWithTarget + ' ' + pluralize(a.unitsWithTarget, 'Business Unit') + ' carrying one') +
+    kpiCard('Billed so far (USD)', a.windowSet ? fmtUSD(a.achievedUsd) : '—', 'p4',
+      a.windowSet ? 'Invoiced inside ' + escapeHtml(fyLabel) : 'Set the financial year dates') +
+    kpiCard('Attainment', a.windowSet ? pctText(a.attainment) : '—', 'p2',
+      a.windowSet ? 'Billed against target' : 'Needs the financial year dates') +
+    kpiCard('Still to find (USD)', a.windowSet ? fmtUSD(a.gapUsd) : '—', 'p3',
+      a.windowSet ? 'Target less what is billed' : '') +
+  '</div>';
+
+  if(manage){
+    const bgs = businessGroupsAvailable();
+    out += '<div class="section-title"><h2>Set a target</h2>' +
+      '<span class="hint">Saving a unit that already has a target for this year replaces the figure</span></div>' +
+      '<div class="card card-pad" style="margin-bottom:20px;">' +
+      '<form id="target-form"><div class="field-row">' +
+        '<div class="field"><label>Financial year</label>' +
+          '<input type="text" id="tgt-fy" maxlength="20" value="' + escapeHtml(STATE.financialYear.label) + '" ' +
+          'placeholder="FY27" required>' +
+          '<div class="field-hint">Only the current year is shown on the dashboard.</div></div>' +
+        '<div class="field"><label>Business Group</label><select id="tgt-bg"' +
+          (bgs.length === 1 ? ' disabled' : '') + '>' +
+          bgs.map(function(bg){
+            return '<option value="' + escapeHtml(bg) + '">' + escapeHtml(bg) + '</option>';
+          }).join('') + '</select></div>' +
+      '</div><div class="field-row">' +
+        '<div class="field"><label>Business Unit</label><select id="tgt-bu" required>' +
+          (STATE.refData.businessUnitMap[bgs[0]] || []).map(function(bu){
+            return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>';
+          }).join('') + '</select></div>' +
+        '<div class="field"><label>Target (USD)</label>' +
+          '<input type="number" id="tgt-amount" min="0" step="any" placeholder="e.g. 30000000" required>' +
+          '<div class="field-hint">In US dollars. Naira quotes are converted at the rate on the record.</div></div>' +
+      '</div>' +
+      '<div class="field"><label>Note (optional)</label>' +
+        '<input type="text" id="tgt-note" maxlength="200" placeholder="e.g. includes the Q3 refresh programme"></div>' +
+      '<button type="submit" class="btn btn-gold btn-sm">Save target</button>' +
+      '</form></div>';
+  }
+
+  out += '<div class="section-title"><h2>By Business Unit</h2>' +
+    '<span class="hint">Billed, then open pipeline behind it</span></div>' +
+    '<div class="card table-wrap"><table class="data-table"><thead><tr>' +
+      '<th>Business Unit</th><th>Business Group</th>' +
+      '<th class="num-cell">Target</th><th class="num-cell">Billed</th>' +
+      '<th class="num-cell">Attainment</th><th style="min-width:160px;">Progress</th>' +
+      '<th class="num-cell">Open pipeline</th><th class="num-cell">Coverage</th>' +
+      (manage ? '<th></th>' : '') +
+    '</tr></thead><tbody>' +
+    (a.rows.length
+      ? a.rows.map(function(r){
+          const noTarget = r.targetUsd <= 0;
+          return '<tr>' +
+            '<td><b>' + escapeHtml(r.businessUnit) + '</b>' +
+              (r.note ? '<div class="field-hint">' + escapeHtml(r.note) + '</div>' : '') + '</td>' +
+            '<td>' + escapeHtml(r.businessGroup) + '</td>' +
+            '<td class="mono num-cell">' + (noTarget
+              ? '<span style="color:var(--text-faint);">none set</span>' : fmtUSD(r.targetUsd)) + '</td>' +
+            '<td class="mono num-cell">' + (a.windowSet ? fmtUSD(r.achievedUsd) : '—') + '</td>' +
+            '<td class="mono num-cell">' + (a.windowSet ? pctText(r.attainment) : '—') + '</td>' +
+            '<td>' + (noTarget || !a.windowSet ? '<span class="field-hint">—</span>'
+              : attainmentBar(r.attainment, r.coverage - r.attainment)) + '</td>' +
+            '<td class="mono num-cell">' + fmtUSD(r.openUsd) + '</td>' +
+            '<td class="mono num-cell">' + (a.windowSet ? pctText(r.coverage) : '—') + '</td>' +
+            (manage
+              ? '<td>' + (r.targetId
+                  ? '<button class="btn btn-danger-ghost btn-sm" data-delete-target="' + escapeHtml(r.targetId) + '">Remove</button>'
+                  : '') + '</td>'
+              : '') +
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="' + (manage ? 9 : 8) + '" class="empty-cell">' +
+        (manage ? 'No targets set yet. Add one above.' : 'No target has been set for your Business Unit yet.') +
+        '</td></tr>') +
+    '</tbody></table></div>' +
+    '<div class="field-hint" style="margin-top:10px;line-height:1.6;">' +
+      '<b>Billed</b> is what was invoiced inside the financial year. <b>Open pipeline</b> is everything still ' +
+      'open in that unit today, whichever year it eventually bills in. <b>Coverage</b> is the two together ' +
+      'against the target — under 100% means there is not yet enough in play to reach it.</div>';
+
+  return out;
+}
+
 /* ---------------- Team Directory ---------------- */
 
 function renderDirectory(){
@@ -2965,7 +3335,12 @@ function renderDirectory(){
 
   const canManage = function(d){
     if(isAdmin) return true;
-    return s.role === 'head' && d.role === 'rep' && d.businessGroup === s.businessGroup;
+    if(s.role === 'head'){
+      return d.role !== 'admin' && d.role !== 'head' && d.businessGroup === s.businessGroup;
+    }
+    /* A Business Unit Head staffs their own unit, and only with reps. */
+    return s.role === 'bu_head' && d.role === 'rep' && !!s.businessUnit &&
+      d.businessGroup === s.businessGroup && d.businessUnit === s.businessUnit;
   };
 
   const dq = STATE.filters.q.trim().toLowerCase();
@@ -2984,7 +3359,11 @@ function renderDirectory(){
       '<span>◆</span><span>Access is assigned here, not chosen at sign-in. ' +
       (isAdmin
         ? 'You can add anyone to any role and Business Group.'
-        : 'You can add and manage Sales Reps in ' + escapeHtml(s.businessGroup) + '. Adding a Business Group Head or Admin needs an Executive / Admin.') +
+        : s.role === 'bu_head'
+          ? 'You can add and manage Sales Reps in ' + escapeHtml(s.businessUnit || 'your Business Unit') +
+            '. Anything wider needs a Business Group Head or an Executive / Admin.'
+          : 'You can add and manage Sales Reps and Business Unit Heads in ' + escapeHtml(s.businessGroup) +
+            '. Adding a Business Group Head or Admin needs an Executive / Admin.') +
       '</span></div>' +
 
     '<div class="section-title"><h2>Add team member</h2></div>' +
@@ -3010,11 +3389,15 @@ function renderDirectory(){
                 (STATE.refData.businessGroups || []).map(function(bg){ return '<option value="' + escapeHtml(bg) + '">' + escapeHtml(bg) + '</option>'; }).join('')
               : '<option value="' + escapeHtml(s.businessGroup) + '" selected>' + escapeHtml(s.businessGroup) + '</option>') +
           '</select></div>' +
-          '<div class="field"><label>Business Unit</label><select id="atm-bu">' +
-            (STATE.refData.businessUnitMap[isAdmin ? (STATE.refData.businessGroups[0] || '') : s.businessGroup] || [])
-              .map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('') +
+          '<div class="field"><label>Business Unit</label>' +
+          '<select id="atm-bu"' + (isUnitBound(s.role) && s.businessUnit ? ' disabled' : '') + '>' +
+            (isUnitBound(s.role) && s.businessUnit
+              ? '<option value="' + escapeHtml(s.businessUnit) + '" selected>' + escapeHtml(s.businessUnit) + '</option>'
+              : (STATE.refData.businessUnitMap[isAdmin ? (STATE.refData.businessGroups[0] || '') : s.businessGroup] || [])
+                  .map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('')) +
           '</select>' +
-          '<div class="field-hint">A Sales Rep works inside one unit and sees only its records. Heads and Admins span their whole group, so this is ignored for them.</div>' +
+          '<div class="field-hint">A Sales Rep and a Business Unit Head each work inside one unit and see only its records. ' +
+            'Business Group Heads and Admins span a whole group, so this is ignored for them.</div>' +
           '</div>' +
         '</div>' +
         '<button type="submit" class="btn btn-gold btn-sm">Add to Vantage</button>' +
@@ -3281,6 +3664,7 @@ function renderModal(){
     case 'invoice':   return renderInvoiceModal();
     case 'reopen':    return renderReopenModal();
     case 'validity':  return renderValidityModal();
+    case 'fy':        return renderFinancialYearModal();
     case 'member':    return renderMemberModal();
     default:          return '';
   }
@@ -3575,10 +3959,10 @@ function renderOpportunityForm(mode){
           (isEdit ? '<div class="field-hint">A quote cannot change Business Group — raise it under the correct group instead.</div>' : '') +
         '</div>' +
         '<div class="field"><label>Business Unit</label>' +
-          '<select id="f-bu"' + ((s.role === 'rep' && s.businessUnit) ? ' disabled' : '') + ' required>' +
+          '<select id="f-bu"' + ((isUnitBound(s.role) && s.businessUnit) ? ' disabled' : '') + ' required>' +
             units.map(function(bu){ return opt(bu, bu, isEdit ? bu === o.businessUnit : bu === (s.businessUnit || '')); }).join('') +
           '</select>' +
-          ((s.role === 'rep' && s.businessUnit)
+          ((isUnitBound(s.role) && s.businessUnit)
             ? '<div class="field-hint">You raise quotes inside ' + escapeHtml(s.businessUnit) + '.</div>' : '') +
         '</div>' +
       '</div>' +
@@ -4258,7 +4642,8 @@ function renderMemberModal(){
         (STATE.refData.businessUnitMap[m.businessGroup] || []).map(function(bu){
           return '<option value="' + escapeHtml(bu) + '"' + (bu === m.businessUnit ? ' selected' : '') + '>' + escapeHtml(bu) + '</option>';
         }).join('') + '</select>' +
-        '<div class="field-hint">Required for a Sales Rep — it decides which records they can see.</div></div>' +
+        '<div class="field-hint">Required for a Sales Rep and a Business Unit Head — it decides which records they can see. ' +
+          'A Business Group Head spans every unit in their group, so leave it blank for them.</div></div>' +
     '</div><div class="modal-foot">' +
       '<button type="button" class="btn btn-ghost" data-close-modal="1">Cancel</button>' +
       submitBtn('Save changes', 'Saving…') +
@@ -4273,6 +4658,7 @@ function renderBulkModal(){
   const scopeNote = s.role === 'admin'
     ? 'You can import for any Business Group and any sales rep named in the file.'
     : 'Every imported quote is assigned to ' + escapeHtml(s.businessGroup) +
+      (isUnitBound(s.role) && s.businessUnit ? ' · ' + escapeHtml(s.businessUnit) : '') +
       (s.role === 'rep' ? ', under your name (' + escapeHtml(s.name) + ')' : '') +
       ', whatever the file says, so access stays scoped correctly.';
 
@@ -4740,9 +5126,14 @@ function parseBulkRow(row, headerMap, rowIndex){
 
   const customerName = String(get('customerName') || '').trim();
   let businessGroup = normalizeBusinessGroup(get('businessGroup'));
-  if(s.role === 'rep' || s.role === 'head') businessGroup = s.businessGroup;
+  if(s.role !== 'admin') businessGroup = s.businessGroup;
   const businessUnitRaw = String(get('businessUnit') || '').trim();
-  const businessUnit = businessGroup ? normalizeBusinessUnit(businessGroup, businessUnitRaw) : null;
+  /* Someone who works inside one unit imports into it, whatever the file says.
+     The server forces the same; disagreeing here would only mean a preview that
+     promised something the import then quietly changed. */
+  const businessUnit = (isUnitBound(s.role) && s.businessUnit)
+    ? s.businessUnit
+    : (businessGroup ? normalizeBusinessUnit(businessGroup, businessUnitRaw) : null);
   const rawQuantity = get('quantity');
   const quantityBlank = (rawQuantity === '' || rawQuantity === null || rawQuantity === undefined);
   const quantity = quantityBlank ? 1 : parseAmount(rawQuantity);
@@ -5260,6 +5651,19 @@ function upsertOpportunity(o){
     STATE.opportunities.unshift(o);
   }
 }
+/* Keyed on the pair the server treats as unique, so an edited target replaces
+   its own row rather than appearing twice until the next reload. */
+function upsertTarget(t){
+  if(!t) return;
+  const list = (STATE.targets || []).filter(function(x){
+    return !(x.financialYear === t.financialYear && x.businessUnit === t.businessUnit &&
+      x.businessGroup === t.businessGroup);
+  });
+  list.push(t);
+  STATE.targets = list;
+  resetRenderMemo();
+}
+
 function upsertMember(m){
   if(!m) return;
   const i = STATE.directory.findIndex(function(x){ return x.userId === m.userId; });
@@ -5286,6 +5690,7 @@ function applyBootstrap(data){
       ? ref.quoteValidityOptions : [7, 14, 30, 45, 60, 90],
     roles: ref.roles || [
       {id: 'rep', label: 'Sales Representative'},
+      {id: 'bu_head', label: 'Business Unit Head'},
       {id: 'head', label: 'Business Group Head'},
       {id: 'admin', label: 'Executive / Admin'}
     ]
@@ -5296,11 +5701,16 @@ function applyBootstrap(data){
     agingThresholdDays: Number(set.agingThresholdDays) || 30,
     lostDeleteAfterDays: Number(set.lostDeleteAfterDays) || 90,
     mistakeWindowDays: Number(set.mistakeWindowDays) || 30,
+    /* Not `|| 0` with a fallback — 0 is the meaningful default here, and an
+       explicit 0 must survive. */
+    expiredDeleteAfterDays: Number(set.expiredDeleteAfterDays) || 0,
     repScope: set.repScope === 'own' ? 'own' : 'unit'
   };
   STATE.directory = d.directory || [];
   STATE.opportunities = d.opportunities || [];
   STATE.leakage = d.leakage || [];
+  STATE.targets = d.targets || [];
+  STATE.financialYear = d.financialYear || {label:'', startDate:'', endDate:''};
   STATE.revision = d.revision || 0;
   STATE.staleRevision = null;
   STATE.today = d.today || new Date().toISOString().slice(0, 10);
@@ -6114,10 +6524,83 @@ function wireDirectoryAndCompliance(){
       units.map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('');
   });
   if(memRole && memBu){
-    const syncMemUnit = function(){ memBu.disabled = memRole.value !== 'rep'; };
+    /* A Business Unit Head needs a unit just as a Rep does; only Group Heads
+       and Admins span a whole group. */
+    const syncMemUnit = function(){ memBu.disabled = !isUnitBound(memRole.value); };
     memRole.addEventListener('change', syncMemUnit);
     syncMemUnit();
   }
+
+  /* ---- Targets ---- */
+  const tgtBg = document.getElementById('tgt-bg');
+  const tgtBu = document.getElementById('tgt-bu');
+  if(tgtBg && tgtBu) tgtBg.addEventListener('change', function(){
+    tgtBu.innerHTML = (STATE.refData.businessUnitMap[tgtBg.value] || []).map(function(bu){
+      return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>';
+    }).join('');
+  });
+
+  const targetForm = document.getElementById('target-form');
+  if(targetForm) targetForm.addEventListener('submit', async function(e){
+    e.preventDefault();
+    const amount = parseAmount(document.getElementById('tgt-amount').value);
+    if(isNaN(amount) || amount < 0){
+      toast('Enter the target as a number of US dollars.', true);
+      return;
+    }
+    try{
+      const res = await mutate('Saving target…', 'saveTarget', {
+        data: {
+          financialYear: document.getElementById('tgt-fy').value,
+          businessGroup: tgtBg ? tgtBg.value : '',
+          businessUnit: tgtBu ? tgtBu.value : '',
+          targetUsd: amount,
+          note: document.getElementById('tgt-note').value
+        }
+      }, {});
+      upsertTarget(res.target);
+      document.getElementById('tgt-amount').value = '';
+      document.getElementById('tgt-note').value = '';
+      toast(res.target.businessUnit + ' target ' + (res.created ? 'set' : 'updated') +
+        ' at ' + fmtUSD(res.target.targetUsd));
+      render();
+    }catch(err){ afterFailedSubmit(err); }
+  });
+
+  on('[data-delete-target]', 'click', async function(e){
+    const id = attr(e.currentTarget, 'data-delete-target');
+    const t = (STATE.targets || []).filter(function(x){ return x.id === id; })[0];
+    if(!t) return;
+    if(!confirm('Remove the ' + t.financialYear + ' target for ' + t.businessUnit + ' (' +
+      fmtUSD(t.targetUsd) + ')?\n\nThe quotes and invoices behind it are untouched.')) return;
+    try{
+      await mutate('Removing…', 'deleteTarget', {id: id}, {});
+      STATE.targets = (STATE.targets || []).filter(function(x){ return x.id !== id; });
+      toast(t.businessUnit + ' target removed');
+      render();
+    }catch(err){ afterFailedSubmit(err); }
+  });
+
+  on('[data-open-fy]', 'click', function(){
+    STATE.modal = {type: 'fy'};
+    STATE.modalError = null;
+    render();
+  });
+
+  const fyForm = document.getElementById('fy-form');
+  if(fyForm) fyForm.addEventListener('submit', async function(e){
+    e.preventDefault();
+    try{
+      const res = await mutate('Saving…', 'setFinancialYear', {
+        label: document.getElementById('fy-label').value,
+        startDate: document.getElementById('fy-start').value,
+        endDate: document.getElementById('fy-end').value
+      }, {inModal: true});
+      STATE.financialYear = res.financialYear;
+      closeModal();
+      toast('Financial year set to ' + res.financialYear.label);
+    }catch(err){ render(); }
+  });
 
   const addMember = document.getElementById('add-member-form');
   if(addMember) addMember.addEventListener('submit', async function(e){
