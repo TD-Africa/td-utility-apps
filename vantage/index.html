@@ -142,6 +142,21 @@
     background:var(--ink);color:#DDE3EE;border-radius:var(--radius);padding:11px 16px;font-size:12.5px;
     display:flex;align-items:flex-start;gap:10px;margin-bottom:20px;border-left:3px solid var(--gold);line-height:1.5;
   }
+  /* Several Business Units per person. A multi-select <select multiple> is
+     famously hard to use — ctrl-click to add, and a stray click wipes the lot —
+     so this is a plain list of checkboxes. */
+  .unit-picker{display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--border);
+    border-radius:8px;background:var(--surface);max-height:150px;overflow-y:auto;}
+  /* flex:none matters: a flex item shrinks below its own content by default,
+     which with nowrap made the labels overlap each other instead of wrapping
+     onto the next line. */
+  .field .unit-picker label{display:inline-flex;align-items:center;gap:7px;flex:none;
+    margin-bottom:0;font-size:12.5px;font-weight:500;color:var(--text);
+    cursor:pointer;white-space:nowrap;}
+  /* Must out-rank `.field input{width:100%}`, which is declared later and at
+     the same specificity — it was stretching each checkbox across the row. */
+  .field .unit-picker input{width:auto;min-width:0;margin:0;flex:none;padding:0;}
+
   /* Target progress: billed, then open pipeline behind it on the same track. */
   .tgt-track{position:relative;display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--border);}
   .tgt-done{background:var(--p4);}
@@ -1158,10 +1173,11 @@ function computeScopedOpportunities(){
   }
   /* A Business Unit Head always sees their whole unit; repScope only ever
      narrows a rep. Mirrors scopeOpportunitiesForActor_. */
-  const ownOnly = !s.businessUnit || (s.role === 'rep' && STATE.settings.repScope !== 'unit');
+  const units = unitsOf(s);
+  const ownOnly = !units.length || (s.role === 'rep' && STATE.settings.repScope !== 'unit');
   return STATE.opportunities.filter(function(o){
     if(o.businessGroup !== s.businessGroup) return false;
-    if(s.businessUnit && o.businessUnit !== s.businessUnit) return false;
+    if(units.length && units.indexOf(o.businessUnit) < 0) return false;
     if(!ownOnly) return true;
     return o.salesRepId ? o.salesRepId === s.userId : o.salesRep === s.name;
   });
@@ -1231,12 +1247,76 @@ function repsInScope(list){
    differ only in what they may do there. */
 function isUnitBound(role){ return role === 'rep' || role === 'bu_head'; }
 
+/* Every Business Unit a person carries. Mirrors unitsOf_ on the server: the
+   list is authoritative, the single field is its first entry and what screens
+   mean by "their unit", and a row written before multi-unit existed carries
+   only the single one. */
+function unitsOf(row){
+  if(!row) return [];
+  const list = Array.isArray(row.businessUnits)
+    ? row.businessUnits.slice()
+    : String(row.businessUnits || '').split(',');
+  const out = [];
+  list.forEach(function(u){
+    const name = String(u || '').trim();
+    if(name && out.indexOf(name) < 0) out.push(name);
+  });
+  if(out.length) return out;
+  return row.businessUnit ? [row.businessUnit] : [];
+}
+
 /* The units a session may file against: their own if they work inside one,
    otherwise every unit of the selected group. */
 function businessUnitsAvailable(businessGroup){
   const s = STATE.session;
-  if(s && isUnitBound(s.role) && s.businessUnit) return [s.businessUnit];
-  return STATE.refData.businessUnitMap[businessGroup] || [];
+  const all = STATE.refData.businessUnitMap[businessGroup] || [];
+  if(!s || !isUnitBound(s.role)) return all;
+  const mine = unitsOf(s);
+  if(!mine.length) return all;
+  /* Only the ones that actually belong to the group in hand — their list can
+     only ever be inside their own group, so for any other group this is empty
+     and the picker says so. */
+  return mine.filter(function(u){ return all.indexOf(u) >= 0; });
+}
+
+/* The options for a Business Unit picker, and the notice that goes under it.
+   A Business Group with no units on the RefData tab used to render an empty
+   <select required> — nothing to choose, no way to submit the form, and no
+   hint that the Sheet was the problem rather than the person. */
+function unitOptionsHtml(units, selected){
+  if(!units.length) return '<option value="">— no Business Units configured —</option>';
+  return units.map(function(u){
+    return '<option value="' + escapeHtml(u) + '"' + (u === selected ? ' selected' : '') + '>' +
+      escapeHtml(u) + '</option>';
+  }).join('');
+}
+/* The Business Units a directory row covers, as checkboxes. */
+function unitCheckboxes(id, allUnits, chosen, disabled){
+  if(!allUnits.length){
+    return '<div class="field-hint danger">This Business Group has no Business Units on the ' +
+      '<b>RefData</b> tab of the Sheet. Add them there first.</div>';
+  }
+  return '<div class="unit-picker" id="' + id + '">' +
+    allUnits.map(function(u){
+      return '<label><input type="checkbox" class="unit-box" value="' + escapeHtml(u) + '"' +
+        (chosen.indexOf(u) >= 0 ? ' checked' : '') + (disabled ? ' disabled' : '') + '>' +
+        escapeHtml(u) + '</label>';
+    }).join('') +
+  '</div>';
+}
+function readUnitCheckboxes(id){
+  const box = document.getElementById(id);
+  if(!box) return [];
+  return Array.prototype.slice.call(box.querySelectorAll('.unit-box'))
+    .filter(function(b){ return b.checked; })
+    .map(function(b){ return b.value; });
+}
+
+function unitPickerNotice(units, businessGroup){
+  if(units.length) return '';
+  return '<div class="field-hint danger">' + escapeHtml(businessGroup || 'This Business Group') +
+    ' has no Business Units on the <b>RefData</b> tab of the Sheet, so a quote cannot be filed against ' +
+    'one. An Admin needs to add them there first.</div>';
 }
 
 function businessGroupsAvailable(){
@@ -3340,7 +3420,8 @@ function renderDirectory(){
     }
     /* A Business Unit Head staffs their own unit, and only with reps. */
     return s.role === 'bu_head' && d.role === 'rep' && !!s.businessUnit &&
-      d.businessGroup === s.businessGroup && d.businessUnit === s.businessUnit;
+      d.businessGroup === s.businessGroup &&
+      unitsOf(d).some(function(u){ return unitsOf(s).indexOf(u) >= 0; });
   };
 
   const dq = STATE.filters.q.trim().toLowerCase();
@@ -3349,7 +3430,7 @@ function renderDirectory(){
       if(STATE.filters.status === 'open' && d.status === 'disabled') return false;
       if(STATE.filters.status === 'lost' && d.status !== 'disabled') return false;
       if(!dq) return true;
-      return [d.name, d.email, d.businessGroup, d.businessUnit, roleLabel(d.role)]
+      return [d.name, d.email, d.businessGroup, unitsOf(d).join(' '), roleLabel(d.role)]
         .join(' ').toLowerCase().indexOf(dq) >= 0;
     })
     .sort(function(a, b){ return String(a.name).localeCompare(String(b.name)); });
@@ -3389,14 +3470,14 @@ function renderDirectory(){
                 (STATE.refData.businessGroups || []).map(function(bg){ return '<option value="' + escapeHtml(bg) + '">' + escapeHtml(bg) + '</option>'; }).join('')
               : '<option value="' + escapeHtml(s.businessGroup) + '" selected>' + escapeHtml(s.businessGroup) + '</option>') +
           '</select></div>' +
-          '<div class="field"><label>Business Unit</label>' +
-          '<select id="atm-bu"' + (isUnitBound(s.role) && s.businessUnit ? ' disabled' : '') + '>' +
-            (isUnitBound(s.role) && s.businessUnit
-              ? '<option value="' + escapeHtml(s.businessUnit) + '" selected>' + escapeHtml(s.businessUnit) + '</option>'
-              : (STATE.refData.businessUnitMap[isAdmin ? (STATE.refData.businessGroups[0] || '') : s.businessGroup] || [])
-                  .map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('')) +
-          '</select>' +
-          '<div class="field-hint">A Sales Rep and a Business Unit Head each work inside one unit and see only its records. ' +
+          '<div class="field"><label>Business Units</label>' +
+          unitCheckboxes('atm-units',
+            isUnitBound(s.role)
+              ? unitsOf(s)
+              : (STATE.refData.businessUnitMap[isAdmin ? (STATE.refData.businessGroups[0] || '') : s.businessGroup] || []),
+            [], isUnitBound(s.role) && unitsOf(s).length === 1) +
+          '<div class="field-hint">Tick every unit this person sells into — most reps cover more than one ' +
+            'vendor line. They see the records of all of them and choose between them when raising a quote. ' +
             'Business Group Heads and Admins span a whole group, so this is ignored for them.</div>' +
           '</div>' +
         '</div>' +
@@ -3420,7 +3501,7 @@ function renderDirectory(){
       '<span class="filter-summary">' + pagedDir.total + ' shown</span>' +
     '</div>' +
     '<div class="card"><div class="table-wrap"><table>' +
-      '<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Business Group</th><th>Business Unit</th>' +
+      '<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Business Group</th><th>Business Units</th>' +
         '<th>Status</th><th>Added by</th><th>Last active</th><th></th></tr></thead><tbody>' +
       (pagedDir.rows.length
         ? pagedDir.rows.map(function(d){
@@ -3442,9 +3523,9 @@ function renderDirectory(){
                 : '<span style="color:var(--danger);">No email — cannot sign in</span>') + '</td>' +
               '<td>' + escapeHtml(roleLabel(d.role)) + '</td>' +
               '<td>' + escapeHtml(d.businessGroup || 'All Groups') + '</td>' +
-              '<td>' + (d.role === 'rep'
-                ? (d.businessUnit
-                    ? escapeHtml(d.businessUnit)
+              '<td>' + (isUnitBound(d.role)
+                ? (unitsOf(d).length
+                    ? escapeHtml(unitsOf(d).join(', '))
                     : '<span style="color:var(--danger);">Not set — sees only their own</span>')
                 : '<span style="color:var(--text-faint);">Whole group</span>') + '</td>' +
               '<td>' + (d.status === 'disabled'
@@ -3959,11 +4040,17 @@ function renderOpportunityForm(mode){
           (isEdit ? '<div class="field-hint">A quote cannot change Business Group — raise it under the correct group instead.</div>' : '') +
         '</div>' +
         '<div class="field"><label>Business Unit</label>' +
-          '<select id="f-bu"' + ((isUnitBound(s.role) && s.businessUnit) ? ' disabled' : '') + ' required>' +
-            units.map(function(bu){ return opt(bu, bu, isEdit ? bu === o.businessUnit : bu === (s.businessUnit || '')); }).join('') +
+          /* Disabled only when there is nothing to choose between — one unit, or
+             none configured. Someone carrying several picks from their own. */
+          '<select id="f-bu"' + (units.length > 1 ? '' : ' disabled') + ' required>' +
+            unitOptionsHtml(units, isEdit ? o.businessUnit : (s.businessUnit || '')) +
           '</select>' +
-          ((isUnitBound(s.role) && s.businessUnit)
-            ? '<div class="field-hint">You raise quotes inside ' + escapeHtml(s.businessUnit) + '.</div>' : '') +
+          unitPickerNotice(units, currentBg) +
+          ((isUnitBound(s.role) && units.length)
+            ? '<div class="field-hint">' + (units.length > 1
+                ? 'You cover ' + units.length + ' Business Units — pick the one this quote belongs to.'
+                : 'You raise quotes inside ' + escapeHtml(units[0]) + '.') + '</div>'
+            : '') +
         '</div>' +
       '</div>' +
 
@@ -4365,10 +4452,10 @@ function renderDuplicateModal(){
           '<input type="text" id="dup-partner" placeholder="e.g. the new reseller" required></div>' +
       '</div>' +
       '<div class="field-row">' +
-        '<div class="field"><label>Business Unit</label><select id="dup-bu">' +
-          units.map(function(bu){
-            return '<option value="' + escapeHtml(bu) + '"' + (bu === src.businessUnit ? ' selected' : '') + '>' + escapeHtml(bu) + '</option>';
-          }).join('') + '</select></div>' +
+        '<div class="field"><label>Business Unit</label>' +
+          '<select id="dup-bu"' + (units.length ? '' : ' disabled') + '>' +
+          unitOptionsHtml(units, src.businessUnit) + '</select>' +
+          unitPickerNotice(units, src.businessGroup) + '</div>' +
         '<div class="field"><label>Order Type</label><select id="dup-order-type">' +
           '<option value="">— Select —</option>' +
           (STATE.refData.orderTypes || []).map(function(t){
@@ -4637,13 +4724,12 @@ function renderMemberModal(){
             return '<option value="' + escapeHtml(bg) + '"' + (bg === m.businessGroup ? ' selected' : '') + '>' + escapeHtml(bg) + '</option>';
           }).join('') + '</select></div>' +
       '</div>' +
-      '<div class="field"><label>Business Unit</label><select id="mem-bu">' +
-        '<option value="">— Whole group (Heads and Admins) —</option>' +
-        (STATE.refData.businessUnitMap[m.businessGroup] || []).map(function(bu){
-          return '<option value="' + escapeHtml(bu) + '"' + (bu === m.businessUnit ? ' selected' : '') + '>' + escapeHtml(bu) + '</option>';
-        }).join('') + '</select>' +
-        '<div class="field-hint">Required for a Sales Rep and a Business Unit Head — it decides which records they can see. ' +
-          'A Business Group Head spans every unit in their group, so leave it blank for them.</div></div>' +
+      '<div class="field"><label>Business Units</label>' +
+        unitCheckboxes('mem-units', STATE.refData.businessUnitMap[m.businessGroup] || [],
+          unitsOf(m), !isUnitBound(m.role)) +
+        '<div class="field-hint">Required for a Sales Rep and a Business Unit Head — these decide which records ' +
+          'they can see, and which they can file a quote against. Tick as many as they cover. ' +
+          'A Business Group Head spans every unit in their group, so this is ignored for them.</div></div>' +
     '</div><div class="modal-foot">' +
       '<button type="button" class="btn btn-ghost" data-close-modal="1">Cancel</button>' +
       submitBtn('Save changes', 'Saving…') +
@@ -6063,9 +6149,12 @@ function wireOpportunityForm(){
   const bu = document.getElementById('f-bu');
   if(bg && bu) bg.addEventListener('change', function(){
     const units = businessUnitsAvailable(bg.value);
-    bu.innerHTML = units.map(function(u){
-      return '<option value="' + escapeHtml(u) + '">' + escapeHtml(u) + '</option>';
-    }).join('');
+    bu.innerHTML = unitOptionsHtml(units, '');
+    /* Same rule as the first paint: a group with no units offers nothing to
+       pick, so the control says so rather than sitting there empty. */
+    bu.disabled = units.length <= 1;
+    const notice = bu.parentNode && bu.parentNode.querySelector('.field-hint.danger');
+    if(notice) notice.style.display = units.length ? 'none' : '';
     const rep = document.getElementById('f-rep');
     if(rep && rep.tagName === 'SELECT') rep.innerHTML = repOptionsFor(bg.value, STATE.session.name);
   });
@@ -6384,7 +6473,7 @@ function wireSecondaryForms(){
           email: document.getElementById('mem-email').value,
           role: document.getElementById('mem-role').value,
           businessGroup: document.getElementById('mem-bg').value,
-          businessUnit: document.getElementById('mem-bu').value
+          businessUnits: readUnitCheckboxes('mem-units')
         }
       }, {inModal: true});
       upsertMember(res.member);
@@ -6396,7 +6485,11 @@ function wireSecondaryForms(){
            you back to sign-in — which is the correct outcome. */
         STATE.session = Object.assign({}, STATE.session, {
           name: res.member.name, email: res.member.email,
-          role: res.member.role, businessGroup: res.member.businessGroup
+          role: res.member.role, businessGroup: res.member.businessGroup,
+          /* Their own units decide what they can see and file against, so a
+             stale copy here would leave the page offering the wrong ones. */
+          businessUnit: res.member.businessUnit,
+          businessUnits: unitsOf(res.member)
         });
       }
       closeModal();
@@ -6496,40 +6589,35 @@ async function doReprofile(id, pipeline){
 /* ---------------- Directory & compliance ---------------- */
 
 function wireDirectoryAndCompliance(){
-  const atmBg = document.getElementById('atm-bg');
-  const atmBu = document.getElementById('atm-bu');
-  const atmRole = document.getElementById('atm-role');
-  if(atmBg && atmBu) atmBg.addEventListener('change', function(){
-    const units = STATE.refData.businessUnitMap[atmBg.value] || [];
-    atmBu.innerHTML = units.map(function(bu){
-      return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>';
-    }).join('');
-  });
-  /* Only a rep is pinned to a unit, so grey it out for the others rather than
-     letting someone set a value that will be ignored. */
-  if(atmRole && atmBu){
-    const syncUnitEnabled = function(){
-      atmBu.disabled = atmRole.value !== 'rep';
+  /* The unit checkboxes follow the chosen group, and are only meaningful for a
+     role that lives inside a unit — greyed out rather than silently ignored for
+     the others. Shared by both directory forms. */
+  const wireUnitPicker = function(bgId, roleId, pickerId){
+    const bgEl = document.getElementById(bgId);
+    const roleEl = document.getElementById(roleId);
+    const picker = document.getElementById(pickerId);
+    if(!picker) return;
+    const repaint = function(){
+      const units = STATE.refData.businessUnitMap[bgEl ? bgEl.value : ''] || [];
+      const chosen = readUnitCheckboxes(pickerId);
+      picker.innerHTML = units.map(function(u){
+        return '<label><input type="checkbox" class="unit-box" value="' + escapeHtml(u) + '"' +
+          (chosen.indexOf(u) >= 0 ? ' checked' : '') + '>' + escapeHtml(u) + '</label>';
+      }).join('');
+      syncEnabled();
     };
-    atmRole.addEventListener('change', syncUnitEnabled);
-    syncUnitEnabled();
-  }
-
-  const memBg = document.getElementById('mem-bg');
-  const memBu = document.getElementById('mem-bu');
-  const memRole = document.getElementById('mem-role');
-  if(memBg && memBu) memBg.addEventListener('change', function(){
-    const units = STATE.refData.businessUnitMap[memBg.value] || [];
-    memBu.innerHTML = '<option value="">— Whole group (Heads and Admins) —</option>' +
-      units.map(function(bu){ return '<option value="' + escapeHtml(bu) + '">' + escapeHtml(bu) + '</option>'; }).join('');
-  });
-  if(memRole && memBu){
-    /* A Business Unit Head needs a unit just as a Rep does; only Group Heads
-       and Admins span a whole group. */
-    const syncMemUnit = function(){ memBu.disabled = !isUnitBound(memRole.value); };
-    memRole.addEventListener('change', syncMemUnit);
-    syncMemUnit();
-  }
+    const syncEnabled = function(){
+      const off = !!roleEl && !isUnitBound(roleEl.value);
+      Array.prototype.slice.call(picker.querySelectorAll('.unit-box'))
+        .forEach(function(b){ b.disabled = off; });
+      picker.style.opacity = off ? '.5' : '';
+    };
+    if(bgEl) bgEl.addEventListener('change', repaint);
+    if(roleEl) roleEl.addEventListener('change', syncEnabled);
+    syncEnabled();
+  };
+  wireUnitPicker('atm-bg', 'atm-role', 'atm-units');
+  wireUnitPicker('mem-bg', 'mem-role', 'mem-units');
 
   /* ---- Targets ---- */
   const tgtBg = document.getElementById('tgt-bg');
@@ -6613,7 +6701,7 @@ function wireDirectoryAndCompliance(){
           email: document.getElementById('atm-email').value,
           role: document.getElementById('atm-role').value,
           businessGroup: document.getElementById('atm-bg').value,
-          businessUnit: document.getElementById('atm-bu').value
+          businessUnits: readUnitCheckboxes('atm-units')
         }
       }, {});
       upsertMember(res.member);
