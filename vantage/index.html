@@ -1177,9 +1177,11 @@ function computeScopedOpportunities(){
   const ownOnly = !units.length || (s.role === 'rep' && STATE.settings.repScope !== 'unit');
   return STATE.opportunities.filter(function(o){
     if(o.businessGroup !== s.businessGroup) return false;
-    if(units.length && units.indexOf(o.businessUnit) < 0) return false;
-    if(!ownOnly) return true;
-    return o.salesRepId ? o.salesRepId === s.userId : o.salesRep === s.name;
+    /* Their own work, wherever it was filed. Mirrors the server. */
+    const mine = (o.salesRepId ? o.salesRepId === s.userId : o.salesRep === s.name) ||
+      (!!o.createdById && o.createdById === s.userId);
+    if(ownOnly) return mine;
+    return mine || units.indexOf(o.businessUnit) >= 0;
   });
 }
 function scopedLeakage(){
@@ -1267,16 +1269,12 @@ function unitsOf(row){
 
 /* The units a session may file against: their own if they work inside one,
    otherwise every unit of the selected group. */
+/* Every unit of the group, for everyone. The units a person carries decide
+   whose *other* records they can read — not what they are allowed to sell. One
+   rep covers several vendor lines and quotes across the group, so the picker
+   offers the lot and defaults to their own. */
 function businessUnitsAvailable(businessGroup){
-  const s = STATE.session;
-  const all = STATE.refData.businessUnitMap[businessGroup] || [];
-  if(!s || !isUnitBound(s.role)) return all;
-  const mine = unitsOf(s);
-  if(!mine.length) return all;
-  /* Only the ones that actually belong to the group in hand — their list can
-     only ever be inside their own group, so for any other group this is empty
-     and the picker says so. */
-  return mine.filter(function(u){ return all.indexOf(u) >= 0; });
+  return STATE.refData.businessUnitMap[businessGroup] || [];
 }
 
 /* The options for a Business Unit picker, and the notice that goes under it.
@@ -4049,10 +4047,9 @@ function renderOpportunityForm(mode){
             unitOptionsHtml(units, isEdit ? o.businessUnit : (s.businessUnit || '')) +
           '</select>' +
           unitPickerNotice(units, currentBg) +
-          ((isUnitBound(s.role) && units.length)
-            ? '<div class="field-hint">' + (units.length > 1
-                ? 'You cover ' + units.length + ' Business Units — pick the one this quote belongs to.'
-                : 'You raise quotes inside ' + escapeHtml(units[0]) + '.') + '</div>'
+          ((isUnitBound(s.role) && units.length > 1 && s.businessUnit)
+            ? '<div class="field-hint">Defaults to ' + escapeHtml(s.businessUnit) +
+              '. Pick another line if this quote belongs to one — it stays yours either way.</div>'
             : '') +
         '</div>' +
       '</div>' +
@@ -4747,7 +4744,9 @@ function renderBulkModal(){
   const scopeNote = s.role === 'admin'
     ? 'You can import for any Business Group and any sales rep named in the file.'
     : 'Every imported quote is assigned to ' + escapeHtml(s.businessGroup) +
-      (isUnitBound(s.role) && s.businessUnit ? ' · ' + escapeHtml(s.businessUnit) : '') +
+      (isUnitBound(s.role) && s.businessUnit
+        ? ' — any Business Unit within it, defaulting to ' + escapeHtml(s.businessUnit) + ' where the file leaves it blank'
+        : '') +
       (s.role === 'rep' ? ', under your name (' + escapeHtml(s.name) + ')' : '') +
       ', whatever the file says, so access stays scoped correctly.';
 
@@ -5217,12 +5216,14 @@ function parseBulkRow(row, headerMap, rowIndex){
   let businessGroup = normalizeBusinessGroup(get('businessGroup'));
   if(s.role !== 'admin') businessGroup = s.businessGroup;
   const businessUnitRaw = String(get('businessUnit') || '').trim();
-  /* Someone who works inside one unit imports into it, whatever the file says.
-     The server forces the same; disagreeing here would only mean a preview that
-     promised something the import then quietly changed. */
-  const businessUnit = (isUnitBound(s.role) && s.businessUnit)
+  /* The file names the unit, as it does for anyone — a rep sells across their
+     whole group. A blank falls back to their own, which is the same rule the
+     quote form and the server both apply; disagreeing here would only mean a
+     preview that promised something the import then quietly changed. */
+  const namedUnit = businessGroup ? normalizeBusinessUnit(businessGroup, businessUnitRaw) : null;
+  const businessUnit = (!businessUnitRaw && isUnitBound(s.role) && s.businessUnit)
     ? s.businessUnit
-    : (businessGroup ? normalizeBusinessUnit(businessGroup, businessUnitRaw) : null);
+    : namedUnit;
   const rawQuantity = get('quantity');
   const quantityBlank = (rawQuantity === '' || rawQuantity === null || rawQuantity === undefined);
   const quantity = quantityBlank ? 1 : parseAmount(rawQuantity);
