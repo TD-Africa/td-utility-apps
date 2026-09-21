@@ -698,6 +698,36 @@ function staffTypeList(){
   return (ref.staffTypes && ref.staffTypes.length) ? ref.staffTypes : BUILTIN_STAFF_TYPES;
 }
 
+/* Columns this company does not use, named on its own Sheet. Empty for a Sheet
+   that has not said, so every other company renders exactly as before.
+
+   Hidden, not removed: the column keeps its data and everything derived from it
+   still works. This only decides whether a person is shown it. */
+/* Fields this company chooses from a list rather than typing. Empty for a
+   Sheet that has not said, so every other company keeps its text box.
+
+   A field is only PICKED when there is something to pick from. An empty
+   drop-down is worse than a text box — it cannot be filled in at all, and
+   nothing on screen explains why — so an empty list falls back to typing. */
+function fieldPicked(field, options){
+  const p = (STATE.settings && STATE.settings.pickFields) || [];
+  if(p.indexOf(field) < 0) return false;
+  return !!(options && options.length);
+}
+
+function fieldHidden(field){
+  const h = (STATE.settings && STATE.settings.hiddenFields) || [];
+  return h.indexOf(field) >= 0;
+}
+
+/* `s` when the field is shown, nothing when it is hidden — so a header, a cell
+   and a colspan all stay in step from one decision. */
+function ifField(field, s){ return fieldHidden(field) ? '' : s; }
+
+/* 1 when shown, 0 when hidden. Column-group spans are counted, not written as
+   literals, or hiding a column silently shifts every heading beside it. */
+function colIf(field){ return fieldHidden(field) ? 0 : 1; }
+
 function fieldLabel(field, builtIn){
   const m = (STATE.settings && STATE.settings.fieldLabels) || {};
   return m[field] || builtIn;
@@ -1681,8 +1711,8 @@ function registerControls(mode){
     selectHtml(mode + '-type', [['','All staff types']].concat(staffTypeList()
       .map(function(t){ return [t, t]; })), f.type,
       {act:'filter:reg.' + mode + ':type'}) +
-    selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
-      .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'}) +
+    ifField('bus_unit', selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
+      .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'})) +
     selectHtml(mode + '-purpose', [['','All purposes']].concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:reg.' + mode + ':purpose'}) +
     selectHtml(mode + '-status', [['','Any status'],['ACTIVE','Active'],['New Hire','New hire'],
@@ -1771,7 +1801,7 @@ function viewRegister(mode){
 
   if(mode === 'payroll'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 8 : 7) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 7 : 6) + colIf('bus_unit')) + '"></th>' +
         '<th class="hg" colspan="6">Payroll earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="1">Employer cost</th>' +
         '<th class="hg" colspan="5">Payroll deductions</th>' +
@@ -1781,7 +1811,8 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        sortHeader(mode, 'bus_unit', 'SAL_Dept') + sortHeader(mode, 'org', 'Org') +
+        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept')) +
+        sortHeader(mode, 'org', 'Org') +
         sortHeader(mode, 'purpose', 'Purpose') +
         sortHeader(mode, 'gross', 'Gross', 'r') + sortHeader(mode, 'basic', 'Basic', 'r') +
         sortHeader(mode, 'housing', 'Housing', 'r') + sortHeader(mode, 'transport', 'Transport', 'r') +
@@ -1797,7 +1828,9 @@ function viewRegister(mode){
     body = p.rows.map(function(e){
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
-        '<td>' + esc(e.grade) + '</td><td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td>' +
+        '<td>' + esc(e.grade) + '</td>' +
+        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>') +
+        '<td>' + esc(e.org) + '</td>' +
         purposeCell(e) +
         ['gross','basic','housing','transport','domestic','total_earn'].map(function(k){
           return '<td class="earn">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
@@ -1866,14 +1899,15 @@ function viewRegister(mode){
     }).join('');
   }else{
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 6 : 5) + colIf('bus_unit')) + '"></th>' +
         '<th class="hg" colspan="3">Payroll</th>' +
         '<th class="hg" colspan="3">Security</th><th class="hg" colspan="1">Consolidated</th>' +
         '<th class="hg" colspan="3"></th>' +
       '</tr><tr>' +
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
-        sortHeader(mode, 'bus_unit', 'SAL_Dept') + sortHeader(mode, 'org', 'Org') +
+        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept')) +
+        sortHeader(mode, 'org', 'Org') +
         sortHeader(mode, 'grade', 'Grade') + sortHeader(mode, 'purpose', 'Purpose') +
         /* Labelled for what they are. The prototype's "JUNE PAY" and "JUNE
            TOTAL" columns actually showed July file values (defect D24). */
@@ -1890,7 +1924,8 @@ function viewRegister(mode){
       const movP = (Number(e.netPay) || 0) - (Number(e.jul_net) || 0);
       const movS = (Number(e.netSecurity) || 0) - (Number(e.jul_sec_net) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
-        '<td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
+        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>') +
+        '<td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
         purposeCell(e) +
         '<td class="r">' + esc(moneyOrBlank(e.jul_net)) + '</td>' +
         '<td class="' + (movP > 0 ? 'earn' : movP < 0 ? 'ded' : 'r') + '">' + esc(signed(movP)) + '</td>' +
@@ -1986,8 +2021,8 @@ function viewJournal(){
     selectHtml('jnl-sec', [['','Payroll + security'],['PAYROLL','Payroll only'],
       ['SECURITY','Security only'],['EMP_ACCT','EMP account only']], f.section,
       {act:'filter:jnl:section'}) +
-    selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
-      .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'}) +
+    ifField('bus_unit', selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
+      .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'})) +
     selectHtml('jnl-purpose', [['','All purposes']].concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:jnl:purpose'}) +
     selectHtml('jnl-size', [[100,'100 per page'],[200,'200'],[500,'500']], f.pageSize,
@@ -2055,7 +2090,8 @@ function viewJournal(){
     table = '<div class="tw"><div class="ts" data-keep-scroll="jnl">' +
       '<table><thead><tr>' +
         '<th class="hc r">#</th><th class="hc">Emp no</th><th class="hc">Staff name</th>' +
-        '<th class="hc">SAL_Dept</th><th class="hc">Org</th><th class="hc">Purpose</th>' +
+        ifField('bus_unit', '<th class="hc">SAL_Dept</th>') +
+        '<th class="hc">Org</th><th class="hc">Purpose</th>' +
         '<th class="hc">Ledger</th>' +
         '<th class="hc c">Category</th><th class="hc">Debit</th><th class="hc">Credit</th>' +
         '<th class="hc r">Amount</th><th class="hc">Section</th><th class="hc">EMP account</th>' +
@@ -2067,7 +2103,8 @@ function viewJournal(){
           '<td class="r muted">' + esc(r.seq) + '</td>' +
           '<td class="muted">' + esc(r.emp_no) + '</td>' +
           '<td class="nm">' + esc(r.name) + '</td>' +
-          '<td>' + esc(r.bus_unit) + '</td><td>' + esc(r.org) + '</td>' +
+          ifField('bus_unit', '<td>' + esc(r.bus_unit) + '</td>') +
+          '<td>' + esc(r.org) + '</td>' +
           '<td>' + esc(r.purpose || '') + '</td>' +
           '<td style="font-weight:500">' + esc(r.ledger) + '</td>' +
           '<td class="c"><span class="bdg ' + (r.category === 'EARNINGS' ? 'bNEW' : 'bEXI') + '">' +
@@ -3042,7 +3079,8 @@ function modalPayslip(m){
       '<div class="ps-emp">' +
         psField('Employee no', p.emp_no) + psField('Name', p.name) +
         psField('Grade', p.grade || '—') + psField('Salary group', p.salary_group || '—') +
-        psField('SAL_Dept', p.bus_unit || '—') + psField('Purpose', p.purpose || '—') +
+        ifField('bus_unit', psField('SAL_Dept', p.bus_unit || '—')) +
+        psField('Purpose', p.purpose || '—') +
         psField('Organisation', p.org || '—') +
         psField('Staff type', p.staff_type || '—') +
         psField('Loan account', p.empAccount || '—') +
@@ -3153,9 +3191,10 @@ function modalMovement(m){
         '<div class="fld"><label>Staff type</label>' +
           selectHtml('mv-nh-type', staffTypeList().map(function(t){ return [t, t]; }),
             'SUPPORT') + '</div>' +
-        '<div class="fld"><label>SAL_Dept</label>' +
-          selectHtml('mv-nh-bu', [['','— none —']].concat((ref.businessUnits || [])
-            .map(function(b){ return [b, b]; })), '') + '</div>' +
+        ifField('bus_unit',
+          '<div class="fld"><label>SAL_Dept</label>' +
+            selectHtml('mv-nh-bu', [['','— none —']].concat((ref.businessUnits || [])
+              .map(function(b){ return [b, b]; })), '') + '</div>') +
         '<div class="fld"><label>Purpose</label>' +
           selectHtml('mv-nh-purpose', [['','— none —']].concat(purposeList()
             .map(function(v){ return [v, v]; })), '') + '</div>' +
@@ -3298,19 +3337,40 @@ function modalStaff(m){
         '<div class="fld"><label>Status</label>' +
           selectHtml('st-status', [['ACTIVE','Active'],['New Hire','New hire'],
             ['SUSPENDED','Suspended'],['EXITED','Exited']], e ? e.status : 'ACTIVE') + '</div>' +
-        '<div class="fld"><label>Grade</label>' +
-          selectHtml('st-grade', [['','—']].concat(STATE.salaryStructure.map(function(s){
-            return [s.grade, s.grade]; })), e ? e.grade : '') + '</div>' +
+        /* Typed, not chosen. The list only ever held the grades already on the
+           SalaryStruct tab, so a grade that existed in the business but had not
+           been set up yet could not be recorded at all — and setting one up is
+           not something the person entering a staff record can do. The server
+           has always taken this as free text; nothing was validating it. */
+        (function(){
+          /* Typed by default; chosen where the company has said so and has a
+             list to choose from. The value and the id are identical either
+             way, so everything downstream is unaffected. */
+          const grades = (ref.grades && ref.grades.length)
+            ? ref.grades
+            : STATE.salaryStructure.map(function(s){ return s.grade; });
+          if(fieldPicked('grade', grades)){
+            return '<div class="fld"><label>Grade</label>' +
+              selectHtml('st-grade', [['','—']].concat(grades.map(function(g){ return [g, g]; })),
+                e ? e.grade : '') + '</div>';
+          }
+          return '<div class="fld"><label>Grade</label>' +
+            '<input type="text" id="st-grade" maxlength="60" value="' +
+              attr(e ? e.grade : '') + '" placeholder="e.g. C10">' +
+            '<span class="hint">Pay is entered on this record, so a grade with no ' +
+              'salary structure yet is fine.</span></div>';
+        })() +
         '<div class="fld"><label>Salary group</label>' +
           selectHtml('st-salary_group', [['','—']].concat((ref.salaryGroups || [])
             .map(function(g){ return [g, g]; })), e ? e.salary_group : '') + '</div>' +
         '<div class="fld"><label>Staff type</label>' +
           selectHtml('st-staff_type', staffTypeList().map(function(t){ return [t, t]; }),
             e ? e.staff_type : 'SUPPORT') + '</div>' +
-        '<div class="fld"><label>SAL_Dept</label>' +
-          selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
-            .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
-          '<span class="hint">Decides the Business Group cost is charged to.</span></div>' +
+        ifField('bus_unit',
+          '<div class="fld"><label>SAL_Dept</label>' +
+            selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
+              .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
+            '<span class="hint">Decides the Business Group cost is charged to.</span></div>') +
         '<div class="fld"><label>Purpose</label>' +
           selectHtml('st-purpose', [['','—']].concat(purposeList()
             .map(function(v){ return [v, v]; })), e ? e.purpose : '') +
@@ -4042,8 +4102,20 @@ const REGISTER_EXPORT = {
   }
 };
 
+/* Drops hidden columns from an export's column list and its headings together,
+   so the two can never fall out of step. A company that hides nothing gets
+   exactly the spec it always got. */
+function visibleSpec(spec){
+  const cols = [], head = [];
+  spec.cols.forEach(function(c, i){
+    if(fieldHidden(c)) return;
+    cols.push(c); head.push(spec.head[i]);
+  });
+  return {cols: cols, head: head};
+}
+
 function exportRegister(mode){
-  const spec = REGISTER_EXPORT[mode];
+  const spec = visibleSpec(REGISTER_EXPORT[mode]);
   const rows = filteredStaff(mode);
   const out = [['PaySync ' + REGISTER_TITLES[mode], periodLabel(STATE.period),
       'Exported ' + new Date().toISOString(), rows.length + ' of ' + STATE.staff.length + ' staff'],
@@ -4074,13 +4146,17 @@ async function exportJournal(){
         res.source === 'posted' ? 'Posted ' + res.postedAt : 'Exported ' + new Date().toISOString(),
         'Debits ' + res.totals.debit.toFixed(2), 'Credits ' + res.totals.credit.toFixed(2),
         res.totals.assertion.ok ? 'BALANCED' : 'DOES NOT BALANCE'],
-      ['Batch','Period','#','Emp no','Staff name','SAL_Dept','Org','Purpose','Ledger','Category',
-        'Debit code','Credit code','Amount','Section','EMP account']
+      ['Batch','Period','#','Emp no','Staff name']
+        .concat(fieldHidden('bus_unit') ? [] : ['SAL_Dept'])
+        .concat(['Org','Purpose','Ledger','Category',
+        'Debit code','Credit code','Amount','Section','EMP account'])
     ];
     res.rows.forEach(function(r){
-      out.push([res.batchRef || '', r.period, r.seq, r.emp_no, r.name, r.bus_unit, r.org,
+      out.push([res.batchRef || '', r.period, r.seq, r.emp_no, r.name]
+        .concat(fieldHidden('bus_unit') ? [] : [r.bus_unit])
+        .concat([r.org,
         r.purpose || '', r.ledger,
-        r.category, r.debit, r.credit, Number(r.amount).toFixed(2), r.section, r.empAccount || '']);
+        r.category, r.debit, r.credit, Number(r.amount).toFixed(2), r.section, r.empAccount || '']));
     });
     downloadCsv('PaySync_journal_' + stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.csv', out);
     toast(res.rows.length + ' postings exported' + (res.batchRef ? ' — batch ' + res.batchRef : ' as a draft') + '.');
@@ -4493,8 +4569,9 @@ function exportChanges(){
   }
   const out = [['PaySync movements', periodLabel(STATE.period), 'Exported ' + new Date().toISOString(),
       rows.length + ' rows'],
-    ['#','Source','Period','Emp no','Name','SAL_Dept','Org','Type','Payroll','Security','Reason',
-      'Staff status set','Recorded by','Recorded at','Reversed by','Reversed at','Reversal reason']];
+    ['#','Source','Period','Emp no','Name'].concat(fieldHidden('bus_unit') ? [] : ['SAL_Dept'])
+      .concat(['Org','Type','Payroll','Security','Reason',
+      'Staff status set','Recorded by','Recorded at','Reversed by','Reversed at','Reversal reason'])];
   rows.sort(function(a, b){
     if(!!a.derived !== !!b.derived) return a.derived ? -1 : 1;
     return Number(a.seq || 0) - Number(b.seq || 0);
@@ -4586,7 +4663,8 @@ function exportBgCost(){
   if(a.unallocated.length){
     out.push([]);
     out.push(['Could not be matched to a Business Group']);
-    out.push(['Emp no','Name','SAL_Dept','Staff type','Cost']);
+    out.push(['Emp no','Name'].concat(fieldHidden('bus_unit') ? [] : ['SAL_Dept'])
+      .concat(['Staff type','Cost']));
     a.unallocated.forEach(function(u){
       out.push([u.emp_no, u.name, u.bus_unit, u.staff_type, u.cost.toFixed(2)]);
     });
