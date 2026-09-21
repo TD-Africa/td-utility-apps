@@ -1328,7 +1328,10 @@ function businessGroupsAvailable(){
    pressing it would actually work. The server decides regardless. */
 function canDelete(o){
   const s = STATE.session;
-  if(!s || s.role !== 'admin') return false;
+  /* Mirrors canDeleteOpportunities_: a manager may, inside their own scope; a
+     rep never may. The list this is called against is already scoped, and the
+     server checks the scope again regardless. */
+  if(!s || s.role === 'rep') return false;
   if(o.soNumber || o.invoiceNumber || o.status === 'invoiced') return false;
   if(o.status === 'lost'){
     const daysLost = o.lostAt ? daysBetween(String(o.lostAt).slice(0, 10), todayStr()) : null;
@@ -3227,8 +3230,8 @@ function renderCompliance(){
                 (o.lossReasonNote ? '<div style="color:var(--text-faint);font-size:11px;">' + escapeHtml(o.lossReasonNote) + '</div>' : '') + '</td>' +
               '<td>' + (o.lostAt ? fmtDate(String(o.lostAt).slice(0, 10)) : '—') + '</td>' +
               '<td class="num-cell">' + (daysLost === null ? '—' : daysLost + 'd') + '</td>' +
-              '<td>' + (s.role !== 'admin'
-                ? '<span class="field-hint">Admin only</span>'
+              '<td>' + (s.role === 'rep'
+                ? '<span class="field-hint">Managers only</span>'
                 : (eligible
                     ? '<button class="btn btn-danger-ghost btn-sm" data-delete-lost="' + escapeHtml(o.id) + '">Delete</button>'
                     : '<span class="field-hint">Eligible in ' + (window - daysLost) + 'd</span>')) + '</td>' +
