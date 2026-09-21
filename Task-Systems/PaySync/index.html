@@ -2487,7 +2487,8 @@ function viewStructure(){
   return '<div class="sec-title">Salary structure <span class="sub">' + rows.length +
       ' grades · applies to new hires</span>' +
       (can('editStructure')
-        ? '<button class="btn btn-f" data-act="edit-structure:">+ Add or edit a grade</button>' : '') +
+        ? '<button class="btn btn-f" data-act="edit-structure:">+ Add or edit a grade</button>' +
+          '<button class="btn btn-w" data-act="structure-upload">Import grades</button>' : '') +
     '</div>' +
     userBar('Editing a grade changes what future new hires are paid. It never reprices existing staff.') +
 
@@ -2855,6 +2856,7 @@ function renderOverlay(){
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
     bulkPayslip: modalBulkPayslip, renumber: modalRenumber, schemeEdit: modalSchemeEdit,
     fieldChange: modalFieldChange, staffUpload: modalStaffUpload,
+    structureUpload: modalStructureUpload,
     diagnostics: modalDiagnostics
   }[m.kind];
   box.innerHTML = body ? body(m) : '';
@@ -2898,6 +2900,126 @@ function parsePasted(text){
   row.push(cell.trim());
   if(row.length > 1 || row[0] !== '') rows.push(row);
   return rows;
+}
+
+async function downloadStructureTemplate(){
+  try{
+    const t = await rpc('structureUploadTemplate', {});
+    downloadCsv('PaySync_salary_structure_template.csv', [t.columns]);
+    toast('Template downloaded — ' + t.columns.length + ' columns, grade required.');
+  }catch(err){ toast(String(err.message || err), true); }
+}
+
+async function checkStructureUpload(){
+  const text = val('su2-text');
+  const table = parsePasted(text);
+  if(table.length < 2){
+    STATE.modalError = 'Paste at least a header line and one row under it.';
+    return render();
+  }
+  STATE.modal = {kind:'structureUpload', stage:'loading', text:text, table:table};
+  render();
+  try{
+    const preview = await rpc('previewStructureUpload', {table:table});
+    STATE.modal = {kind:'structureUpload', stage:'preview', text:text, table:table, preview:preview};
+  }catch(err){
+    STATE.modal = {kind:'structureUpload', stage:'paste', text:text};
+    STATE.modalError = String(err.message || err);
+  }
+  render();
+}
+
+async function commitStructureUpload(){
+  const m = STATE.modal;
+  STATE.busy = 'Importing grades';
+  render();
+  try{
+    const res = await rpc('commitStructureUpload', {table:m.table});
+    STATE.modal = null;
+    toast(res.message);
+    await reload();
+  }catch(err){
+    toast(String(err.message || err), true);
+  }finally{
+    STATE.busy = null;
+    render();
+  }
+}
+
+function modalStructureUpload(m){
+  if(m.stage === 'loading'){
+    return modalShell({cls:'narrow', title:'Import grades',
+      body:'<div class="empty">Checking the rows…</div>'});
+  }
+
+  if(m.stage === 'preview'){
+    const p = m.preview;
+    const bad = p.errors.length > 0;
+    return modalShell({
+      cls:'wide', title:'Import grades',
+      body:
+        (bad
+          ? '<div class="note red"><strong>' + p.errors.length + ' row(s) cannot be read, so ' +
+            'nothing will be imported.</strong><br>One bad row stops the whole file.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr><th class="hc r">Line</th>' +
+            '<th class="hc">Grade</th><th class="hc">What is wrong</th></tr></thead><tbody>' +
+            p.errors.slice(0, 40).map(function(e){
+              return '<tr><td class="r muted">' + esc(e.row) + '</td><td>' +
+                esc(e.grade || '') + '</td><td>' + esc(e.message) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>'
+          : '<div class="rec" style="margin:0 0 12px">' +
+              '<div class="rr"><span class="rlbl">New grades</span><span class="rval">' +
+                p.creates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Existing grades updated</span>' +
+                '<span class="rval">' + p.updates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Staff currently on a changed grade</span>' +
+                '<span class="rval">' + p.staffOnChangedGrades + '</span></div>' +
+            '</div>' +
+            '<div class="note">A salary structure sets what a <strong>new hire</strong> on that ' +
+            'grade is paid. Nobody already on the register is repriced by this import' +
+            (p.staffOnChangedGrades
+              ? ', including the ' + p.staffOnChangedGrades + ' already on these grades' : '') +
+            '.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr>' +
+              '<th class="hc r">Line</th><th class="hc">Action</th><th class="hc">Grade</th>' +
+              '<th class="hc">Salary group</th><th class="hc r">Gross</th>' +
+              '<th class="hc r">Was</th><th class="hc r">Staff on grade</th>' +
+            '</tr></thead><tbody>' +
+            p.sample.map(function(s){
+              return '<tr><td class="r muted">' + esc(s.line) + '</td>' +
+                '<td><span class="bdg ' + (s.action === 'create' ? 'bNEW' : 'bEXI') + '">' +
+                  esc(s.action) + '</span></td>' +
+                '<td style="font-weight:600">' + esc(s.grade) + '</td>' +
+                '<td>' + esc(s.salary_group || '—') + '</td>' +
+                '<td class="net">' + esc(money(s.gross)) + '</td>' +
+                '<td class="r muted">' + (s.grossBefore === null ? '—' : esc(money(s.grossBefore))) + '</td>' +
+                '<td class="r muted">' + esc(s.staffOnGrade) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>'),
+      footer:
+        '<button class="btn btn-ghost" data-act="structure-upload-back">Back</button>' +
+        (bad ? '' :
+          '<button class="btn btn-f" data-act="structure-upload-commit">Import ' +
+            (p.creates + p.updates) + ' grade(s)</button>')
+    });
+  }
+
+  return modalShell({
+    cls:'wide', title:'Import grades',
+    body:
+      '<div class="note">Paste straight out of Excel, or paste a CSV. The first line must name ' +
+      'the columns — <strong>grade</strong> is required and is what each row is matched on. ' +
+      'A column you leave out keeps whatever that grade already has.<br><br>' +
+      '<strong>count</strong>, <strong>updatedAt</strong> and <strong>updatedBy</strong> cannot ' +
+      'be uploaded; PaySync maintains them.</div>' +
+      '<div class="fld"><label>Rows</label>' +
+      '<textarea id="su2-text" rows="12" spellcheck="false" ' +
+      'style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px" ' +
+      'placeholder="grade&#9;salary_group&#9;basic&#9;housing&#9;transport&#10;' +
+      'OFF STD&#9;Junior Staff&#9;200000&#9;100000&#9;50000"></textarea></div>',
+    footer:
+      '<button class="btn btn-w" data-act="structure-upload-template">Download the template</button>' +
+      '<button class="btn btn-f" data-act="structure-upload-check">Check the rows</button>'
+  });
 }
 
 async function downloadStaffTemplate(){
@@ -4976,6 +5098,18 @@ async function handleAction(act, arg, ev, el){
       case 'staff-upload':
         STATE.modal = {kind:'staffUpload', stage:'paste'};
         return render();
+      case 'structure-upload':
+        STATE.modal = {kind:'structureUpload', stage:'paste'};
+        return render();
+      case 'structure-upload-back':
+        STATE.modal = {kind:'structureUpload', stage:'paste', text:STATE.modal.text};
+        return render();
+      case 'structure-upload-template':
+        return downloadStructureTemplate();
+      case 'structure-upload-check':
+        return checkStructureUpload();
+      case 'structure-upload-commit':
+        return commitStructureUpload();
       case 'staff-upload-back':
         STATE.modal = {kind:'staffUpload', stage:'paste', text:STATE.modal.text};
         return render();
