@@ -3293,9 +3293,16 @@ function modalStaff(m){
         '<div class="fld"><label>Status</label>' +
           selectHtml('st-status', [['ACTIVE','Active'],['New Hire','New hire'],
             ['SUSPENDED','Suspended'],['EXITED','Exited']], e ? e.status : 'ACTIVE') + '</div>' +
+        /* Typed, not chosen. The list only ever held the grades already on the
+           SalaryStruct tab, so a grade that existed in the business but had not
+           been set up yet could not be recorded at all — and setting one up is
+           not something the person entering a staff record can do. The server
+           has always taken this as free text; nothing was validating it. */
         '<div class="fld"><label>Grade</label>' +
-          selectHtml('st-grade', [['','—']].concat(STATE.salaryStructure.map(function(s){
-            return [s.grade, s.grade]; })), e ? e.grade : '') + '</div>' +
+          '<input type="text" id="st-grade" maxlength="60" value="' +
+            attr(e ? e.grade : '') + '" placeholder="e.g. C10">' +
+          '<span class="hint">Pay is entered on this record, so a grade with no ' +
+            'salary structure yet is fine.</span></div>' +
         '<div class="fld"><label>Salary group</label>' +
           selectHtml('st-salary_group', [['','—']].concat((ref.salaryGroups || [])
             .map(function(g){ return [g, g]; })), e ? e.salary_group : '') + '</div>' +
