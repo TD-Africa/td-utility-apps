@@ -213,8 +213,10 @@
   .leg-dot{width:9px;height:9px;border-radius:3px;flex:none;}
 
   /* Pipeline board */
-  .board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;align-items:start;}
-  @media (max-width:1400px){ .board{grid-template-columns:repeat(2,minmax(0,1fr));} }
+  .board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start;}
+  /* No intermediate fallback: three columns fit comfortably down to the 980px
+     breakpoint below, where the board goes to a single column. The two-column
+     step existed only because there were briefly four stages. */
   .col{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
   .col-head{padding:14px 15px 12px 15px;border-bottom:1px solid var(--border);}
   .col-head .num{
@@ -226,7 +228,10 @@
   .col3 .num{background:var(--p3-soft);color:var(--p3);}
   .col4 .num{background:var(--p4-soft);color:var(--p4);}
   .col-head .title{font-family:'Sora';font-size:13.5px;font-weight:700;}
-  .col-head .desc{font-size:11px;color:var(--text-faint);margin-top:4px;margin-left:28px;}
+  /* min-height, not a conditional render: only Pipeline 1 carries a description
+     now, and without it the other two column heads sit shorter and their cards
+     start higher than Pipeline 1's. */
+  .col-head .desc{font-size:11px;color:var(--text-faint);margin-top:4px;margin-left:28px;min-height:15px;}
   .col-head .meta{display:flex;justify-content:space-between;margin-top:10px;font-size:11.5px;color:var(--text-soft);gap:8px;}
   .col-body{padding:10px;display:flex;flex-direction:column;gap:9px;max-height:640px;overflow-y:auto;}
   .col-empty{padding:26px 10px;text-align:center;color:var(--text-faint);font-size:12px;}
@@ -605,22 +610,22 @@ const STATE = {
   busy: null                // label shown in the busy pill while a write is in flight
 };
 
-/* Pipeline 1 used to mean "Sales Order raised". That state is now Logged, and
-   Pipeline 1 is the stage before a quote goes out. Records created before the
-   split keep pipeline 1 with a Sales Order against them, so never infer "no
-   quote" from the number alone — check quoteSent. */
-const PIPELINE_LOGGED = 4;
+/* Three stages, and only three. Pipeline 1 is the logged stage — a Sales Order
+   has been raised and the order is waiting to be invoiced. The business treats
+   those as one thing, not as two adjacent stages.
+   Pipeline 2 and 3 carry no description: everyone here knows what they mean,
+   and a sub-line under each column head was just noise. */
+const PIPELINE_LOGGED = 1;
 const PIPELINE_META = {
-  1: {label:'Pipeline 1', sub:'Booked · no quote sent yet', color:'p1', short:'P1'},
-  2: {label:'Pipeline 2', sub:'Quotes sent · fresh', color:'p2', short:'P2'},
-  3: {label:'Pipeline 3', sub:'Quotes sent · aging', color:'p3', short:'P3'},
-  4: {label:'Logged', sub:'Sales Order raised, awaiting invoice', color:'p4', short:'LOG'}
+  1: {label:'Pipeline 1', sub:'Sales Order raised · awaiting invoice', color:'p1', short:'P1'},
+  2: {label:'Pipeline 2', sub:'', color:'p2', short:'P2'},
+  3: {label:'Pipeline 3', sub:'', color:'p3', short:'P3'}
 };
-const BOARD_STAGES = [1, 2, 3, PIPELINE_LOGGED];
+const BOARD_STAGES = [1, 2, 3];
 
 const VIEW_TITLES = {
   dashboard: ['Dashboard', 'Live view of every opportunity in motion'],
-  board:     ['Pipeline Board', 'Booked leads, quotes in play, and orders logged awaiting invoice'],
+  board:     ['Pipeline Board', 'Quotes in play, and orders logged awaiting invoice'],
   list:      ['All Opportunities', 'Search, sort and export the full book'],
   analytics: ['Analytics', 'Pipeline health across Business Groups and reps'],
   orders:    ['Orders & Invoices', 'Record the Dynamics 365 references against each quote'],
@@ -2315,12 +2320,12 @@ function renderHealthBar(a){
       '<div class="total">' + fmtUSD(total) + '</div>' +
     '</div>' +
     '<div class="healthbar">' + seg(a.p1Value, 'p1') + seg(a.p2Value, 'p2') + seg(a.p3Value, 'p3') +
-      seg(a.loggedValue, 'p4') + '</div>' +
+      '</div>' +
     '<div class="healthbar-legend">' +
-      '<div class="leg-item"><span class="leg-dot" style="background:var(--p1);"></span>Pipeline 1 · no quote yet — ' + fmtUSD(a.p1Value) + '</div>' +
-      '<div class="leg-item"><span class="leg-dot" style="background:var(--p2);"></span>Pipeline 2 · fresh — ' + fmtUSD(a.p2Value) + '</div>' +
-      '<div class="leg-item"><span class="leg-dot" style="background:var(--p3);"></span>Pipeline 3 · aging — ' + fmtUSD(a.p3Value) + '</div>' +
-      '<div class="leg-item"><span class="leg-dot" style="background:var(--p4);"></span>Logged · SO raised — ' + fmtUSD(a.loggedValue) + '</div>' +
+      '<div class="leg-item"><span class="leg-dot" style="background:var(--p1);"></span>Pipeline 1 — ' + fmtUSD(a.p1Value) + '</div>' +
+      '<div class="leg-item"><span class="leg-dot" style="background:var(--p2);"></span>Pipeline 2 — ' + fmtUSD(a.p2Value) + '</div>' +
+      '<div class="leg-item"><span class="leg-dot" style="background:var(--p3);"></span>Pipeline 3 — ' + fmtUSD(a.p3Value) + '</div>' +
+
     '</div>' +
     (a.linkedDealsCollapsed > 0
       ? '<div class="field-hint" style="margin-top:10px;">' + a.linkedDealsCollapsed + ' ' +
@@ -2383,16 +2388,14 @@ function renderDashboard(){
     out += '<div class="grid kpi-row">' +
       kpiCard('My open opportunities', a.open.length, 'gold') +
       kpiCard('My open pipeline (USD)', fmtUSD(a.totalOpenUSD), 'gold', nativeBreakdown(a)) +
-      kpiCard('Awaiting invoice (P1)', a.p1.length, 'p1') +
+      kpiCard('Logged · awaiting invoice', a.logged.length, 'p1') +
       kpiCard('Aging quotes (P3)', a.p3.length, 'p3') +
     '</div>';
   }else{
     out += '<div class="grid kpi-row">' +
       kpiCard('Total open pipeline (USD)', fmtUSD(a.totalOpenUSD), 'gold', nativeBreakdown(a)) +
-      kpiCard('Pipeline 1 · No quote yet', fmtUSD(a.p1Value), 'p1',
-        a.p1.length + ' ' + pluralize(a.p1.length, 'opportunity', 'opportunities')) +
-      kpiCard('Logged · Awaiting invoice', fmtUSD(a.loggedValue), 'p4',
-        a.logged.length + ' ' + pluralize(a.logged.length, 'order')) +
+      kpiCard('Pipeline 1 · Logged', fmtUSD(a.p1Value), 'p1',
+        a.logged.length + ' ' + pluralize(a.logged.length, 'order') + ' awaiting invoice') +
       kpiCard('Pipeline 2 · Fresh quotes', fmtUSD(a.p2Value), 'p2', a.p2.length + ' ' + pluralize(a.p2.length, 'quote')) +
       kpiCard('Pipeline 3 · Aging quotes', fmtUSD(a.p3Value), 'p3', a.p3.length + ' ' + pluralize(a.p3.length, 'quote')) +
     '</div>';
@@ -3026,8 +3029,9 @@ function renderAnalytics(){
 
   out += '<div class="section-title"><h2>Funnel</h2><span class="hint">Pipeline 2 → Pipeline 3 → Pipeline 1 → Invoiced</span></div>' +
     '<div class="card card-pad" style="display:flex;align-items:stretch;">' +
-      [['Pipeline 1', a.p1.length, 'p1'], ['Pipeline 2', a.p2.length, 'p2'],
-       ['Pipeline 3', a.p3.length, 'p3'], ['Logged', a.logged.length, 'p4'],
+      /* In the order work moves through the business, and once each — Pipeline 1
+         was being drawn twice while there were briefly four stages. */
+      [['Pipeline 2', a.p2.length, 'p2'], ['Pipeline 3', a.p3.length, 'p3'],
        ['Pipeline 1', a.p1.length, 'p1'], ['Invoiced', a.invoiced.length, 'gold']].map(function(st){
         return '<div style="flex:1;text-align:center;padding:10px;border-right:1px solid var(--border);">' +
           '<div style="font-family:Sora;font-size:22px;font-weight:700;color:var(--' + st[2] + ');">' + st[1] + '</div>' +
@@ -4136,13 +4140,11 @@ function renderOpportunityForm(mode){
             ? opt('1', 'Pipeline 1 — booked, no quote sent yet', true)
             : opt('2', 'Pipeline 2 — quote sent, still fresh', isEdit ? Number(o.pipeline) === 2 : true) +
               opt('3', 'Pipeline 3 — quote sent, aging', isEdit && Number(o.pipeline) === 3) +
-              /* Older records sit in Pipeline 1 with a Sales Order against them.
-                 Keep the option so editing one does not silently move it. */
+              /* Pipeline 1 is reached by raising a Sales Order, never chosen —
+                 but a record already there must keep the option, or editing it
+                 would silently move it back into a selling stage. */
               (isEdit && Number(o.pipeline) === 1
-                ? opt('1', 'Pipeline 1 — legacy, Sales Order raised', true)
-                : '') +
-              (isEdit && Number(o.pipeline) === PIPELINE_LOGGED
-                ? opt(String(PIPELINE_LOGGED), 'Logged — Sales Order raised', true)
+                ? opt('1', 'Pipeline 1 — Sales Order raised, awaiting invoice', true)
                 : '')) +
         '</select>' +
         '<div class="field-hint">Pipeline 2 and 3 are about how long the quote has been out, so the bucket is suggested from the date raised. ' +
