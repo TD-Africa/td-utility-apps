@@ -3518,16 +3518,39 @@ function modalStaff(m){
 function modalScheme(){
   const ref = STATE.refData || {};
   const types = Object.keys(ref.schemeFieldByType || {});
+  /* A <select> with no options renders as an empty box that cannot be opened
+     and says nothing about why. That has now caught us three times — the
+     field-change form, the Purpose list, and here — so an empty list is
+     reported rather than drawn. Unlike those two there is no sensible
+     built-in default to fall back on: a scheme type names a deduction COLUMN,
+     and guessing which column a company's money comes out of is not
+     something this page may do. So it asks. */
+  const noTypes = types.length === 0;
   return modalShell({
     title:'Add deduction scheme',
     sub:'An amortising balance that runs down one instalment per period',
     body:
+      (noTypes
+        ? '<div class="note red"><strong>This Sheet has no deduction scheme types, so there ' +
+          'is nothing to choose and a scheme cannot be created.</strong><br><br>' +
+          'Add them on the <strong>RefData</strong> tab — one row per type:<br>' +
+          '<code>type</code> = <code>schemeType</code> &nbsp;·&nbsp; ' +
+          '<code>key</code> = the name people pick (e.g. <code>Laptop</code>) &nbsp;·&nbsp; ' +
+          '<code>value</code> = the staff column it deducts from (e.g. ' +
+          '<code>laptop_scheme</code>) &nbsp;·&nbsp; <code>active</code> = <code>TRUE</code>' +
+          '<br><br>If you have just pasted them, check they landed in separate columns rather ' +
+          'than all in column A, and that <code>active</code> reads TRUE. Then reload this page.' +
+          '</div>'
+        : '') +
       '<div class="form-row">' +
         '<div class="fld"><label>Employee *</label>' +
           selectHtml('sc-emp', [['','— select —']].concat(STATE.staff.map(function(s){
             return [s.emp_no, s.emp_no + ' — ' + s.name]; })), '') + '</div>' +
         '<div class="fld"><label>Scheme type *</label>' +
-          selectHtml('sc-type', types.map(function(t){ return [t, t]; }), types[0] || '') +
+          (noTypes
+            ? '<input type="text" disabled value="none set up" ' +
+              'style="color:var(--red)">'
+            : selectHtml('sc-type', types.map(function(t){ return [t, t]; }), types[0] || '')) +
           '<span class="hint">Decides which deduction column it feeds.</span></div>' +
         '<div class="fld"><label>Description</label>' +
           '<input type="text" id="sc-desc" placeholder="e.g. Dell Latitude 5540"></div>' +
