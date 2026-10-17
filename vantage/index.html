@@ -4074,6 +4074,21 @@ function renderOpportunityForm(mode){
         '<div class="field"><label>Delivery terms (optional)</label>' +
           '<input type="text" id="f-delivery" placeholder="e.g. D2D or FOB" value="' + escapeHtml(isEdit ? o.deliveryTerms : '') + '"></div>' +
         '</div>' +
+
+        '<div class="field-row">' +
+          '<div class="field"><label>Deal ID (optional)</label>' +
+            '<input type="text" id="f-deal-id" maxlength="40" placeholder="Leave blank and Vantage assigns one" ' +
+              'value="' + escapeHtml(isEdit ? (o.opportunityId || '') : '') + '">' +
+            '<div class="field-hint">Quotes sharing a Deal ID are one deal. Reporting counts it once, ' +
+              'at the highest-value quote — so use the same ID when you quote the same requirement ' +
+              'through more than one partner.</div></div>' +
+          '<div class="field"><label>VAT % (optional)</label>' +
+            '<input type="number" id="f-vat" min="0" max="100" step="any" placeholder="e.g. 7.5" ' +
+              'value="' + escapeHtml(isEdit && Number(o.vatRate) ? o.vatRate : '') + '">' +
+            '<div class="field-hint">Printed on the quote document as its own line. ' +
+              '<b>Pipeline value, targets and every report stay net of VAT</b> — leave it blank where ' +
+              'VAT does not apply.</div></div>' +
+        '</div>' +
         '<div class="field-row">' +
           '<div class="field" style="grid-column:1 / -1;"><label>Note</label>' +
             '<textarea id="f-note" rows="3" maxlength="2000" placeholder="Anything worth knowing about this quote — context, ' +
@@ -4226,6 +4241,11 @@ function renderDetailModal(){
             kv('Business Unit', o.businessUnit ? escapeHtml(o.businessUnit) : '<span style="color:var(--danger);">Not set</span>') +
             kv('Order Type', escapeHtml(o.orderType || '—')) +
             (o.deliveryTerms ? kv('Delivery terms', escapeHtml(o.deliveryTerms)) : '') +
+            (vatOf(o).applies
+              ? kv('VAT', vatOf(o).rate + '% — ' + fmtMoney(vatOf(o).amount, o.currency) +
+                  ' <span style="color:var(--text-faint);font-weight:400;">(' +
+                  fmtMoney(vatOf(o).gross, o.currency) + ' including VAT)</span>')
+              : '') +
             kv('Value', fmtMoney(o.value, o.currency) +
               ' <span style="color:var(--text-faint);font-weight:400;">(' + fmtUSD(usdOf(o)) + ' at ₦' + fmtNumber(STATE.settings.fxRate, 0) + ')</span>') +
             kv('Date raised', fmtDate(o.dateRaised) + (age === null ? '' : ' · ' + age + 'd ago')) +
@@ -4349,6 +4369,17 @@ function renderDetailLineItems(o, d){
 /* Everything that describes a line rather than pricing it, as one muted
    sentence under the item name. As five more columns these would make the
    record table cramped and the customer-facing quote unprintable. */
+/* VAT as it is shown, derived from the rate rather than stored alongside it.
+   `value` is the net — the figure the pipeline and every target count — so the
+   gross exists only where a customer sees it. */
+function vatOf(o){
+  const rate = Number(o && o.vatRate) || 0;
+  const net = Number(o && o.value) || 0;
+  if(rate <= 0) return {rate: 0, amount: 0, gross: net, applies: false};
+  const amount = Math.round(net * (rate / 100) * 100) / 100;
+  return {rate: rate, amount: amount, gross: net + amount, applies: true};
+}
+
 function lineItemDetailText(li){
   const bits = [];
   if(li.platform) bits.push('Platform: ' + li.platform);
@@ -4380,7 +4411,10 @@ function detailActions(o, openActive){
   const out = [];
 
   if(!sent && o.status === 'open') out.push('<button class="btn btn-gold btn-sm" data-send-quote="' + id + '">Send Quote Now</button>');
-  if(sent) out.push('<button class="btn btn-gold btn-sm" data-open-validity="' + id + '">Generate Quote Document</button>');
+  if(sent){
+    out.push('<button class="btn btn-gold btn-sm" data-open-validity="' + id + '">Generate Quote Document</button>');
+    out.push('<button class="btn btn-ghost btn-sm" data-quote-xlsx="' + id + '">Download as Excel</button>');
+  }
   if(sent) out.push('<button class="btn btn-primary btn-sm" data-email-quote="' + id + '">Email Quote</button>');
   if(o.status !== 'invoiced') out.push('<button class="btn btn-ghost btn-sm" data-edit-opp="' + id + '">Edit</button>');
   if(sent) out.push('<button class="btn btn-ghost btn-sm" data-duplicate-quote="' + id + '">Duplicate for Another Partner</button>');
@@ -4763,6 +4797,15 @@ function renderBulkModal(){
         'the Raise New Quote form has no equivalent: every line you add there already belongs to that one quote. ' +
         'It is recorded in the quote\'s history so you can trace it back to your spreadsheet. ' +
         scopeNote + '</div>' +
+      '<div class="field-hint" style="margin-bottom:12px;padding:10px 12px;background:var(--p2-soft);' +
+        'border:1px solid var(--p2-line);border-radius:8px;color:#12357E;line-height:1.55;">' +
+        '<b>Revising a quote that already exists.</b> Put its reference in the <b>Quote Number</b> column ' +
+        'and the upload replaces that quote\'s line items and price instead of raising a new one — which is ' +
+        'what you want when pricing has been revised. The quote <b>keeps its number</b>, so anything already ' +
+        'sent out still matches. Leave the column blank to raise a new quote.<br>' +
+        'Columns you leave <b>blank on a revision are left as they are</b>, so a file carrying only the new ' +
+        'prices will not wipe the contact or the close date. An invoiced quote cannot be revised — reopen it first.' +
+        '</div>' +
       '<div class="action-row" style="margin-bottom:16px;">' +
         '<button type="button" class="btn btn-ghost btn-sm" id="bulk-template-btn">Download CSV template</button>' +
         '<label class="btn btn-gold btn-sm" style="margin:0;">Choose file (.csv or .xlsx)' +
@@ -4857,10 +4900,26 @@ function canDownloadDirectly(){
     'download' in document.createElement('a');
 }
 
+/* btoa takes a binary string, and a 100k-byte apply() blows the argument
+   limit — so the bytes go across in chunks. */
+function bytesToBase64(bytes){
+  const view = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
+  let text = '';
+  for(let i = 0; i < view.length; i += 8192){
+    text += String.fromCharCode.apply(null, view.subarray(i, i + 8192));
+  }
+  return btoa(text);
+}
+
 function deliverFile(filename, mime, content, reserved){
+  /* An .xlsx arrives as bytes rather than text. A charset on a binary type is
+     meaningless, and base64-ing it through unescape/encodeURIComponent would
+     mangle it, so the two paths part company here. */
+  const binary = (typeof content !== 'string');
   if(canDownloadDirectly()){
     try{
-      const url = URL.createObjectURL(new Blob([content], {type: mime + ';charset=utf-8'}));
+      const url = URL.createObjectURL(new Blob([content],
+        {type: binary ? mime : mime + ';charset=utf-8'}));
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
@@ -4883,7 +4942,7 @@ function deliverFile(filename, mime, content, reserved){
   }
   let b64;
   try{
-    b64 = btoa(unescape(encodeURIComponent(content)));
+    b64 = binary ? bytesToBase64(content) : btoa(unescape(encodeURIComponent(content)));
   }catch(e){
     toast('That file could not be encoded for download.', true);
     win.close();
@@ -4926,6 +4985,9 @@ const EXPORT_COLUMNS = [
   ['Reference', function(o){ return displayRef(o); }],
   ['Quote sent', function(o){ return o.quoteSent === false ? 'No' : 'Yes'; }],
   ['Deal ID', function(o){ return o.opportunityId; }],
+  ['VAT %', function(o){ return Number(o.vatRate) || 0; }],
+  ['VAT amount', function(o){ return vatOf(o).amount; }],
+  ['Value incl. VAT', function(o){ return vatOf(o).gross; }],
   ['Customer', function(o){ return o.customerName; }],
   ['Partner', function(o){ return o.partnerName; }],
   ['Contact person', function(o){ return o.contactPerson; }],
@@ -5110,6 +5172,14 @@ const HEADER_ALIASES = {
   cifPrice:         ['cif price', 'cif unit price', 'cif'],
   duration:         ['duration', 'term', 'licence term', 'license term', 'subscription term',
                      'period', 'tenure'],
+  /* Naming an existing quote turns the row into a revision of it rather than a
+     new quote. Kept distinct from "Opportunity Ref", which groups rows of one
+     upload together and is not a stored field. */
+  quoteNumber:      ['quote number', 'quote no', 'quote ref', 'quote reference',
+                     'existing quote', 'existing quote number', 'tdq', 'tdq number',
+                     'revise quote', 'update quote'],
+  dealId:           ['deal id', 'deal', 'deal reference', 'opportunity id'],
+  vatRate:          ['vat %', 'vat', 'vat rate', 'vat percent', 'vat percentage'],
   platform:         ['platform', 'platform name', 'solution platform'],
   serialNumber:     ['serial number', 'serial', 'serial no', 'serial nos', 'sn', 's/n', 'device serial'],
   startDate:        ['start date', 'start', 'cover start', 'commencement date', 'effective date'],
@@ -5297,9 +5367,20 @@ function parseBulkRow(row, headerMap, rowIndex){
   if(!salesRep) errors.push('Missing sales rep');
   if([1, 2, 3].indexOf(pipeline) < 0) errors.push('Invalid Pipeline value "' + String(get('pipeline') || '') + '" (must be 1, 2 or 3)');
 
+  const vatRaw = get('vatRate');
+  const vatBlank = (vatRaw === '' || vatRaw === null || vatRaw === undefined);
+  const vatRate = vatBlank ? 0 : parseAmount(vatRaw);
+  if(!vatBlank && (isNaN(vatRate) || vatRate < 0 || vatRate > 100)){
+    errors.push('VAT "' + vatRaw + '" is not a percentage — enter it as a number such as 7.5');
+  }
+
   return {
     rowIndex: rowIndex,
     quoteGroup: String(get('quoteGroup') || '').trim(),
+    /* The reference of a quote this row revises; blank means a new quote. */
+    quoteNumber: String(get('quoteNumber') || '').trim(),
+    dealId: String(get('dealId') || '').trim(),
+    vatRate: (isNaN(vatRate) ? 0 : vatRate),
     customerName: customerName,
     partnerName: String(get('partnerName') || '').trim(),
     businessGroup: businessGroup,
@@ -5335,7 +5416,11 @@ function groupBulkRows(parsed){
   const groups = [];
   const index = {};
   parsed.forEach(function(r, i){
-    const key = r.quoteGroup ? 'g:' + r.quoteGroup.toLowerCase() : 'single:' + i;
+    /* Every row naming the same existing quote is one revision of it, whether
+       or not the file also carries an Opportunity Ref. */
+    const key = r.quoteNumber
+      ? 'q:' + r.quoteNumber.toLowerCase()
+      : (r.quoteGroup ? 'g:' + r.quoteGroup.toLowerCase() : 'single:' + i);
     if(!index[key]){ index[key] = {key: key, rows: []}; groups.push(index[key]); }
     index[key].rows.push(r);
   });
@@ -5372,6 +5457,7 @@ function validateBulkGroup(group){
     errors: errors,
     rowLabel: rowLabel,
     opportunityRef: first.quoteGroup || '',
+    quoteNumber: first.quoteNumber || '',
     importNote: rows.map(function(r){ return r.importNote; }).filter(Boolean).join(' / '),
     data: {
       customerName: first.customerName, partnerName: first.partnerName,
@@ -5379,10 +5465,12 @@ function validateBulkGroup(group){
       orderType: first.orderType, contactPerson: first.contactPerson, contactEmail: first.contactEmail,
       lineItems: lineItems, currency: first.currency, dateRaised: first.dateRaised,
       expectedCloseDate: first.expectedCloseDate, salesRep: first.salesRep,
-      probability: first.probability, validityDays: first.validityDays, pipeline: first.pipeline
+      probability: first.probability, validityDays: first.validityDays, pipeline: first.pipeline,
+      opportunityId: first.dealId, vatRate: first.vatRate
     },
     preview: {
       lineCount: rows.length, total: total, currency: first.currency, pipeline: first.pipeline,
+      revises: first.quoteNumber || '', vatRate: first.vatRate || 0,
       /* Surfaced in the preview so a rep can check the alternative totals
          before anything is written, not after. */
       fobTotal: rows.reduce(function(a, r){ return a + (Number(r.lineItem.fobSubtotal) || 0); }, 0),
@@ -5423,7 +5511,8 @@ function processBulkRows(rows){
   const valid = results.filter(function(r){ return r.ok; });
   const invalid = results.filter(function(r){ return !r.ok; });
   BULK_READY = valid.map(function(r){
-    return {rowLabel: r.rowLabel, importNote: r.importNote, opportunityRef: r.opportunityRef, data: r.data};
+    return {rowLabel: r.rowLabel, importNote: r.importNote, opportunityRef: r.opportunityRef,
+      quoteNumber: r.quoteNumber, data: r.data};
   });
 
   /* The commonest and most expensive mistake is leaving Opportunity Ref blank on
@@ -5432,7 +5521,9 @@ function processBulkRows(rows){
      belong together and say so before anything is written. */
   const ungrouped = {};
   parsed.forEach(function(r){
-    if(r.quoteGroup) return;
+    /* Rows revising one quote are already grouped by its number, so they are
+       not the mistake this warning is looking for. */
+    if(r.quoteGroup || r.quoteNumber) return;
     const key = String(r.customerName || '').toLowerCase() + '|' + String(r.businessGroup || '');
     if(!ungrouped[key]) ungrouped[key] = [];
     ungrouped[key].push(r.rowIndex);
@@ -5441,10 +5532,18 @@ function processBulkRows(rows){
     .filter(function(k){ return ungrouped[k].length > 1; })
     .map(function(k){ return {customer: k.split('|')[0], rows: ungrouped[k]}; });
 
+  const revising = valid.filter(function(r){ return r.quoteNumber; }).length;
   statusEl.innerHTML = '<b>' + rows.length + '</b> ' + pluralize(rows.length, 'row') + ' across <b>' +
     results.length + '</b> ' + pluralize(results.length, 'quote') +
     ' — <span style="color:var(--p1);font-weight:700;">' + valid.length + ' ready to import</span>' +
     (invalid.length ? ', <span style="color:var(--danger);font-weight:700;">' + invalid.length + ' need fixing</span>' : '') + '.' +
+    /* Updating an existing quote is a different act from raising a new one, and
+       it is worth being certain which is about to happen. */
+    (revising
+      ? '<div style="margin-top:8px;">' + revising + ' of them ' + (revising === 1 ? 'names' : 'name') +
+        ' an existing quote and will <b>replace its line items and price</b> rather than raise a new quote. ' +
+        'The quote keeps its number.</div>'
+      : '') +
     (looksSplit.length
       ? '<div style="margin-top:10px;padding:10px 12px;background:var(--p3-soft);border:1px solid var(--p3-line);' +
         'border-radius:8px;color:#6B430A;line-height:1.55;">' +
@@ -5469,9 +5568,12 @@ function processBulkRows(rows){
     results.slice(0, 200).map(function(r){
       return '<tr>' +
         '<td>' + r.rowLabel + '</td>' +
-        '<td>' + (r.opportunityRef
-          ? '<span class="mono" style="font-size:11px;">' + escapeHtml(r.opportunityRef) + '</span>'
-          : '<span style="color:var(--text-faint);">— own quote</span>') + '</td>' +
+        '<td>' + (r.quoteNumber
+          ? '<span class="mono" style="font-size:11px;color:var(--p3);">revises ' +
+            escapeHtml(r.quoteNumber) + '</span>'
+          : (r.opportunityRef
+              ? '<span class="mono" style="font-size:11px;">' + escapeHtml(r.opportunityRef) + '</span>'
+              : '<span style="color:var(--text-faint);">— own quote</span>')) + '</td>' +
         '<td>' + escapeHtml(r.data.customerName || '') + '</td>' +
         '<td>' + escapeHtml(r.data.partnerName || '—') + '</td>' +
         '<td>' + escapeHtml(r.data.businessGroup || '') + '</td>' +
@@ -5549,7 +5651,8 @@ function handleBulkFile(file){
 }
 
 function downloadBulkTemplate(){
-  const headers = ['Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
+  const headers = ['Quote Number', 'Deal ID', 'VAT %',
+    'Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
     'Contact Person', 'Contact Email', 'Opportunity Ref', 'Item Description', 'SKU', 'Quantity',
     'Unit Price', 'FOB Price', 'CIF Price', 'Duration', 'Platform', 'Serial Number',
     'Start Date', 'End Date', 'Currency', 'Date Raised', 'Expected Close Date',
@@ -5563,26 +5666,128 @@ function downloadBulkTemplate(){
     return d.toISOString().slice(0, 10);
   })();
   const rows = [
-    ['Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
+    ['', '', '', 'Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
       '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
-    ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
+    ['', '', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
-    ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
+    ['', '', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
-    ['Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
+    ['', '', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
     /* FOB, CIF and Duration are optional — leave them blank, as above, unless
        the quote is priced on those terms or the line is a subscription. */
-    ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
+    ['', '', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
       'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', '', '', '', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
     /* Platform, Serial Number, Start Date and End Date are optional too, and
        describe the line rather than pricing it. */
-    ['Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
+    ['', '', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
       'Q-GLOBALNET-01', 'Network management licence', 'HW-NMS-12', '15', '60000', '', '', '12 months',
       'Huawei eSight', '2102351BSN10K2000123', today, nextYear,
       'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Term and cover period print on the quote; they do not multiply the price']
   ];
+  /* Deliberately no worked example of a revision in the template. A sample row
+     carrying a real quote number is one forgotten deletion away from silently
+     re-pricing that quote — the column is explained on the upload screen
+     instead, where no one can import the explanation by accident. */
   deliverFile('TD_Vantage_Bulk_Upload_Template.csv', 'text/csv', toCsv([headers].concat(rows)));
+}
+
+/* ---------------- Quote as a spreadsheet ----------------
+   The printable document is for sending; this is for anyone who wants to work
+   on the numbers. Same figures, same order, laid out as rows a spreadsheet can
+   total for itself. */
+
+function quoteSheetRows(o, lines){
+  const vat = vatOf(o);
+  const showFob = seedHasPrice(lines, 'fobSubtotal');
+  const showCif = seedHasPrice(lines, 'cifSubtotal');
+  const expiry = expiryDateOf(o);
+  const blank = [''];
+  const rows = [
+    ['TD Africa — Quote ' + displayRef(o)],
+    blank,
+    ['Customer', o.customerName],
+    ['Contact', [o.contactPerson, o.contactEmail].filter(Boolean).join(' · ')],
+    ['Partner', o.partnerName || '—'],
+    ['Business Group', o.businessGroup + (o.businessUnit ? ' / ' + o.businessUnit : '')],
+    ['Order Type', o.orderType || '—'],
+    ['Delivery terms', o.deliveryTerms || '—'],
+    ['Deal ID', o.opportunityId || '—'],
+    ['Date raised', fmtDate(o.dateRaised)],
+    ['Valid for', (Number(o.validityDays) || 0) + ' days' + (expiry ? ' — until ' + fmtDate(expiry) : '')],
+    ['Currency', o.currency],
+    ['Sales rep', o.salesRep]
+  ];
+  if(o.note) rows.push(['Note', o.note]);
+  rows.push(blank);
+
+  const head = ['S/N', 'Description', 'SKU / Code', 'Platform', 'Serial number',
+    'Term', 'Start date', 'End date', 'Qty'];
+  if(showFob) head.push('FOB unit', 'FOB subtotal');
+  if(showCif) head.push('CIF unit', 'CIF subtotal');
+  head.push('Unit price', 'Subtotal');
+  rows.push(head);
+
+  lines.forEach(function(li, i){
+    const row = [i + 1, li.description, li.sku || '', li.platform || '', li.serialNumber || '',
+      li.duration || '', li.startDate || '', li.endDate || '', Number(li.qty) || 0];
+    if(showFob) row.push(Number(li.fobPrice) || 0, Number(li.fobSubtotal) || 0);
+    if(showCif) row.push(Number(li.cifPrice) || 0, Number(li.cifSubtotal) || 0);
+    row.push(Number(li.unitPrice) || 0, Number(li.subtotal) || 0);
+    rows.push(row);
+  });
+
+  /* Totals sit in the last column, under the subtotals they add up. */
+  const pad = function(label, amount){
+    const row = new Array(head.length - 1).fill('');
+    row[head.length - 2] = label;
+    row[head.length - 1] = amount;
+    return row;
+  };
+  rows.push(blank);
+  if(showFob) rows.push(pad('Total on FOB terms', altTotal(lines, 'fobSubtotal')));
+  if(showCif) rows.push(pad('Total on CIF terms', altTotal(lines, 'cifSubtotal')));
+  rows.push(pad(vat.applies ? 'Total excluding VAT' : 'Total quote value', Number(o.value) || 0));
+  if(vat.applies){
+    rows.push(pad('VAT at ' + vat.rate + '%', vat.amount));
+    rows.push(pad('Total payable, including VAT', vat.gross));
+  }
+  return rows;
+}
+
+function downloadQuoteSpreadsheet(id, reserved){
+  const o = STATE.opportunities.filter(function(x){ return x.id === id; })[0];
+  if(!o){ if(reserved) try{ reserved.close(); }catch(e){} return; }
+  const d = STATE.detail && STATE.detail.id === id ? STATE.detail : {};
+  const lines = (d.lineItems && d.lineItems.length)
+    ? d.lineItems
+    : [{description: o.productLine || 'Quoted solution', sku: '', qty: 1,
+        unitPrice: o.value, subtotal: o.value}];
+  const rows = quoteSheetRows(o, lines);
+  const base = 'Quote-' + String(displayRef(o)).replace(/[^A-Za-z0-9_-]+/g, '-');
+
+  /* SheetJS comes from a CDN, and a corporate network may well block it. A CSV
+     opens in Excel just the same, so a blocked bundle costs formatting, not the
+     feature. */
+  if(typeof XLSX === 'undefined'){
+    deliverFile(base + '.csv', 'text/csv', toCsv(rows), reserved);
+    toast('Downloaded as CSV — the Excel converter could not be reached, but Excel opens this.');
+    return;
+  }
+  try{
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Quote');
+    const bytes = XLSX.write(book, {bookType: 'xlsx', type: 'array'});
+    deliverFile(base + '.xlsx',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      new Uint8Array(bytes), reserved);
+    toast('Quote ' + displayRef(o) + ' downloaded as Excel');
+  }catch(err){
+    console.error(err);
+    deliverFile(base + '.csv', 'text/csv', toCsv(rows), reserved);
+    toast('Excel export failed, so it came as CSV instead. Excel opens this too.', true);
+  }
 }
 
 /* ---------------- Printable quote document ---------------- */
@@ -5604,6 +5809,7 @@ function generateQuoteDocument(id, reserved){
   const showFob = seedHasPrice(lines, 'fobSubtotal');
   const showCif = seedHasPrice(lines, 'cifSubtotal');
   const multiPrice = showFob || showCif;
+  const vat = vatOf(o);
   /* Columns before the final subtotal, which the total rows span. Base five:
      S/N, description, SKU, qty and the B2B unit price. Off by one here puts
      every total under the wrong heading on a customer-facing document. */
@@ -5694,9 +5900,17 @@ function generateQuoteDocument(id, reserved){
         '<td class="r">' + fmtMoney(altTotal(lines, 'fobSubtotal'), o.currency) + '</td></tr>' : '') +
       (showCif ? '<tr class="alt-row"><td colspan="' + cols + '" class="r">Total on CIF terms</td>' +
         '<td class="r">' + fmtMoney(altTotal(lines, 'cifSubtotal'), o.currency) + '</td></tr>' : '') +
-      '<tr class="total-row"><td colspan="' + cols + '">' +
-        (multiPrice ? 'Total quote value (B2B terms)' : 'Total quote value') + '</td>' +
+      '<tr class="' + (vat.applies ? 'alt-row' : 'total-row') + '"><td colspan="' + cols + '"' +
+        (vat.applies ? ' class="r"' : '') + '>' +
+        (multiPrice ? 'Total quote value (B2B terms)' : 'Total quote value') +
+        (vat.applies ? ', excluding VAT' : '') + '</td>' +
         '<td class="r">' + fmtMoney(o.value, o.currency) + '</td></tr>' +
+      (vat.applies
+        ? '<tr class="alt-row"><td colspan="' + cols + '" class="r">VAT at ' + vat.rate + '%</td>' +
+          '<td class="r">' + fmtMoney(vat.amount, o.currency) + '</td></tr>' +
+          '<tr class="total-row"><td colspan="' + cols + '">Total payable, including VAT</td>' +
+          '<td class="r">' + fmtMoney(vat.gross, o.currency) + '</td></tr>'
+        : '') +
     '</tbody></table>' +
     (multiPrice
       ? '<div class="footnote" style="margin-top:14px;">This quote is priced on ' +
@@ -6049,6 +6263,19 @@ function wireAll(){
     STATE.modal = {type: 'member', userId: attr(e.currentTarget, 'data-edit-member')};
     STATE.modalError = null; render();
   });
+  on('[data-quote-xlsx]', 'click', function(e){
+    const id = attr(e.currentTarget, 'data-quote-xlsx');
+    /* Reserved inside the click, before anything else: the file may travel
+       through a popup if a direct download is not available, and by the time an
+       await returned the browser would no longer count this as a user action. */
+    const reserved = canDownloadDirectly() ? null : reserveWindow();
+    if(!reserved && !canDownloadDirectly()){
+      toast('Allow pop-ups for Vantage so files can be delivered, then try again.', true);
+      return;
+    }
+    downloadQuoteSpreadsheet(id, reserved);
+  });
+
   on('[data-open-validity]', 'click', async function(e){
     const id = attr(e.currentTarget, 'data-open-validity');
     await ensureDetail(id);
@@ -6226,6 +6453,8 @@ function wireOpportunityForm(){
       businessUnit: document.getElementById('f-bu').value,
       orderType: document.getElementById('f-order-type').value,
       deliveryTerms: document.getElementById('f-delivery').value.trim(),
+      opportunityId: document.getElementById('f-deal-id').value.trim(),
+      vatRate: document.getElementById('f-vat').value,
       note: (document.getElementById('f-note') ? document.getElementById('f-note').value : '').trim(),
       contactPerson: document.getElementById('f-contact').value.trim(),
       contactEmail: emailVal,
@@ -6804,11 +7033,19 @@ function wireBulk(){
       BULK_READY = [];
       await reloadAll(true);
       closeModal();
+      /* Created and revised are different outcomes and the toast has to say
+         which happened, or a file that revised nothing looks the same as one
+         that revised everything. */
+      const updated = Number(res.updated) || 0;
+      const done = [];
+      if(res.created) done.push(res.created + ' ' + pluralize(res.created, 'quote') + ' imported');
+      if(updated) done.push(updated + ' ' + pluralize(updated, 'quote') + ' re-priced');
+      const summary = done.length ? done.join(' · ') : 'Nothing was imported';
       if(res.rejected && res.rejected.length){
-        toast(res.created + ' imported; ' + res.rejected.length + ' rejected by validation — ' +
+        toast(summary + '; ' + res.rejected.length + ' rejected — ' +
           res.rejected[0].rowLabel + ': ' + res.rejected[0].message, true);
       }else{
-        toast(res.created + ' ' + pluralize(res.created, 'quote') + ' imported into Vantage');
+        toast(summary);
       }
     }catch(err){ afterFailedSubmit(err); }
   });
