@@ -1713,7 +1713,8 @@ function registerControls(mode){
       {act:'filter:reg.' + mode + ':type'}) +
     ifField('bus_unit', selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
       .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'})) +
-    selectHtml(mode + '-purpose', [['','All purposes']].concat(purposeList()
+    selectHtml(mode + '-purpose', [['','All ' + fieldLabel('purpose', 'purpose') + 's']]
+      .concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:reg.' + mode + ':purpose'}) +
     selectHtml(mode + '-status', [['','Any status'],['ACTIVE','Active'],['New Hire','New hire'],
       ['SUSPENDED','Suspended'],['EXITED','Exited']], f.status, {act:'filter:reg.' + mode + ':status'}) +
@@ -1813,7 +1814,7 @@ function viewRegister(mode){
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
         ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept')) +
         sortHeader(mode, 'org', 'Org') +
-        sortHeader(mode, 'purpose', 'Purpose') +
+        sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         sortHeader(mode, 'gross', 'Gross', 'r') + sortHeader(mode, 'basic', 'Basic', 'r') +
         sortHeader(mode, 'housing', 'Housing', 'r') + sortHeader(mode, 'transport', 'Transport', 'r') +
         sortHeader(mode, 'domestic', 'Domestic / arrears', 'r') +
@@ -1855,7 +1856,8 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        sortHeader(mode, 'org', 'Org') + sortHeader(mode, 'purpose', 'Purpose') +
+        sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         sortHeader(mode, 'sec_allow', 'Sec allow', 'r') + sortHeader(mode, 'resp_allow', 'Resp allow', 'r') +
         sortHeader(mode, 'sec_arrears', 'Sec arrears', 'r') + sortHeader(mode, 'special_sec', 'Special sec', 'r') +
         sortHeader(mode, 'commission', 'Commission', 'r') + sortHeader(mode, 'contract_sec', 'Ctr sec allow', 'r') +
@@ -1908,7 +1910,8 @@ function viewRegister(mode){
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept')) +
         sortHeader(mode, 'org', 'Org') +
-        sortHeader(mode, 'grade', 'Grade') + sortHeader(mode, 'purpose', 'Purpose') +
+        sortHeader(mode, 'grade', 'Grade') +
+        sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         /* Labelled for what they are. The prototype's "JUNE PAY" and "JUNE
            TOTAL" columns actually showed July file values (defect D24). */
         sortHeader(mode, 'jul_net', 'Payroll before movements', 'r') +
@@ -2023,7 +2026,8 @@ function viewJournal(){
       {act:'filter:jnl:section'}) +
     ifField('bus_unit', selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
       .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'})) +
-    selectHtml('jnl-purpose', [['','All purposes']].concat(purposeList()
+    selectHtml('jnl-purpose', [['','All ' + fieldLabel('purpose', 'purpose') + 's']]
+      .concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:jnl:purpose'}) +
     selectHtml('jnl-size', [[100,'100 per page'],[200,'200'],[500,'500']], f.pageSize,
       {act:'filter:jnl:pageSize'}) +
@@ -2091,7 +2095,7 @@ function viewJournal(){
       '<table><thead><tr>' +
         '<th class="hc r">#</th><th class="hc">Emp no</th><th class="hc">Staff name</th>' +
         ifField('bus_unit', '<th class="hc">SAL_Dept</th>') +
-        '<th class="hc">Org</th><th class="hc">Purpose</th>' +
+        '<th class="hc">Org</th><th class="hc">' + esc(fieldLabel('purpose', 'Purpose')) + '</th>' +
         '<th class="hc">Ledger</th>' +
         '<th class="hc c">Category</th><th class="hc">Debit</th><th class="hc">Credit</th>' +
         '<th class="hc r">Amount</th><th class="hc">Section</th><th class="hc">EMP account</th>' +
@@ -3202,7 +3206,7 @@ function modalPayslip(m){
         psField('Employee no', p.emp_no) + psField('Name', p.name) +
         psField('Grade', p.grade || '—') + psField('Salary group', p.salary_group || '—') +
         ifField('bus_unit', psField('SAL_Dept', p.bus_unit || '—')) +
-        psField('Purpose', p.purpose || '—') +
+        psField(fieldLabel('purpose', 'Purpose'), p.purpose || '—') +
         psField('Organisation', p.org || '—') +
         psField('Staff type', p.staff_type || '—') +
         psField('Loan account', p.empAccount || '—') +
@@ -3493,7 +3497,7 @@ function modalStaff(m){
             selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
               .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
             '<span class="hint">Decides the Business Group cost is charged to.</span></div>') +
-        '<div class="fld"><label>Purpose</label>' +
+        '<div class="fld"><label>' + esc(fieldLabel('purpose', 'Purpose')) + '</label>' +
           selectHtml('st-purpose', [['','—']].concat(purposeList()
             .map(function(v){ return [v, v]; })), e ? e.purpose : '') +
           '<span class="hint">Sales: the product they sell. Support: Financial.</span></div>' +
