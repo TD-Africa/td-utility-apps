@@ -715,18 +715,43 @@ function fieldPicked(field, options){
   return !!(options && options.length);
 }
 
-function fieldHidden(field){
-  const h = (STATE.settings && STATE.settings.hiddenFields) || [];
-  return h.indexOf(field) >= 0;
+/* Columns that are OFF for everybody unless a Sheet asks for them. A column
+   added for one company must not turn up on three others, and making those
+   three set something to stay as they already were would be backwards.
+
+   Keyed `field@view`. SAL_Dept on the security register is the only one today:
+   Task Systems asked for it, the TD companies never had it. */
+const OPT_IN_FIELDS = { 'bus_unit@security': true };
+
+/* Is this column shown on this screen?
+
+   Three questions in order: is it off by default here and not asked for; is it
+   hidden on this screen specifically; is it hidden everywhere. A `view` of null
+   means a screen with no per-view rules of its own. */
+function fieldVisible(field, view){
+  const s = STATE.settings || {};
+  const shown = s.showFields || [];
+  const hidden = s.hiddenFields || [];
+  const q = view ? field + '@' + view : null;
+
+  if (q && OPT_IN_FIELDS[q] &&
+      shown.indexOf(q) < 0 && shown.indexOf(field) < 0) return false;
+  if (q && hidden.indexOf(q) >= 0) return false;
+  return hidden.indexOf(field) < 0;
 }
+
+/* All three take an optional view, so a rule can apply to one screen. Called
+   without one they ask only the whole-Sheet question, which is what the forms
+   and the payslip want. */
+function fieldHidden(field, view){ return !fieldVisible(field, view || null); }
 
 /* `s` when the field is shown, nothing when it is hidden — so a header, a cell
    and a colspan all stay in step from one decision. */
-function ifField(field, s){ return fieldHidden(field) ? '' : s; }
+function ifField(field, s, view){ return fieldHidden(field, view) ? '' : s; }
 
 /* 1 when shown, 0 when hidden. Column-group spans are counted, not written as
    literals, or hiding a column silently shifts every heading beside it. */
-function colIf(field){ return fieldHidden(field) ? 0 : 1; }
+function colIf(field, view){ return fieldHidden(field, view) ? 0 : 1; }
 
 function fieldLabel(field, builtIn){
   const m = (STATE.settings && STATE.settings.fieldLabels) || {};
@@ -753,7 +778,8 @@ function brandAddress(){
 }
 
 function newRegisterFilter(){
-  return {q:'', grp:'', type:'', bu:'', purpose:'', status:'', sort:'name', dir:1, page:1, pageSize:50};
+  return {q:'', grp:'', type:'', bu:'', org:'', purpose:'', status:'',
+          sort:'name', dir:1, page:1, pageSize:50};
 }
 
 const STATE = {
@@ -793,7 +819,7 @@ const STATE = {
   /* Per-view filter state. */
   reg: {payroll:newRegisterFilter(), security:newRegisterFilter(), consolidated:newRegisterFilter()},
   chg: {q:'', type:'', showReversed:false, page:1, pageSize:25},
-  jnl: {q:'', category:'', section:'', businessUnit:'', purpose:'', page:1, pageSize:200,
+  jnl: {q:'', category:'', section:'', businessUnit:'', purpose:'', org:'', page:1, pageSize:200,
         loading:false, data:null, error:null, key:''},
   hist: {q:'', entity:'', action:'', actorId:'', from:'', to:'', page:1, pageSize:50,
          loading:false, data:null, error:null, key:''},
@@ -1682,6 +1708,7 @@ function filteredStaff(mode){
     if(f.grp && e.salary_group !== f.grp) return false;
     if(f.type && e.staff_type !== f.type) return false;
     if(f.bu && e.bus_unit !== f.bu) return false;
+    if(f.org && (e.org || '') !== f.org) return false;
     if(f.purpose && (e.purpose || '') !== f.purpose) return false;
     if(f.status && (e.status || 'ACTIVE') !== f.status) return false;
     return true;
@@ -1712,7 +1739,9 @@ function registerControls(mode){
       .map(function(t){ return [t, t]; })), f.type,
       {act:'filter:reg.' + mode + ':type'}) +
     ifField('bus_unit', selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
-      .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'})) +
+      .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'}), mode) +
+    selectHtml(mode + '-org', [['','All orgs']].concat((ref.orgs || [])
+      .map(function(o){ return [o, o]; })), f.org, {act:'filter:reg.' + mode + ':org'}) +
     selectHtml(mode + '-purpose', [['','All ' + fieldLabel('purpose', 'purpose') + 's']]
       .concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:reg.' + mode + ':purpose'}) +
@@ -1802,7 +1831,7 @@ function viewRegister(mode){
 
   if(mode === 'payroll'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + ((can('sendPayslip') ? 7 : 6) + colIf('bus_unit')) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 7 : 6) + colIf('bus_unit', mode)) + '"></th>' +
         '<th class="hg" colspan="6">Payroll earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="1">Employer cost</th>' +
         '<th class="hg" colspan="5">Payroll deductions</th>' +
@@ -1812,7 +1841,7 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept')) +
+        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept'), mode) +
         sortHeader(mode, 'org', 'Org') +
         sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         sortHeader(mode, 'gross', 'Gross', 'r') + sortHeader(mode, 'basic', 'Basic', 'r') +
@@ -1830,7 +1859,7 @@ function viewRegister(mode){
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
         '<td>' + esc(e.grade) + '</td>' +
-        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>') +
+        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>', mode) +
         '<td>' + esc(e.org) + '</td>' +
         purposeCell(e) +
         ['gross','basic','housing','transport','domestic','total_earn'].map(function(k){
@@ -1846,7 +1875,8 @@ function viewRegister(mode){
     }).join('');
   }else if(mode === 'security'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 7 : 6) +
+          (fieldVisible('bus_unit', 'security') ? 1 : 0)) + '"></th>' +
         '<th class="hg" colspan="8">Security earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="5">Fixed deductions</th>' +
         '<th class="hg" colspan="5">EMP account deductions · DR employee loan account</th>' +
@@ -1856,6 +1886,8 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
+        (fieldVisible('bus_unit', 'security')
+          ? sortHeader(mode, 'bus_unit', 'SAL_Dept') : '') +
         sortHeader(mode, 'org', 'Org') +
         sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         sortHeader(mode, 'sec_allow', 'Sec allow', 'r') + sortHeader(mode, 'resp_allow', 'Resp allow', 'r') +
@@ -1884,7 +1916,9 @@ function viewRegister(mode){
       const car = (Number(e.car_scheme1) || 0) + (Number(e.car_scheme2) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
-        '<td>' + esc(e.grade) + '</td><td>' + esc(e.org) + '</td>' + purposeCell(e) +
+        '<td>' + esc(e.grade) + '</td>' +
+        (fieldVisible('bus_unit', 'security') ? '<td>' + esc(e.bus_unit) + '</td>' : '') +
+        '<td>' + esc(e.org) + '</td>' + purposeCell(e) +
         ['sec_allow','resp_allow','sec_arrears','special_sec','commission','contract_sec',
          'other_allow','sec_total_earn'].map(function(k){
           return '<td class="earn">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
@@ -1901,14 +1935,14 @@ function viewRegister(mode){
     }).join('');
   }else{
     head = '<tr>' +
-        '<th class="hg" colspan="' + ((can('sendPayslip') ? 6 : 5) + colIf('bus_unit')) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 6 : 5) + colIf('bus_unit', mode)) + '"></th>' +
         '<th class="hg" colspan="3">Payroll</th>' +
         '<th class="hg" colspan="3">Security</th><th class="hg" colspan="1">Consolidated</th>' +
         '<th class="hg" colspan="3"></th>' +
       '</tr><tr>' +
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
-        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept')) +
+        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept'), mode) +
         sortHeader(mode, 'org', 'Org') +
         sortHeader(mode, 'grade', 'Grade') +
         sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
@@ -1927,7 +1961,7 @@ function viewRegister(mode){
       const movP = (Number(e.netPay) || 0) - (Number(e.jul_net) || 0);
       const movS = (Number(e.netSecurity) || 0) - (Number(e.jul_sec_net) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
-        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>') +
+        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>', mode) +
         '<td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
         purposeCell(e) +
         '<td class="r">' + esc(moneyOrBlank(e.jul_net)) + '</td>' +
@@ -1997,7 +2031,7 @@ async function ensureJournal(){
     const res = await rpc('getJournalPage', {
       period: STATE.period, page: f.page, pageSize: f.pageSize,
       filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
-        purpose:f.purpose}
+        purpose:f.purpose, org:f.org}
     });
     STATE.jnl.data = res;
     STATE.jnl.key = key;
@@ -2025,7 +2059,9 @@ function viewJournal(){
       ['SECURITY','Security only'],['EMP_ACCT','EMP account only']], f.section,
       {act:'filter:jnl:section'}) +
     ifField('bus_unit', selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
-      .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'})) +
+      .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'}), 'journal') +
+    selectHtml('jnl-org', [['','All orgs']].concat((ref.orgs || [])
+      .map(function(o){ return [o, o]; })), f.org, {act:'filter:jnl:org'}) +
     selectHtml('jnl-purpose', [['','All ' + fieldLabel('purpose', 'purpose') + 's']]
       .concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:jnl:purpose'}) +
@@ -2094,7 +2130,7 @@ function viewJournal(){
     table = '<div class="tw"><div class="ts" data-keep-scroll="jnl">' +
       '<table><thead><tr>' +
         '<th class="hc r">#</th><th class="hc">Emp no</th><th class="hc">Staff name</th>' +
-        ifField('bus_unit', '<th class="hc">SAL_Dept</th>') +
+        ifField('bus_unit', '<th class="hc">SAL_Dept</th>', 'journal') +
         '<th class="hc">Org</th><th class="hc">' + esc(fieldLabel('purpose', 'Purpose')) + '</th>' +
         '<th class="hc">Ledger</th>' +
         '<th class="hc c">Category</th><th class="hc">Debit</th><th class="hc">Credit</th>' +
@@ -2107,7 +2143,7 @@ function viewJournal(){
           '<td class="r muted">' + esc(r.seq) + '</td>' +
           '<td class="muted">' + esc(r.emp_no) + '</td>' +
           '<td class="nm">' + esc(r.name) + '</td>' +
-          ifField('bus_unit', '<td>' + esc(r.bus_unit) + '</td>') +
+          ifField('bus_unit', '<td>' + esc(r.bus_unit) + '</td>', 'journal') +
           '<td>' + esc(r.org) + '</td>' +
           '<td>' + esc(r.purpose || '') + '</td>' +
           '<td style="font-weight:500">' + esc(r.ledger) + '</td>' +
@@ -4287,7 +4323,7 @@ async function exportJournal(){
     const res = await rpc('getJournalExport', {
       period: STATE.period,
       filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
-        purpose:f.purpose}
+        purpose:f.purpose, org:f.org}
     });
     const out = [
       ['PaySync journal', periodLabel(STATE.period),
@@ -4631,7 +4667,7 @@ async function exportD365(){
     const res = await rpc('getD365Export', {
       period: STATE.period,
       filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
-        purpose:f.purpose}
+        purpose:f.purpose, org:f.org}
     });
     /* Two blank rows, then the headings on row 3, matching the file Finance
        feeds D365 — its importer is configured for that layout. */
