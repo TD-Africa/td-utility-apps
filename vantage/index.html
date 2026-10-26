@@ -3876,7 +3876,16 @@ function recalcQuoteTotal(){
     fobTotal += qty * fob;
     cifTotal += qty * cif;
   });
-  display.textContent = currencySymbol() + fmtNumber(total);
+  /* The quote total is what the customer pays, so VAT is part of it and has to
+     move as the rate is typed — not only once the quote is saved. */
+  const vatEl = document.getElementById('f-vat');
+  const rate = vatEl ? (Number(vatEl.value) || 0) : 0;
+  const vatAmount = rate > 0 ? Math.round(total * (rate / 100) * 100) / 100 : 0;
+  display.innerHTML = escapeHtml(currencySymbol() + fmtNumber(total + vatAmount)) +
+    (rate > 0
+      ? '<span class="li-alt-sub">' + escapeHtml(currencySymbol() + fmtNumber(total)) +
+        ' + ' + escapeHtml(currencySymbol() + fmtNumber(vatAmount)) + ' VAT at ' + rate + '%</span>'
+      : '');
   const fobEl = document.getElementById('fob-total-display');
   const cifEl = document.getElementById('cif-total-display');
   if(fobEl) fobEl.textContent = fobTotal ? currencySymbol() + fmtNumber(fobTotal) : '—';
@@ -3891,6 +3900,8 @@ function wireLineItemToggles(){
     const box = document.getElementById(id);
     if(box) box.addEventListener('change', recalcQuoteTotal);
   });
+  const vat = document.getElementById('f-vat');
+  if(vat) vat.addEventListener('input', recalcQuoteTotal);
 }
 
 function collectLineItems(){
@@ -3983,7 +3994,7 @@ function lineItemsBlock(scrollClass, seed){
       '</div>' +
       '<button type="button" class="btn btn-ghost btn-sm" id="add-line-item-btn" style="margin-top:6px;">＋ Add line</button>' +
     '</div>' +
-    '<div class="field"><label>Quote total (B2B)</label>' +
+    '<div class="field"><label>Quote total</label>' +
       '<div id="quote-total-display" class="mono total-display">₦0.00</div></div>' +
     /* Shown only when the alternative terms are in use. They are recorded and
        printed for comparison; the pipeline, dashboard and every report use the
@@ -4076,11 +4087,13 @@ function renderOpportunityForm(mode){
         '</div>' +
 
         '<div class="field-row">' +
-          '<div class="field"><label>Deal ID (optional)</label>' +
-            '<input type="text" id="f-deal-id" maxlength="40" placeholder="Leave blank and Vantage assigns one" ' +
+          '<div class="field"><label>Deal ID</label>' +
+            '<input type="text" id="f-deal-id" maxlength="40" required ' +
+              'placeholder="The reference this deal is already tracked under" ' +
               'value="' + escapeHtml(isEdit ? (o.opportunityId || '') : '') + '">' +
-            '<div class="field-hint">Quotes sharing a Deal ID are one deal. Reporting counts it once, ' +
-              'at the highest-value quote — so use the same ID when you quote the same requirement ' +
+            '<div class="field-hint">Required. Vantage does not invent one — enter the reference the ' +
+              'deal already carries. Quotes sharing a Deal ID are one deal, counted once in reporting ' +
+              'at the highest-value quote, so use the same ID when you quote the same requirement ' +
               'through more than one partner.</div></div>' +
           '<div class="field"><label>VAT % (optional)</label>' +
             '<input type="number" id="f-vat" min="0" max="100" step="any" placeholder="e.g. 7.5" ' +
@@ -4242,11 +4255,10 @@ function renderDetailModal(){
             kv('Order Type', escapeHtml(o.orderType || '—')) +
             (o.deliveryTerms ? kv('Delivery terms', escapeHtml(o.deliveryTerms)) : '') +
             (vatOf(o).applies
-              ? kv('VAT', vatOf(o).rate + '% — ' + fmtMoney(vatOf(o).amount, o.currency) +
-                  ' <span style="color:var(--text-faint);font-weight:400;">(' +
-                  fmtMoney(vatOf(o).gross, o.currency) + ' including VAT)</span>')
+              ? kv('Excluding VAT', fmtMoney(vatOf(o).net, o.currency)) +
+                kv('VAT', vatOf(o).rate + '% — ' + fmtMoney(vatOf(o).amount, o.currency))
               : '') +
-            kv('Value', fmtMoney(o.value, o.currency) +
+            kv(vatOf(o).applies ? 'Value (incl. VAT)' : 'Value', fmtMoney(o.value, o.currency) +
               ' <span style="color:var(--text-faint);font-weight:400;">(' + fmtUSD(usdOf(o)) + ' at ₦' + fmtNumber(STATE.settings.fxRate, 0) + ')</span>') +
             kv('Date raised', fmtDate(o.dateRaised) + (age === null ? '' : ' · ' + age + 'd ago')) +
             (o.quoteSent !== false ? kv('Valid until', expiry ? fmtDate(expiry) +
@@ -4334,20 +4346,22 @@ function renderDetailLineItems(o, d){
      columns — every other record reads exactly as it always did. */
   const showFob = seedHasPrice(d.lineItems, 'fobSubtotal');
   const showCif = seedHasPrice(d.lineItems, 'cifSubtotal');
-  /* Columns before the final subtotal: item, SKU, qty and the B2B price. */
-  const span = 4 + (showFob ? 2 : 0) + (showCif ? 2 : 0);
+  /* Columns before the final subtotal: S/N, item, SKU, qty and the B2B price.
+     Off by one here puts every total under the wrong heading. */
+  const span = 5 + (showFob ? 2 : 0) + (showCif ? 2 : 0);
   const money = function(v){ return fmtMoney(v, o.currency); };
   const alt = function(v){ return Number(v) > 0 ? fmtMoney(v, o.currency) : '—'; };
   return '<div class="table-wrap"><table>' +
-    '<thead><tr><th>Item</th><th>SKU</th>' +
+    '<thead><tr><th class="num-cell" style="width:38px;">S/N</th><th>Item</th><th>SKU</th>' +
       '<th class="num-cell">Qty</th>' +
       (showFob ? '<th class="num-cell">FOB</th><th class="num-cell">FOB subtotal</th>' : '') +
       (showCif ? '<th class="num-cell">CIF</th><th class="num-cell">CIF subtotal</th>' : '') +
       '<th class="num-cell">B2B price</th><th class="num-cell">Subtotal</th></tr></thead>' +
     '<tbody>' +
-      d.lineItems.map(function(li){
+      d.lineItems.map(function(li, i){
         const sub = lineItemDetailText(li);
-        return '<tr><td>' + escapeHtml(li.description) +
+        return '<tr><td class="num-cell mono">' + (i + 1) + '</td>' +
+          '<td>' + escapeHtml(li.description) +
             (sub ? '<div class="field-hint" style="margin-top:2px;">' + escapeHtml(sub) + '</div>' : '') +
           '</td><td class="mono">' + escapeHtml(li.sku || '—') + '</td>' +
           '<td class="num-cell">' + fmtNumber(li.qty, 0) + '</td>' +
@@ -4372,12 +4386,18 @@ function renderDetailLineItems(o, d){
 /* VAT as it is shown, derived from the rate rather than stored alongside it.
    `value` is the net — the figure the pipeline and every target count — so the
    gross exists only where a customer sees it. */
+/* `value` is the gross — what the customer is invoiced, and what the pipeline,
+   the targets and every analytic count. `netValue` is the line-item subtotal
+   beneath it. Quotes raised before VAT existed carry no netValue, so they fall
+   back to their value, which for them is the same thing. */
 function vatOf(o){
   const rate = Number(o && o.vatRate) || 0;
-  const net = Number(o && o.value) || 0;
-  if(rate <= 0) return {rate: 0, amount: 0, gross: net, applies: false};
-  const amount = Math.round(net * (rate / 100) * 100) / 100;
-  return {rate: rate, amount: amount, gross: net + amount, applies: true};
+  const gross = Number(o && o.value) || 0;
+  const net = (o && o.netValue !== undefined && o.netValue !== '')
+    ? (Number(o.netValue) || 0) : gross;
+  if(rate <= 0) return {rate: 0, amount: 0, net: gross, gross: gross, applies: false};
+  return {rate: rate, amount: Math.round((gross - net) * 100) / 100,
+    net: net, gross: gross, applies: true};
 }
 
 function lineItemDetailText(li){
@@ -4986,8 +5006,8 @@ const EXPORT_COLUMNS = [
   ['Quote sent', function(o){ return o.quoteSent === false ? 'No' : 'Yes'; }],
   ['Deal ID', function(o){ return o.opportunityId; }],
   ['VAT %', function(o){ return Number(o.vatRate) || 0; }],
+  ['Value excl. VAT', function(o){ return vatOf(o).net; }],
   ['VAT amount', function(o){ return vatOf(o).amount; }],
-  ['Value incl. VAT', function(o){ return vatOf(o).gross; }],
   ['Customer', function(o){ return o.customerName; }],
   ['Partner', function(o){ return o.partnerName; }],
   ['Contact person', function(o){ return o.contactPerson; }],
@@ -5158,9 +5178,14 @@ const HEADER_ALIASES = {
      "Quote Group" originally, which nobody read as "the opportunity these lines
      belong to" — so the preferred name is now Opportunity Ref, and every
      earlier spelling still works so existing files keep importing. */
-  quoteGroup:       ['opportunity ref', 'opportunity reference', 'opportunity', 'opportunity id',
-                     'opp ref', 'deal', 'deal ref', 'quote group', 'quote ref', 'quote reference',
-                     'group id', 'line group'],
+  /* Only names that can mean nothing but "group these rows onto one quote".
+     'quote ref', 'deal' and 'opportunity id' used to live here and were
+     claimed by this field first, which quietly turned a column meant to name
+     an existing quote into a grouping key — so the row raised a new quote
+     instead of revising the one it named. Every alias now belongs to exactly
+     one field, and a test enforces that. */
+  quoteGroup:       ['opportunity ref', 'opportunity reference', 'opportunity', 'opp ref',
+                     'quote group', 'group id', 'line group'],
   itemDescription:  ['item description', 'description', 'product', 'product line', 'solution', 'item'],
   sku:              ['sku', 'product code', 'code', 'part number', 'part no'],
   quantity:         ['quantity', 'qty'],
@@ -5350,6 +5375,9 @@ function parseBulkRow(row, headerMap, rowIndex){
   const itemDescription = String(get('itemDescription') || '').trim();
   const skuValue = String(get('sku') || '').trim();
   if(!itemDescription && !skuValue) errors.push('Missing item description and SKU — one of them is needed');
+  if(!String(get('dealId') || '').trim()){
+    errors.push('Missing Deal ID — enter the reference this deal is already tracked under');
+  }
   if(unitPriceBlank) errors.push('Missing unit price — enter 0 for a no-charge line');
   else if(isNaN(unitPrice) || unitPrice < 0) errors.push('Unit price "' + rawUnitPrice + '" is not a valid amount');
   if(!quantityBlank && isNaN(quantity)){
@@ -5449,7 +5477,10 @@ function validateBulkGroup(group){
   const lineItems = rows
     .filter(function(r){ return (r.lineItem.description || r.lineItem.sku) && r.lineItem.qty > 0; })
     .map(function(r){ return r.lineItem; });
-  const total = lineItems.reduce(function(a, li){ return a + li.subtotal; }, 0);
+  const net = lineItems.reduce(function(a, li){ return a + li.subtotal; }, 0);
+  const previewRate = Number(first.vatRate) || 0;
+  const previewVat = previewRate > 0 ? Math.round(net * (previewRate / 100) * 100) / 100 : 0;
+  const total = net + previewVat;
   const rowLabel = indexes.length > 1 ? indexes[0] + '–' + indexes[indexes.length - 1] : String(indexes[0]);
 
   return {
@@ -5470,7 +5501,7 @@ function validateBulkGroup(group){
     },
     preview: {
       lineCount: rows.length, total: total, currency: first.currency, pipeline: first.pipeline,
-      revises: first.quoteNumber || '', vatRate: first.vatRate || 0,
+      revises: first.quoteNumber || '', vatRate: previewRate, net: net, vatAmount: previewVat,
       /* Surfaced in the preview so a rep can check the alternative totals
          before anything is written, not after. */
       fobTotal: rows.reduce(function(a, r){ return a + (Number(r.lineItem.fobSubtotal) || 0); }, 0),
@@ -5496,10 +5527,11 @@ function processBulkRows(rows){
     return;
   }
   const headerMap = buildHeaderMap(rows[0]);
-  const required = ['customerName', 'businessGroup', 'unitPrice', 'pipeline'];
+  const required = ['customerName', 'businessGroup', 'unitPrice', 'pipeline', 'dealId'];
   const missing = required.filter(function(f){ return !headerMap[f]; });
   if(missing.length){
-    const labels = {customerName: 'Customer Name', businessGroup: 'Business Group', unitPrice: 'Unit Price', pipeline: 'Pipeline'};
+    const labels = {customerName: 'Customer Name', businessGroup: 'Business Group',
+      unitPrice: 'Unit Price', pipeline: 'Pipeline', dealId: 'Deal ID'};
     statusEl.innerHTML = 'Could not find required ' + pluralize(missing.length, 'column') + ': <b>' +
       missing.map(function(f){ return labels[f]; }).join(', ') + '</b>. Check the headers against the template.';
     previewEl.innerHTML = '';
@@ -5528,6 +5560,21 @@ function processBulkRows(rows){
     if(!ungrouped[key]) ungrouped[key] = [];
     ungrouped[key].push(r.rowIndex);
   });
+  /* The other way round, and the more expensive mistake: a quote reference typed
+     into Opportunity Ref groups the rows under a label instead of revising the
+     quote it names — so a new quote appears and the old one is untouched. */
+  const knownRefs = {};
+  (STATE.opportunities || []).forEach(function(o){
+    if(o.quoteNumber) knownRefs[String(o.quoteNumber).toLowerCase()] = o.quoteNumber;
+    if(o.placeholderRef) knownRefs[String(o.placeholderRef).toLowerCase()] = o.placeholderRef;
+  });
+  const misplaced = [];
+  parsed.forEach(function(r){
+    if(!r.quoteGroup || r.quoteNumber) return;
+    const hit = knownRefs[r.quoteGroup.toLowerCase()];
+    if(hit && misplaced.indexOf(hit) < 0) misplaced.push(hit);
+  });
+
   const looksSplit = Object.keys(ungrouped)
     .filter(function(k){ return ungrouped[k].length > 1; })
     .map(function(k){ return {customer: k.split('|')[0], rows: ungrouped[k]}; });
@@ -5543,6 +5590,18 @@ function processBulkRows(rows){
       ? '<div style="margin-top:8px;">' + revising + ' of them ' + (revising === 1 ? 'names' : 'name') +
         ' an existing quote and will <b>replace its line items and price</b> rather than raise a new quote. ' +
         'The quote keeps its number.</div>'
+      : '') +
+    (misplaced.length
+      ? '<div style="margin-top:10px;padding:10px 12px;background:#FDECEC;border:1px solid var(--danger-soft);' +
+        'border-radius:8px;color:#8A1C1C;line-height:1.55;">' +
+        '<b>That looks like it is in the wrong column.</b> ' +
+        misplaced.slice(0, 5).map(function(x){ return escapeHtml(x); }).join(', ') +
+        (misplaced.length > 5 ? ' and ' + (misplaced.length - 5) + ' more' : '') +
+        ' ' + (misplaced.length === 1 ? 'is an existing quote reference' : 'are existing quote references') +
+        ', but ' + (misplaced.length === 1 ? 'it is' : 'they are') + ' in <b>Opportunity Ref</b>. ' +
+        'That column only groups rows in your file — it will <b>raise a new quote</b> and leave the ' +
+        'original untouched. To revise a quote, put its reference in the <b>Quote Number</b> column.' +
+        '</div>'
       : '') +
     (looksSplit.length
       ? '<div style="margin-top:10px;padding:10px 12px;background:var(--p3-soft);border:1px solid var(--p3-line);' +
@@ -5581,6 +5640,8 @@ function processBulkRows(rows){
         '<td>' + escapeHtml(r.data.salesRep || '') + '</td>' +
         '<td>' + r.preview.lineCount + ' — ' + escapeHtml(r.preview.itemSummary) + '</td>' +
         '<td class="mono num-cell">' + (r.preview.total ? fmtMoney(r.preview.total, r.preview.currency) : '') +
+          (r.preview.vatAmount ? '<span class="li-alt-sub">incl. ' +
+            escapeHtml(fmtMoney(r.preview.vatAmount, r.preview.currency)) + ' VAT</span>' : '') +
           (r.preview.fobTotal ? '<span class="li-alt-sub">FOB ' + escapeHtml(fmtMoney(r.preview.fobTotal, r.preview.currency)) + '</span>' : '') +
           (r.preview.cifTotal ? '<span class="li-alt-sub">CIF ' + escapeHtml(fmtMoney(r.preview.cifTotal, r.preview.currency)) + '</span>' : '') +
         '</td>' +
@@ -5651,6 +5712,10 @@ function handleBulkFile(file){
 }
 
 function downloadBulkTemplate(){
+  /* No S/N column here on purpose: on an upload "S/N" already means Serial
+     Number, and a row counter under that heading would be imported as the
+     serial number of every line. Line numbering belongs where line items are
+     displayed, not where they are typed. */
   const headers = ['Quote Number', 'Deal ID', 'VAT %',
     'Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
     'Contact Person', 'Contact Email', 'Opportunity Ref', 'Item Description', 'SKU', 'Quantity',
@@ -5666,21 +5731,21 @@ function downloadBulkTemplate(){
     return d.toISOString().slice(0, 10);
   })();
   const rows = [
-    ['', '', '', 'Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
+    ['', 'TDA-1001', '7.5', 'Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
       '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
-    ['', '', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
+    ['', 'TDA-1002', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
-    ['', '', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
+    ['', 'TDA-1002', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
-    ['', '', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
+    ['', 'TDA-1002', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
       'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
     /* FOB, CIF and Duration are optional — leave them blank, as above, unless
        the quote is priced on those terms or the line is a subscription. */
-    ['', '', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
+    ['', 'TDA-1003', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
       'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', '', '', '', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
     /* Platform, Serial Number, Start Date and End Date are optional too, and
        describe the line rather than pricing it. */
-    ['', '', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
+    ['', 'TDA-1003', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
       'Q-GLOBALNET-01', 'Network management licence', 'HW-NMS-12', '15', '60000', '', '', '12 months',
       'Huawei eSight', '2102351BSN10K2000123', today, nextYear,
       'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Term and cover period print on the quote; they do not multiply the price']
@@ -5747,7 +5812,7 @@ function quoteSheetRows(o, lines){
   rows.push(blank);
   if(showFob) rows.push(pad('Total on FOB terms', altTotal(lines, 'fobSubtotal')));
   if(showCif) rows.push(pad('Total on CIF terms', altTotal(lines, 'cifSubtotal')));
-  rows.push(pad(vat.applies ? 'Total excluding VAT' : 'Total quote value', Number(o.value) || 0));
+  rows.push(pad(vat.applies ? 'Total excluding VAT' : 'Total quote value', vat.net));
   if(vat.applies){
     rows.push(pad('VAT at ' + vat.rate + '%', vat.amount));
     rows.push(pad('Total payable, including VAT', vat.gross));
@@ -5861,6 +5926,7 @@ function generateQuoteDocument(id, reserved){
     '<div class="qhead">' +
       '<img class="qlogo" src="data:image/png;base64,' + TD_AFRICA_LOGO_B64 + '" alt="TD Africa">' +
       '<div class="qmeta">Quote reference<br><b>' + escapeHtml(displayRef(o)) + '</b><br>' +
+        (o.opportunityId ? 'Deal ID: <b>' + escapeHtml(o.opportunityId) + '</b><br>' : '') +
         'Date: ' + fmtDate(o.dateRaised) + '<br>' +
         'Valid ' + validity + ' days' + (expiry ? ' — until ' + fmtDate(expiry) : '') + '</div>' +
     '</div>' +
@@ -5904,7 +5970,7 @@ function generateQuoteDocument(id, reserved){
         (vat.applies ? ' class="r"' : '') + '>' +
         (multiPrice ? 'Total quote value (B2B terms)' : 'Total quote value') +
         (vat.applies ? ', excluding VAT' : '') + '</td>' +
-        '<td class="r">' + fmtMoney(o.value, o.currency) + '</td></tr>' +
+        '<td class="r">' + fmtMoney(vat.net, o.currency) + '</td></tr>' +
       (vat.applies
         ? '<tr class="alt-row"><td colspan="' + cols + '" class="r">VAT at ' + vat.rate + '%</td>' +
           '<td class="r">' + fmtMoney(vat.amount, o.currency) + '</td></tr>' +
@@ -6442,6 +6508,13 @@ function wireOpportunityForm(){
     const emailVal = document.getElementById('f-email').value.trim();
     if(emailVal && !isValidEmail(emailVal)){
       STATE.modalError = 'The contact email is not a valid address. Correct it before saving.';
+      render();
+      return;
+    }
+    const dealIdEl = document.getElementById('f-deal-id');
+    if(dealIdEl && !dealIdEl.value.trim()){
+      STATE.modalError = 'Enter the Deal ID for this quote — it is the reference the deal is already ' +
+        'tracked under, and Vantage does not invent one.';
       render();
       return;
     }
