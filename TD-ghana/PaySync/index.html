@@ -682,6 +682,83 @@ function purposeList(){
    The mismatch warning on the dashboard is deliberately left comparing against
    BRAND. It is not about presentation — it catches a page pointed at another
    company's Sheet, and it should still fire when it is. */
+/* The Sheet's own name for a pay element, where it has one. Task Systems calls
+   230115 "Staff transport deduction" and TD Africa calls it "Staff purchase";
+   the column, the arithmetic and the posting are identical and only the word
+   differs, so the word is a setting rather than a fork.
+
+   A Sheet that has never set one sends an empty map and every label here
+   resolves to the built-in text — which is why this is safe to call from every
+   heading without changing anything for anybody. */
+/* The staff types this Sheet uses. A company that has not listed any gets the
+   built-in three, which is also what an older script sends. */
+const BUILTIN_STAFF_TYPES = ['SALES', 'SUPPORT', 'TD SERVICES'];
+
+function staffTypeList(){
+  const ref = STATE.refData || {};
+  return (ref.staffTypes && ref.staffTypes.length) ? ref.staffTypes : BUILTIN_STAFF_TYPES;
+}
+
+/* Columns this company does not use, named on its own Sheet. Empty for a Sheet
+   that has not said, so every other company renders exactly as before.
+
+   Hidden, not removed: the column keeps its data and everything derived from it
+   still works. This only decides whether a person is shown it. */
+/* Fields this company chooses from a list rather than typing. Empty for a
+   Sheet that has not said, so every other company keeps its text box.
+
+   A field is only PICKED when there is something to pick from. An empty
+   drop-down is worse than a text box — it cannot be filled in at all, and
+   nothing on screen explains why — so an empty list falls back to typing. */
+function fieldPicked(field, options){
+  const p = (STATE.settings && STATE.settings.pickFields) || [];
+  if(p.indexOf(field) < 0) return false;
+  return !!(options && options.length);
+}
+
+/* Columns that are OFF for everybody unless a Sheet asks for them. A column
+   added for one company must not turn up on three others, and making those
+   three set something to stay as they already were would be backwards.
+
+   Keyed `field@view`. SAL_Dept on the security register is the only one today:
+   Task Systems asked for it, the TD companies never had it. */
+const OPT_IN_FIELDS = { 'bus_unit@security': true };
+
+/* Is this column shown on this screen?
+
+   Three questions in order: is it off by default here and not asked for; is it
+   hidden on this screen specifically; is it hidden everywhere. A `view` of null
+   means a screen with no per-view rules of its own. */
+function fieldVisible(field, view){
+  const s = STATE.settings || {};
+  const shown = s.showFields || [];
+  const hidden = s.hiddenFields || [];
+  const q = view ? field + '@' + view : null;
+
+  if (q && OPT_IN_FIELDS[q] &&
+      shown.indexOf(q) < 0 && shown.indexOf(field) < 0) return false;
+  if (q && hidden.indexOf(q) >= 0) return false;
+  return hidden.indexOf(field) < 0;
+}
+
+/* All three take an optional view, so a rule can apply to one screen. Called
+   without one they ask only the whole-Sheet question, which is what the forms
+   and the payslip want. */
+function fieldHidden(field, view){ return !fieldVisible(field, view || null); }
+
+/* `s` when the field is shown, nothing when it is hidden — so a header, a cell
+   and a colspan all stay in step from one decision. */
+function ifField(field, s, view){ return fieldHidden(field, view) ? '' : s; }
+
+/* 1 when shown, 0 when hidden. Column-group spans are counted, not written as
+   literals, or hiding a column silently shifts every heading beside it. */
+function colIf(field, view){ return fieldHidden(field, view) ? 0 : 1; }
+
+function fieldLabel(field, builtIn){
+  const m = (STATE.settings && STATE.settings.fieldLabels) || {};
+  return m[field] || builtIn;
+}
+
 function brandOrg(){
   const s = STATE.settings || {};
   return String(s.orgName || '').trim() || BRAND.org;
@@ -702,7 +779,8 @@ function brandAddress(){
 }
 
 function newRegisterFilter(){
-  return {q:'', grp:'', type:'', bu:'', purpose:'', status:'', sort:'name', dir:1, page:1, pageSize:50};
+  return {q:'', grp:'', type:'', bu:'', org:'', purpose:'', status:'',
+          sort:'name', dir:1, page:1, pageSize:50};
 }
 
 const STATE = {
@@ -742,7 +820,7 @@ const STATE = {
   /* Per-view filter state. */
   reg: {payroll:newRegisterFilter(), security:newRegisterFilter(), consolidated:newRegisterFilter()},
   chg: {q:'', type:'', showReversed:false, page:1, pageSize:25},
-  jnl: {q:'', category:'', section:'', businessUnit:'', purpose:'', page:1, pageSize:200,
+  jnl: {q:'', category:'', section:'', businessUnit:'', purpose:'', org:'', page:1, pageSize:200,
         loading:false, data:null, error:null, key:''},
   hist: {q:'', entity:'', action:'', actorId:'', from:'', to:'', page:1, pageSize:50,
          loading:false, data:null, error:null, key:''},
@@ -1084,9 +1162,16 @@ function renderTopBar(){
          scheme and the header is the only thing on screen that tells a person
          whose payroll they are looking at. */
       '<div class="top-h1">' + esc(brandOrg()) + ' &mdash; ' + esc(brandApp()) + '</div>' +
-      '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' + counts.sales + ' sales &nbsp;|&nbsp; ' +
-        counts.support + ' support &nbsp;|&nbsp; ' + counts.tds + ' TD Services &nbsp;|&nbsp; ' +
-        'all figures in naira (' + NAIRA + ')</div>' +
+      /* One entry per staff type this company actually uses, in the order
+         RefData lists them. The old three-way split is the fallback for a
+         script older than this page. */
+      '<div class="top-sub">' + counts.total + ' staff &nbsp;|&nbsp; ' +
+        (Array.isArray(counts.byType) && counts.byType.length
+          ? counts.byType.map(function(t){
+              return t.count + ' ' + esc(String(t.type).toLowerCase()); }).join(' &nbsp;|&nbsp; ')
+          : counts.sales + ' sales &nbsp;|&nbsp; ' + counts.support + ' support &nbsp;|&nbsp; ' +
+            counts.tds + ' TD Services') +
+        ' &nbsp;|&nbsp; all figures in naira (' + NAIRA + ')</div>' +
     '</div></div>' +
     '<div class="top-r">' +
       '<button class="top-mon' + (closed ? ' closed' : '') + '" data-act="open-periods">' +
@@ -1624,6 +1709,7 @@ function filteredStaff(mode){
     if(f.grp && e.salary_group !== f.grp) return false;
     if(f.type && e.staff_type !== f.type) return false;
     if(f.bu && e.bus_unit !== f.bu) return false;
+    if(f.org && (e.org || '') !== f.org) return false;
     if(f.purpose && (e.purpose || '') !== f.purpose) return false;
     if(f.status && (e.status || 'ACTIVE') !== f.status) return false;
     return true;
@@ -1650,12 +1736,15 @@ function registerControls(mode){
       'data-filter="reg.' + mode + ':q" value="' + attr(f.q) + '">' +
     selectHtml(mode + '-grp', [['','All salary groups']].concat((ref.salaryGroups || [])
       .map(function(g){ return [g, g]; })), f.grp, {act:'filter:reg.' + mode + ':grp'}) +
-    selectHtml(mode + '-type', [['','Sales + support + TDS'],['SALES','Sales only'],
-      ['SUPPORT','Support only'],['TD SERVICES','TD Services']], f.type,
+    selectHtml(mode + '-type', [['','All staff types']].concat(staffTypeList()
+      .map(function(t){ return [t, t]; })), f.type,
       {act:'filter:reg.' + mode + ':type'}) +
-    selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
-      .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'}) +
-    selectHtml(mode + '-purpose', [['','All purposes']].concat(purposeList()
+    ifField('bus_unit', selectHtml(mode + '-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
+      .map(function(b){ return [b, b]; })), f.bu, {act:'filter:reg.' + mode + ':bu'}), mode) +
+    selectHtml(mode + '-org', [['','All orgs']].concat((ref.orgs || [])
+      .map(function(o){ return [o, o]; })), f.org, {act:'filter:reg.' + mode + ':org'}) +
+    selectHtml(mode + '-purpose', [['','All ' + fieldLabel('purpose', 'purpose') + 's']]
+      .concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:reg.' + mode + ':purpose'}) +
     selectHtml(mode + '-status', [['','Any status'],['ACTIVE','Active'],['New Hire','New hire'],
       ['SUSPENDED','Suspended'],['EXITED','Exited']], f.status, {act:'filter:reg.' + mode + ':status'}) +
@@ -1743,7 +1832,7 @@ function viewRegister(mode){
 
   if(mode === 'payroll'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 8 : 7) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 7 : 6) + colIf('bus_unit', mode)) + '"></th>' +
         '<th class="hg" colspan="6">Payroll earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="1">Employer cost</th>' +
         '<th class="hg" colspan="5">Payroll deductions</th>' +
@@ -1753,8 +1842,9 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        sortHeader(mode, 'bus_unit', 'SAL_Dept') + sortHeader(mode, 'org', 'Org') +
-        sortHeader(mode, 'purpose', 'Purpose') +
+        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept'), mode) +
+        sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         sortHeader(mode, 'gross', 'Gross', 'r') + sortHeader(mode, 'basic', 'Basic', 'r') +
         sortHeader(mode, 'housing', 'Housing', 'r') + sortHeader(mode, 'transport', 'Transport', 'r') +
         sortHeader(mode, 'domestic', 'Domestic / arrears', 'r') +
@@ -1769,7 +1859,9 @@ function viewRegister(mode){
     body = p.rows.map(function(e){
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
-        '<td>' + esc(e.grade) + '</td><td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td>' +
+        '<td>' + esc(e.grade) + '</td>' +
+        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>', mode) +
+        '<td>' + esc(e.org) + '</td>' +
         purposeCell(e) +
         ['gross','basic','housing','transport','domestic','total_earn'].map(function(k){
           return '<td class="earn">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
@@ -1784,7 +1876,8 @@ function viewRegister(mode){
     }).join('');
   }else if(mode === 'security'){
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 7 : 6) +
+          (fieldVisible('bus_unit', 'security') ? 1 : 0)) + '"></th>' +
         '<th class="hg" colspan="8">Security earnings · DR 620100 / CR 230110</th>' +
         '<th class="hg" colspan="5">Fixed deductions</th>' +
         '<th class="hg" colspan="5">EMP account deductions · DR employee loan account</th>' +
@@ -1794,15 +1887,18 @@ function viewRegister(mode){
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
         sortHeader(mode, 'salary_group', 'Group') + sortHeader(mode, 'grade', 'Grade') +
-        sortHeader(mode, 'org', 'Org') + sortHeader(mode, 'purpose', 'Purpose') +
+        (fieldVisible('bus_unit', 'security')
+          ? sortHeader(mode, 'bus_unit', 'SAL_Dept') : '') +
+        sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         sortHeader(mode, 'sec_allow', 'Sec allow', 'r') + sortHeader(mode, 'resp_allow', 'Resp allow', 'r') +
         sortHeader(mode, 'sec_arrears', 'Sec arrears', 'r') + sortHeader(mode, 'special_sec', 'Special sec', 'r') +
         sortHeader(mode, 'commission', 'Commission', 'r') + sortHeader(mode, 'contract_sec', 'Ctr sec allow', 'r') +
         sortHeader(mode, 'other_allow', 'Other allow', 'r') +
         sortHeader(mode, 'sec_total_earn', 'Total earnings', 'r') +
         sortHeader(mode, 'vol_pension', 'Vol pension 230111', 'r') +
-        sortHeader(mode, 'staff_purchase', 'Staff purch 230115', 'r') +
-        sortHeader(mode, 'contract_welfare', 'Ctr welfare 230102', 'r') +
+        sortHeader(mode, 'staff_purchase', fieldLabel('staff_purchase', 'Staff purch 230115'), 'r') +
+        sortHeader(mode, 'contract_welfare', fieldLabel('contract_welfare', 'Ctr welfare 230102'), 'r') +
         /* Device financing is device financing only. The prototype added the
            laptop scheme into this column AND showed it again under its own
            heading, double-counting it on screen (defect D21). */
@@ -1821,7 +1917,9 @@ function viewRegister(mode){
       const car = (Number(e.car_scheme1) || 0) + (Number(e.car_scheme2) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
         '<td>' + esc((e.salary_group || '').split(' ')[0]) + '</td>' +
-        '<td>' + esc(e.grade) + '</td><td>' + esc(e.org) + '</td>' + purposeCell(e) +
+        '<td>' + esc(e.grade) + '</td>' +
+        (fieldVisible('bus_unit', 'security') ? '<td>' + esc(e.bus_unit) + '</td>' : '') +
+        '<td>' + esc(e.org) + '</td>' + purposeCell(e) +
         ['sec_allow','resp_allow','sec_arrears','special_sec','commission','contract_sec',
          'other_allow','sec_total_earn'].map(function(k){
           return '<td class="earn">' + esc(moneyOrBlank(e[k])) + '</td>'; }).join('') +
@@ -1838,15 +1936,17 @@ function viewRegister(mode){
     }).join('');
   }else{
     head = '<tr>' +
-        '<th class="hg" colspan="' + (can('sendPayslip') ? 7 : 6) + '"></th>' +
+        '<th class="hg" colspan="' + ((can('sendPayslip') ? 6 : 5) + colIf('bus_unit', mode)) + '"></th>' +
         '<th class="hg" colspan="3">Payroll</th>' +
         '<th class="hg" colspan="3">Security</th><th class="hg" colspan="1">Consolidated</th>' +
         '<th class="hg" colspan="3"></th>' +
       '</tr><tr>' +
         selectHeader(mode, p.rows) +
         sortHeader(mode, 'emp_no', 'Emp no') + sortHeader(mode, 'name', 'Name') +
-        sortHeader(mode, 'bus_unit', 'SAL_Dept') + sortHeader(mode, 'org', 'Org') +
-        sortHeader(mode, 'grade', 'Grade') + sortHeader(mode, 'purpose', 'Purpose') +
+        ifField('bus_unit', sortHeader(mode, 'bus_unit', 'SAL_Dept'), mode) +
+        sortHeader(mode, 'org', 'Org') +
+        sortHeader(mode, 'grade', 'Grade') +
+        sortHeader(mode, 'purpose', fieldLabel('purpose', 'Purpose')) +
         /* Labelled for what they are. The prototype's "JUNE PAY" and "JUNE
            TOTAL" columns actually showed July file values (defect D24). */
         sortHeader(mode, 'jul_net', 'Payroll before movements', 'r') +
@@ -1862,7 +1962,8 @@ function viewRegister(mode){
       const movP = (Number(e.netPay) || 0) - (Number(e.jul_net) || 0);
       const movS = (Number(e.netSecurity) || 0) - (Number(e.jul_sec_net) || 0);
       return '<tr>' + selectCell(e) + '<td class="muted">' + esc(e.emp_no) + '</td>' + nameCell(e) +
-        '<td>' + esc(e.bus_unit) + '</td><td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
+        ifField('bus_unit', '<td>' + esc(e.bus_unit) + '</td>', mode) +
+        '<td>' + esc(e.org) + '</td><td>' + esc(e.grade) + '</td>' +
         purposeCell(e) +
         '<td class="r">' + esc(moneyOrBlank(e.jul_net)) + '</td>' +
         '<td class="' + (movP > 0 ? 'earn' : movP < 0 ? 'ded' : 'r') + '">' + esc(signed(movP)) + '</td>' +
@@ -1879,7 +1980,8 @@ function viewRegister(mode){
   return '<div class="sec-title">' + esc(REGISTER_TITLES[mode]) +
       ' <span class="sub">' + esc(periodLabel(STATE.period)) + '</span>' +
       (canEditNow('editStaff')
-        ? '<button class="btn btn-f" data-act="new-staff">+ Add staff</button>' : '') +
+        ? '<button class="btn btn-f" data-act="new-staff">+ Add staff</button>' +
+          '<button class="btn btn-w" data-act="staff-upload">Import staff</button>' : '') +
     '</div>' +
     registerControls(mode) +
     (p.total === 0
@@ -1930,7 +2032,7 @@ async function ensureJournal(){
     const res = await rpc('getJournalPage', {
       period: STATE.period, page: f.page, pageSize: f.pageSize,
       filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
-        purpose:f.purpose}
+        purpose:f.purpose, org:f.org}
     });
     STATE.jnl.data = res;
     STATE.jnl.key = key;
@@ -1957,9 +2059,12 @@ function viewJournal(){
     selectHtml('jnl-sec', [['','Payroll + security'],['PAYROLL','Payroll only'],
       ['SECURITY','Security only'],['EMP_ACCT','EMP account only']], f.section,
       {act:'filter:jnl:section'}) +
-    selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
-      .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'}) +
-    selectHtml('jnl-purpose', [['','All purposes']].concat(purposeList()
+    ifField('bus_unit', selectHtml('jnl-bu', [['','All SAL_Depts']].concat((ref.businessUnits || [])
+      .map(function(b){ return [b, b]; })), f.businessUnit, {act:'filter:jnl:businessUnit'}), 'journal') +
+    selectHtml('jnl-org', [['','All orgs']].concat((ref.orgs || [])
+      .map(function(o){ return [o, o]; })), f.org, {act:'filter:jnl:org'}) +
+    selectHtml('jnl-purpose', [['','All ' + fieldLabel('purpose', 'purpose') + 's']]
+      .concat(purposeList()
       .map(function(v){ return [v, v]; })), f.purpose, {act:'filter:jnl:purpose'}) +
     selectHtml('jnl-size', [[100,'100 per page'],[200,'200'],[500,'500']], f.pageSize,
       {act:'filter:jnl:pageSize'}) +
@@ -2026,7 +2131,8 @@ function viewJournal(){
     table = '<div class="tw"><div class="ts" data-keep-scroll="jnl">' +
       '<table><thead><tr>' +
         '<th class="hc r">#</th><th class="hc">Emp no</th><th class="hc">Staff name</th>' +
-        '<th class="hc">SAL_Dept</th><th class="hc">Org</th><th class="hc">Purpose</th>' +
+        ifField('bus_unit', '<th class="hc">SAL_Dept</th>', 'journal') +
+        '<th class="hc">Org</th><th class="hc">' + esc(fieldLabel('purpose', 'Purpose')) + '</th>' +
         '<th class="hc">Ledger</th>' +
         '<th class="hc c">Category</th><th class="hc">Debit</th><th class="hc">Credit</th>' +
         '<th class="hc r">Amount</th><th class="hc">Section</th><th class="hc">EMP account</th>' +
@@ -2038,7 +2144,8 @@ function viewJournal(){
           '<td class="r muted">' + esc(r.seq) + '</td>' +
           '<td class="muted">' + esc(r.emp_no) + '</td>' +
           '<td class="nm">' + esc(r.name) + '</td>' +
-          '<td>' + esc(r.bus_unit) + '</td><td>' + esc(r.org) + '</td>' +
+          ifField('bus_unit', '<td>' + esc(r.bus_unit) + '</td>', 'journal') +
+          '<td>' + esc(r.org) + '</td>' +
           '<td>' + esc(r.purpose || '') + '</td>' +
           '<td style="font-weight:500">' + esc(r.ledger) + '</td>' +
           '<td class="c"><span class="bdg ' + (r.category === 'EARNINGS' ? 'bNEW' : 'bEXI') + '">' +
@@ -2421,7 +2528,8 @@ function viewStructure(){
   return '<div class="sec-title">Salary structure <span class="sub">' + rows.length +
       ' grades · applies to new hires</span>' +
       (can('editStructure')
-        ? '<button class="btn btn-f" data-act="edit-structure:">+ Add or edit a grade</button>' : '') +
+        ? '<button class="btn btn-f" data-act="edit-structure:">+ Add or edit a grade</button>' +
+          '<button class="btn btn-w" data-act="structure-upload">Import grades</button>' : '') +
     '</div>' +
     userBar('Editing a grade changes what future new hires are paid. It never reprices existing staff.') +
 
@@ -2788,10 +2896,300 @@ function renderOverlay(){
     user: modalUser, period: modalPeriod, controls: modalControls,
     confirm: modalConfirm, periods: modalPeriods, account: modalAccount,
     bulkPayslip: modalBulkPayslip, renumber: modalRenumber, schemeEdit: modalSchemeEdit,
-    fieldChange: modalFieldChange,
+    fieldChange: modalFieldChange, staffUpload: modalStaffUpload,
+    structureUpload: modalStructureUpload,
     diagnostics: modalDiagnostics
   }[m.kind];
   box.innerHTML = body ? body(m) : '';
+}
+
+/* ============================================================
+   BULK STAFF UPLOAD
+   ------------------------------------------------------------
+   A block pasted straight out of Excel arrives tab-separated; one saved as a
+   file arrives comma-separated with quotes. Both are common and neither is
+   worth asking a person to convert, so both are read.
+   ============================================================ */
+
+/* Tabs win when the first line has more of them than commas. Staff names are
+   held "SURNAME, FIRST" — the comma is in the data — so counting commas alone
+   would read a tab-separated paste as CSV and split every name in half. */
+function parsePasted(text){
+  const body = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if(!body) return [];
+  const first = body.split('\n')[0];
+  const tabs = (first.match(/\t/g) || []).length;
+  const commas = (first.match(/,/g) || []).length;
+  if(tabs >= commas){
+    return body.split('\n').map(function(line){ return line.split('\t')
+      .map(function(c){ return c.trim(); }); });
+  }
+  /* CSV, quotes and all. A doubled quote inside a quoted field is one quote. */
+  const rows = [];
+  let row = [], cell = '', inQ = false;
+  for(let i = 0; i < body.length; i++){
+    const ch = body[i];
+    if(inQ){
+      if(ch === '"'){
+        if(body[i+1] === '"'){ cell += '"'; i++; } else inQ = false;
+      } else cell += ch;
+    } else if(ch === '"'){ inQ = true; }
+    else if(ch === ','){ row.push(cell.trim()); cell = ''; }
+    else if(ch === '\n'){ row.push(cell.trim()); rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  row.push(cell.trim());
+  if(row.length > 1 || row[0] !== '') rows.push(row);
+  return rows;
+}
+
+async function downloadStructureTemplate(){
+  try{
+    const t = await rpc('structureUploadTemplate', {});
+    downloadCsv('PaySync_salary_structure_template.csv', [t.columns]);
+    toast('Template downloaded — ' + t.columns.length + ' columns, grade required.');
+  }catch(err){ toast(String(err.message || err), true); }
+}
+
+async function checkStructureUpload(){
+  const text = val('su2-text');
+  const table = parsePasted(text);
+  if(table.length < 2){
+    STATE.modalError = 'Paste at least a header line and one row under it.';
+    return render();
+  }
+  STATE.modal = {kind:'structureUpload', stage:'loading', text:text, table:table};
+  render();
+  try{
+    const preview = await rpc('previewStructureUpload', {table:table});
+    STATE.modal = {kind:'structureUpload', stage:'preview', text:text, table:table, preview:preview};
+  }catch(err){
+    STATE.modal = {kind:'structureUpload', stage:'paste', text:text};
+    STATE.modalError = String(err.message || err);
+  }
+  render();
+}
+
+async function commitStructureUpload(){
+  const m = STATE.modal;
+  STATE.busy = 'Importing grades';
+  render();
+  try{
+    const res = await rpc('commitStructureUpload', {table:m.table});
+    STATE.modal = null;
+    toast(res.message);
+    await reload();
+  }catch(err){
+    toast(String(err.message || err), true);
+  }finally{
+    STATE.busy = null;
+    render();
+  }
+}
+
+function modalStructureUpload(m){
+  if(m.stage === 'loading'){
+    return modalShell({cls:'narrow', title:'Import grades',
+      body:'<div class="empty">Checking the rows…</div>'});
+  }
+
+  if(m.stage === 'preview'){
+    const p = m.preview;
+    const bad = p.errors.length > 0;
+    return modalShell({
+      cls:'wide', title:'Import grades',
+      body:
+        (bad
+          ? '<div class="note red"><strong>' + p.errors.length + ' row(s) cannot be read, so ' +
+            'nothing will be imported.</strong><br>One bad row stops the whole file.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr><th class="hc r">Line</th>' +
+            '<th class="hc">Grade</th><th class="hc">What is wrong</th></tr></thead><tbody>' +
+            p.errors.slice(0, 40).map(function(e){
+              return '<tr><td class="r muted">' + esc(e.row) + '</td><td>' +
+                esc(e.grade || '') + '</td><td>' + esc(e.message) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>'
+          : '<div class="rec" style="margin:0 0 12px">' +
+              '<div class="rr"><span class="rlbl">New grades</span><span class="rval">' +
+                p.creates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Existing grades updated</span>' +
+                '<span class="rval">' + p.updates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Staff currently on a changed grade</span>' +
+                '<span class="rval">' + p.staffOnChangedGrades + '</span></div>' +
+            '</div>' +
+            '<div class="note">A salary structure sets what a <strong>new hire</strong> on that ' +
+            'grade is paid. Nobody already on the register is repriced by this import' +
+            (p.staffOnChangedGrades
+              ? ', including the ' + p.staffOnChangedGrades + ' already on these grades' : '') +
+            '.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr>' +
+              '<th class="hc r">Line</th><th class="hc">Action</th><th class="hc">Grade</th>' +
+              '<th class="hc">Salary group</th><th class="hc r">Gross</th>' +
+              '<th class="hc r">Was</th><th class="hc r">Staff on grade</th>' +
+            '</tr></thead><tbody>' +
+            p.sample.map(function(s){
+              return '<tr><td class="r muted">' + esc(s.line) + '</td>' +
+                '<td><span class="bdg ' + (s.action === 'create' ? 'bNEW' : 'bEXI') + '">' +
+                  esc(s.action) + '</span></td>' +
+                '<td style="font-weight:600">' + esc(s.grade) + '</td>' +
+                '<td>' + esc(s.salary_group || '—') + '</td>' +
+                '<td class="net">' + esc(money(s.gross)) + '</td>' +
+                '<td class="r muted">' + (s.grossBefore === null ? '—' : esc(money(s.grossBefore))) + '</td>' +
+                '<td class="r muted">' + esc(s.staffOnGrade) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>'),
+      footer:
+        '<button class="btn btn-ghost" data-act="structure-upload-back">Back</button>' +
+        (bad ? '' :
+          '<button class="btn btn-f" data-act="structure-upload-commit">Import ' +
+            (p.creates + p.updates) + ' grade(s)</button>')
+    });
+  }
+
+  return modalShell({
+    cls:'wide', title:'Import grades',
+    body:
+      '<div class="note">Paste straight out of Excel, or paste a CSV. The first line must name ' +
+      'the columns — <strong>grade</strong> is required and is what each row is matched on. ' +
+      'A column you leave out keeps whatever that grade already has.<br><br>' +
+      '<strong>count</strong>, <strong>updatedAt</strong> and <strong>updatedBy</strong> cannot ' +
+      'be uploaded; PaySync maintains them.</div>' +
+      '<div class="fld"><label>Rows</label>' +
+      '<textarea id="su2-text" rows="12" spellcheck="false" ' +
+      'style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px" ' +
+      'placeholder="grade&#9;salary_group&#9;basic&#9;housing&#9;transport&#10;' +
+      'OFF STD&#9;Junior Staff&#9;200000&#9;100000&#9;50000"></textarea></div>',
+    footer:
+      '<button class="btn btn-w" data-act="structure-upload-template">Download the template</button>' +
+      '<button class="btn btn-f" data-act="structure-upload-check">Check the rows</button>'
+  });
+}
+
+async function downloadStaffTemplate(){
+  try{
+    const t = await rpc('staffUploadTemplate', {});
+    /* Header only. A template with example rows in it gets imported by
+       somebody in a hurry. */
+    downloadCsv('PaySync_staff_template.csv', [t.columns]);
+    toast('Template downloaded — ' + t.columns.length + ' columns, emp_no and name required.');
+  }catch(err){ toast(String(err.message || err), true); }
+}
+
+async function checkStaffUpload(){
+  const text = val('su-text');
+  const table = parsePasted(text);
+  if(table.length < 2){
+    STATE.modalError = 'Paste at least a header line and one row under it.';
+    return render();
+  }
+  STATE.modal = {kind:'staffUpload', stage:'loading', text:text, table:table};
+  render();
+  try{
+    const preview = await rpc('previewStaffUpload', {period:STATE.period, table:table});
+    STATE.modal = {kind:'staffUpload', stage:'preview', text:text, table:table, preview:preview};
+  }catch(err){
+    STATE.modal = {kind:'staffUpload', stage:'paste', text:text};
+    STATE.modalError = String(err.message || err);
+  }
+  render();
+}
+
+async function commitStaffUpload(){
+  const m = STATE.modal;
+  STATE.busy = 'Importing staff';
+  render();
+  try{
+    const res = await rpc('commitStaffUpload', {period:STATE.period, table:m.table});
+    STATE.modal = null;
+    toast(res.message);
+    await reload();
+  }catch(err){
+    toast(String(err.message || err), true);
+  }finally{
+    STATE.busy = null;
+    render();
+  }
+}
+
+function modalStaffUpload(m){
+  if(m.stage === 'loading'){
+    return modalShell({cls:'narrow', title:'Import staff',
+      body:'<div class="empty">Checking the rows…</div>'});
+  }
+
+  if(m.stage === 'preview'){
+    const p = m.preview;
+    const bad = p.errors.length > 0;
+    return modalShell({
+      cls:'wide', title:'Import staff', sub:p.label,
+      body:
+        (bad
+          ? '<div class="note red"><strong>' + p.errors.length + ' row(s) cannot be read, so ' +
+            'nothing will be imported.</strong><br>One bad row stops the whole file — importing ' +
+            'the rest would leave you working out which person is missing.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr><th class="hc r">Line</th>' +
+            '<th class="hc">Employee</th><th class="hc">What is wrong</th></tr></thead><tbody>' +
+            p.errors.slice(0, 40).map(function(e){
+              return '<tr><td class="r muted">' + esc(e.row) + '</td><td>' +
+                esc(e.emp_no || '') + '</td><td>' + esc(e.message) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>' +
+            (p.errors.length > 40 ? '<div class="note">…and ' + (p.errors.length - 40) +
+              ' more.</div>' : '')
+          : '<div class="rec" style="margin:0 0 12px">' +
+              '<div class="rr"><span class="rlbl">New records</span><span class="rval">' +
+                p.creates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Existing records updated</span>' +
+                '<span class="rval">' + p.updates + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Total net pay now</span><span class="rval">' +
+                esc(money(p.netBefore)) + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Total net pay after</span><span class="rval">' +
+                esc(money(p.netAfter)) + '</span></div>' +
+              '<div class="rr"><span class="rlbl">Change</span><span class="rval" style="color:' +
+                (p.netChange > 0 ? 'var(--grn)' : p.netChange < 0 ? 'var(--red)' : 'inherit') +
+                '">' + esc(signed(p.netChange)) + '</span></div>' +
+            '</div>' +
+            '<div class="sub" style="margin-bottom:6px">First ' + p.sample.length +
+              ' rows, as they will be recorded. Business group, purpose and every total are ' +
+              'worked out here, not taken from the file.</div>' +
+            '<div class="tw"><div class="ts"><table><thead><tr>' +
+              '<th class="hc r">Line</th><th class="hc">Action</th><th class="hc">Emp no</th>' +
+              '<th class="hc">Name</th><th class="hc">Staff type</th>' +
+              '<th class="hc">Business group</th><th class="hc">Purpose</th>' +
+              '<th class="hc r">Net payroll</th><th class="hc r">Net security</th>' +
+            '</tr></thead><tbody>' +
+            p.sample.map(function(s){
+              return '<tr><td class="r muted">' + esc(s.line) + '</td>' +
+                '<td><span class="bdg ' + (s.action === 'create' ? 'bNEW' : 'bEXI') + '">' +
+                  esc(s.action) + '</span></td>' +
+                '<td class="muted">' + esc(s.emp_no) + '</td><td class="nm">' + esc(s.name) + '</td>' +
+                '<td>' + esc(s.staff_type) + '</td><td>' + esc(s.bg || '—') + '</td>' +
+                '<td>' + esc(s.purpose || '—') + '</td>' +
+                '<td class="net">' + esc(money(s.netPay)) + '</td>' +
+                '<td class="net">' + esc(money(s.netSecurity)) + '</td></tr>';
+            }).join('') + '</tbody></table></div></div>'),
+      footer:
+        '<button class="btn btn-ghost" data-act="staff-upload-back">Back</button>' +
+        (bad ? '' :
+          '<button class="btn btn-f" data-act="staff-upload-commit">Import ' +
+            (p.creates + p.updates) + ' record(s)</button>')
+    });
+  }
+
+  return modalShell({
+    cls:'wide', title:'Import staff', sub:periodLabel(STATE.period),
+    body:
+      '<div class="note">Paste straight out of Excel, or paste a CSV. The first line must name ' +
+      'the columns — <strong>emp_no</strong> and <strong>name</strong> are required and every ' +
+      'other column is optional. A column you leave out keeps whatever the record already has.' +
+      '<br><br>Business group, net pay and every total are worked out from what you send, not ' +
+      'read from it, so they cannot disagree with the register.</div>' +
+      '<div class="fld"><label>Rows</label>' +
+      '<textarea id="su-text" rows="12" spellcheck="false" ' +
+      'style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px" ' +
+      'placeholder="emp_no&#9;name&#9;grade&#9;staff_type&#9;purpose&#10;' +
+      'TD0001&#9;SURNAME, FIRST NAME&#9;C10&#9;SUPPORT&#9;Financial"></textarea></div>',
+    footer:
+      '<button class="btn btn-w" data-act="staff-upload-template">Download the template</button>' +
+      '<button class="btn btn-f" data-act="staff-upload-check">Check the rows</button>'
+  });
 }
 
 function modalShell(opts){
@@ -2844,7 +3242,8 @@ function modalPayslip(m){
       '<div class="ps-emp">' +
         psField('Employee no', p.emp_no) + psField('Name', p.name) +
         psField('Grade', p.grade || '—') + psField('Salary group', p.salary_group || '—') +
-        psField('SAL_Dept', p.bus_unit || '—') + psField('Purpose', p.purpose || '—') +
+        ifField('bus_unit', psField('SAL_Dept', p.bus_unit || '—')) +
+        psField(fieldLabel('purpose', 'Purpose'), p.purpose || '—') +
         psField('Organisation', p.org || '—') +
         psField('Staff type', p.staff_type || '—') +
         psField('Loan account', p.empAccount || '—') +
@@ -2953,11 +3352,12 @@ function modalMovement(m){
             })), '') +
           '<span class="hint">Their pay comes from this grade’s salary structure.</span></div>' +
         '<div class="fld"><label>Staff type</label>' +
-          selectHtml('mv-nh-type', [['SUPPORT','SUPPORT'],['SALES','SALES'],
-            ['TD SERVICES','TD SERVICES']], 'SUPPORT') + '</div>' +
-        '<div class="fld"><label>SAL_Dept</label>' +
-          selectHtml('mv-nh-bu', [['','— none —']].concat((ref.businessUnits || [])
-            .map(function(b){ return [b, b]; })), '') + '</div>' +
+          selectHtml('mv-nh-type', staffTypeList().map(function(t){ return [t, t]; }),
+            'SUPPORT') + '</div>' +
+        ifField('bus_unit',
+          '<div class="fld"><label>SAL_Dept</label>' +
+            selectHtml('mv-nh-bu', [['','— none —']].concat((ref.businessUnits || [])
+              .map(function(b){ return [b, b]; })), '') + '</div>') +
         '<div class="fld"><label>Purpose</label>' +
           selectHtml('mv-nh-purpose', [['','— none —']].concat(purposeList()
             .map(function(v){ return [v, v]; })), '') + '</div>' +
@@ -3027,6 +3427,9 @@ const REGISTER_FIELDS = {
     { field: 'vol_pension', label: 'Voluntary pension', code: '230111', effect: 'ded' },
     { field: 'staff_purchase', label: 'Staff purchase', code: '230115', effect: 'ded' },
     { field: 'contract_welfare', label: 'Contract welfare', code: '230102', effect: 'ded' },
+    /* Labels above are the built-in names, kept identical to the server's copy
+       so the equality test still holds. The Sheet's own names are applied when
+       the form is drawn, not here — see fieldLabel(). */
     { field: 'device_financing', label: 'Device financing', code: '230115', effect: 'ded' },
     { field: 'sec_tax', label: 'Security tax', code: '230103', effect: 'ded' },
     { field: 'sec_penalties', label: 'Security penalties', code: 'EMP account', effect: 'ded' },
@@ -3055,6 +3458,8 @@ const FIELD_LABELS = {
   special_sec:'Special security', commission:'Commission', contract_sec:'Contract staff security',
   other_allow:'Other security allowance', vol_pension:'Voluntary pension (230111)',
   staff_purchase:'Staff purchase (230115)', contract_welfare:'Contract welfare (230102)',
+  /* FIELD_LABELS is the built-in text; fieldLabelOf() below applies the Sheet's
+     overrides on top of it. */
   device_financing:'Device financing (230115)', sec_tax:'Security tax (230103)',
   sec_penalties:'Security penalties', laptop_scheme:'Laptop ownership scheme',
   simba_loan:'Simba fund loan', car_scheme1:'Car scheme', car_scheme2:'Car scheme (2)'
@@ -3095,20 +3500,41 @@ function modalStaff(m){
         '<div class="fld"><label>Status</label>' +
           selectHtml('st-status', [['ACTIVE','Active'],['New Hire','New hire'],
             ['SUSPENDED','Suspended'],['EXITED','Exited']], e ? e.status : 'ACTIVE') + '</div>' +
-        '<div class="fld"><label>Grade</label>' +
-          selectHtml('st-grade', [['','—']].concat(STATE.salaryStructure.map(function(s){
-            return [s.grade, s.grade]; })), e ? e.grade : '') + '</div>' +
+        /* Typed, not chosen. The list only ever held the grades already on the
+           SalaryStruct tab, so a grade that existed in the business but had not
+           been set up yet could not be recorded at all — and setting one up is
+           not something the person entering a staff record can do. The server
+           has always taken this as free text; nothing was validating it. */
+        (function(){
+          /* Typed by default; chosen where the company has said so and has a
+             list to choose from. The value and the id are identical either
+             way, so everything downstream is unaffected. */
+          const grades = (ref.grades && ref.grades.length)
+            ? ref.grades
+            : STATE.salaryStructure.map(function(s){ return s.grade; });
+          if(fieldPicked('grade', grades)){
+            return '<div class="fld"><label>Grade</label>' +
+              selectHtml('st-grade', [['','—']].concat(grades.map(function(g){ return [g, g]; })),
+                e ? e.grade : '') + '</div>';
+          }
+          return '<div class="fld"><label>Grade</label>' +
+            '<input type="text" id="st-grade" maxlength="60" value="' +
+              attr(e ? e.grade : '') + '" placeholder="e.g. C10">' +
+            '<span class="hint">Pay is entered on this record, so a grade with no ' +
+              'salary structure yet is fine.</span></div>';
+        })() +
         '<div class="fld"><label>Salary group</label>' +
           selectHtml('st-salary_group', [['','—']].concat((ref.salaryGroups || [])
             .map(function(g){ return [g, g]; })), e ? e.salary_group : '') + '</div>' +
         '<div class="fld"><label>Staff type</label>' +
-          selectHtml('st-staff_type', [['SUPPORT','SUPPORT'],['SALES','SALES'],
-            ['TD SERVICES','TD SERVICES']], e ? e.staff_type : 'SUPPORT') + '</div>' +
-        '<div class="fld"><label>SAL_Dept</label>' +
-          selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
-            .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
-          '<span class="hint">Decides the Business Group cost is charged to.</span></div>' +
-        '<div class="fld"><label>Purpose</label>' +
+          selectHtml('st-staff_type', staffTypeList().map(function(t){ return [t, t]; }),
+            e ? e.staff_type : 'SUPPORT') + '</div>' +
+        ifField('bus_unit',
+          '<div class="fld"><label>SAL_Dept</label>' +
+            selectHtml('st-bus_unit', [['','—']].concat((ref.businessUnits || [])
+              .map(function(b){ return [b, b]; })), e ? e.bus_unit : '') +
+            '<span class="hint">Decides the Business Group cost is charged to.</span></div>') +
+        '<div class="fld"><label>' + esc(fieldLabel('purpose', 'Purpose')) + '</label>' +
           selectHtml('st-purpose', [['','—']].concat(purposeList()
             .map(function(v){ return [v, v]; })), e ? e.purpose : '') +
           '<span class="hint">Sales: the product they sell. Support: Financial.</span></div>' +
@@ -3137,16 +3563,39 @@ function modalStaff(m){
 function modalScheme(){
   const ref = STATE.refData || {};
   const types = Object.keys(ref.schemeFieldByType || {});
+  /* A <select> with no options renders as an empty box that cannot be opened
+     and says nothing about why. That has now caught us three times — the
+     field-change form, the Purpose list, and here — so an empty list is
+     reported rather than drawn. Unlike those two there is no sensible
+     built-in default to fall back on: a scheme type names a deduction COLUMN,
+     and guessing which column a company's money comes out of is not
+     something this page may do. So it asks. */
+  const noTypes = types.length === 0;
   return modalShell({
     title:'Add deduction scheme',
     sub:'An amortising balance that runs down one instalment per period',
     body:
+      (noTypes
+        ? '<div class="note red"><strong>This Sheet has no deduction scheme types, so there ' +
+          'is nothing to choose and a scheme cannot be created.</strong><br><br>' +
+          'Add them on the <strong>RefData</strong> tab — one row per type:<br>' +
+          '<code>type</code> = <code>schemeType</code> &nbsp;·&nbsp; ' +
+          '<code>key</code> = the name people pick (e.g. <code>Laptop</code>) &nbsp;·&nbsp; ' +
+          '<code>value</code> = the staff column it deducts from (e.g. ' +
+          '<code>laptop_scheme</code>) &nbsp;·&nbsp; <code>active</code> = <code>TRUE</code>' +
+          '<br><br>If you have just pasted them, check they landed in separate columns rather ' +
+          'than all in column A, and that <code>active</code> reads TRUE. Then reload this page.' +
+          '</div>'
+        : '') +
       '<div class="form-row">' +
         '<div class="fld"><label>Employee *</label>' +
           selectHtml('sc-emp', [['','— select —']].concat(STATE.staff.map(function(s){
             return [s.emp_no, s.emp_no + ' — ' + s.name]; })), '') + '</div>' +
         '<div class="fld"><label>Scheme type *</label>' +
-          selectHtml('sc-type', types.map(function(t){ return [t, t]; }), types[0] || '') +
+          (noTypes
+            ? '<input type="text" disabled value="none set up" ' +
+              'style="color:var(--red)">'
+            : selectHtml('sc-type', types.map(function(t){ return [t, t]; }), types[0] || '')) +
           '<span class="hint">Decides which deduction column it feeds.</span></div>' +
         '<div class="fld"><label>Description</label>' +
           '<input type="text" id="sc-desc" placeholder="e.g. Dell Latitude 5540"></div>' +
@@ -3839,8 +4288,20 @@ const REGISTER_EXPORT = {
   }
 };
 
+/* Drops hidden columns from an export's column list and its headings together,
+   so the two can never fall out of step. A company that hides nothing gets
+   exactly the spec it always got. */
+function visibleSpec(spec){
+  const cols = [], head = [];
+  spec.cols.forEach(function(c, i){
+    if(fieldHidden(c)) return;
+    cols.push(c); head.push(spec.head[i]);
+  });
+  return {cols: cols, head: head};
+}
+
 function exportRegister(mode){
-  const spec = REGISTER_EXPORT[mode];
+  const spec = visibleSpec(REGISTER_EXPORT[mode]);
   const rows = filteredStaff(mode);
   const out = [['PaySync ' + REGISTER_TITLES[mode], periodLabel(STATE.period),
       'Exported ' + new Date().toISOString(), rows.length + ' of ' + STATE.staff.length + ' staff'],
@@ -3863,7 +4324,7 @@ async function exportJournal(){
     const res = await rpc('getJournalExport', {
       period: STATE.period,
       filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
-        purpose:f.purpose}
+        purpose:f.purpose, org:f.org}
     });
     const out = [
       ['PaySync journal', periodLabel(STATE.period),
@@ -3871,13 +4332,17 @@ async function exportJournal(){
         res.source === 'posted' ? 'Posted ' + res.postedAt : 'Exported ' + new Date().toISOString(),
         'Debits ' + res.totals.debit.toFixed(2), 'Credits ' + res.totals.credit.toFixed(2),
         res.totals.assertion.ok ? 'BALANCED' : 'DOES NOT BALANCE'],
-      ['Batch','Period','#','Emp no','Staff name','SAL_Dept','Org','Purpose','Ledger','Category',
-        'Debit code','Credit code','Amount','Section','EMP account']
+      ['Batch','Period','#','Emp no','Staff name']
+        .concat(fieldHidden('bus_unit') ? [] : ['SAL_Dept'])
+        .concat(['Org','Purpose','Ledger','Category',
+        'Debit code','Credit code','Amount','Section','EMP account'])
     ];
     res.rows.forEach(function(r){
-      out.push([res.batchRef || '', r.period, r.seq, r.emp_no, r.name, r.bus_unit, r.org,
+      out.push([res.batchRef || '', r.period, r.seq, r.emp_no, r.name]
+        .concat(fieldHidden('bus_unit') ? [] : [r.bus_unit])
+        .concat([r.org,
         r.purpose || '', r.ledger,
-        r.category, r.debit, r.credit, Number(r.amount).toFixed(2), r.section, r.empAccount || '']);
+        r.category, r.debit, r.credit, Number(r.amount).toFixed(2), r.section, r.empAccount || '']));
     });
     downloadCsv('PaySync_journal_' + stamp() + (res.batchRef ? '_' + res.batchRef : '_DRAFT') + '.csv', out);
     toast(res.rows.length + ' postings exported' + (res.batchRef ? ' — batch ' + res.batchRef : ' as a draft') + '.');
@@ -4203,7 +4668,7 @@ async function exportD365(){
     const res = await rpc('getD365Export', {
       period: STATE.period,
       filters: {q:f.q, category:f.category, section:f.section, businessUnit:f.businessUnit,
-        purpose:f.purpose}
+        purpose:f.purpose, org:f.org}
     });
     /* Two blank rows, then the headings on row 3, matching the file Finance
        feeds D365 — its importer is configured for that layout. */
@@ -4290,8 +4755,9 @@ function exportChanges(){
   }
   const out = [['PaySync movements', periodLabel(STATE.period), 'Exported ' + new Date().toISOString(),
       rows.length + ' rows'],
-    ['#','Source','Period','Emp no','Name','SAL_Dept','Org','Type','Payroll','Security','Reason',
-      'Staff status set','Recorded by','Recorded at','Reversed by','Reversed at','Reversal reason']];
+    ['#','Source','Period','Emp no','Name'].concat(fieldHidden('bus_unit') ? [] : ['SAL_Dept'])
+      .concat(['Org','Type','Payroll','Security','Reason',
+      'Staff status set','Recorded by','Recorded at','Reversed by','Reversed at','Reversal reason'])];
   rows.sort(function(a, b){
     if(!!a.derived !== !!b.derived) return a.derived ? -1 : 1;
     return Number(a.seq || 0) - Number(b.seq || 0);
@@ -4383,7 +4849,8 @@ function exportBgCost(){
   if(a.unallocated.length){
     out.push([]);
     out.push(['Could not be matched to a Business Group']);
-    out.push(['Emp no','Name','SAL_Dept','Staff type','Cost']);
+    out.push(['Emp no','Name'].concat(fieldHidden('bus_unit') ? [] : ['SAL_Dept'])
+      .concat(['Staff type','Cost']));
     a.unallocated.forEach(function(u){
       out.push([u.emp_no, u.name, u.bus_unit, u.staff_type, u.cost.toFixed(2)]);
     });
@@ -4692,6 +5159,30 @@ async function handleAction(act, arg, ev, el){
       case 'clear-selection':
         STATE.sel = {};
         return render();
+      case 'staff-upload':
+        STATE.modal = {kind:'staffUpload', stage:'paste'};
+        return render();
+      case 'structure-upload':
+        STATE.modal = {kind:'structureUpload', stage:'paste'};
+        return render();
+      case 'structure-upload-back':
+        STATE.modal = {kind:'structureUpload', stage:'paste', text:STATE.modal.text};
+        return render();
+      case 'structure-upload-template':
+        return downloadStructureTemplate();
+      case 'structure-upload-check':
+        return checkStructureUpload();
+      case 'structure-upload-commit':
+        return commitStructureUpload();
+      case 'staff-upload-back':
+        STATE.modal = {kind:'staffUpload', stage:'paste', text:STATE.modal.text};
+        return render();
+      case 'staff-upload-template':
+        return downloadStaffTemplate();
+      case 'staff-upload-check':
+        return checkStaffUpload();
+      case 'staff-upload-commit':
+        return commitStaffUpload();
       case 'bulk-payslip':
         if(!selCount()){ toast('Select some staff first.', true); return; }
         return openBulkPayslip(false);
