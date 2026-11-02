@@ -2454,6 +2454,24 @@ function renderDashboard() {
 /* =========================================================================
    Cash positions — an append-only series, not one mutable row
    ========================================================================= */
+/* The sub-line under each money field.
+
+   Defined once and used by BOTH the render and updatePositionsLive. They were
+   two copies of the same string, which is how the funds-in-transit line came to
+   exist in one and not the other: the field rendered a caption and then never
+   updated, because the live patch had never heard of it. */
+function posSubNgn(f, r) {
+  return "≈ " + fmtUSD(toUSD(f.ngnPosition, "NGN", r)) + " at ₦" + r.ngnRate + "/$";
+}
+function posSubGhs(f, r) {
+  return "≈ " + fmtUSD(toUSD(f.ghsPosition, "GHS", r)) + " at ₵" + r.ghsRate + "/$";
+}
+/* Already USD, so there is no rate to quote and nothing approximate about it —
+   just the figure, formatted, and what it means. */
+function posSubTransit(f) {
+  return fmtUSD(Number(f.fundsInTransit) || 0) + " — sent but not yet landed, counted in the total below.";
+}
+
 function positionsTotal(form) {
   return Number(form.usdGlobal || 0) + Number(form.usdNigeria || 0) + Number(form.usdGhana || 0) +
     Number(form.fundsInTransit || 0) +
@@ -2480,10 +2498,9 @@ function renderPositions() {
     fieldNum("USD — Global / HQ", "positions.usdGlobal", "$", null, "positions") +
     fieldNum("USD — sitting in Nigeria", "positions.usdNigeria", "$", null, "positions") +
     fieldNum("USD — sitting in Ghana", "positions.usdGhana", "$", null, "positions") +
-    fieldNum("Naira position (NGN)", "positions.ngnPosition", "₦", "≈ " + fmtUSD(toUSD(f.ngnPosition, "NGN", r)) + " at ₦" + r.ngnRate + "/$", "positions") +
-    fieldNum("Cedis position (GHS)", "positions.ghsPosition", "₵", "≈ " + fmtUSD(toUSD(f.ghsPosition, "GHS", r)) + " at ₵" + r.ghsRate + "/$", "positions") +
-    fieldNum("Funds in transit (USD)", "positions.fundsInTransit", "$",
-      "Sent but not yet landed — counted in the total below.", "positions") +
+    fieldNum("Naira position (NGN)", "positions.ngnPosition", "₦", posSubNgn(f, r), "positions") +
+    fieldNum("Cedis position (GHS)", "positions.ghsPosition", "₵", posSubGhs(f, r), "positions") +
+    fieldNum("Funds in transit (USD)", "positions.fundsInTransit", "$", posSubTransit(f), "positions") +
     '<div class="tcf-field"><label>As-of date</label><input class="tcf-input" type="date" data-draft="positions.asOfDate" value="' + attr(f.asOfDate) + '" /></div>' +
     '<div class="tcf-field"><label>Note (optional)</label><input class="tcf-input" data-draft="positions.note" value="' + attr(f.note || "") + '" placeholder="e.g. from the 17 Aug bank position workbook" /></div>' +
     '</div>' +
@@ -5411,10 +5428,14 @@ function updatePositionsLive() {
   var f = drafts.positions, r = model.rates;
   var total = document.getElementById("tcf-pos-total");
   if (total) total.textContent = fmtUSD(positionsTotal(f));
-  var ngnSub = appEl.querySelector('[data-sub="positions.ngnPosition"]');
-  if (ngnSub) ngnSub.textContent = "≈ " + fmtUSD(toUSD(f.ngnPosition, "NGN", r)) + " at ₦" + r.ngnRate + "/$";
-  var ghsSub = appEl.querySelector('[data-sub="positions.ghsPosition"]');
-  if (ghsSub) ghsSub.textContent = "≈ " + fmtUSD(toUSD(f.ghsPosition, "GHS", r)) + " at ₵" + r.ghsRate + "/$";
+  /* Every money field with a sub-line, so adding one cannot leave it stale. */
+  [["positions.ngnPosition", posSubNgn(f, r)],
+   ["positions.ghsPosition", posSubGhs(f, r)],
+   ["positions.fundsInTransit", posSubTransit(f)]
+  ].forEach(function (pair) {
+    var el = appEl.querySelector('[data-sub="' + pair[0] + '"]');
+    if (el) el.textContent = pair[1];
+  });
 }
 
 /* ---------- chart tooltips ---------- */
