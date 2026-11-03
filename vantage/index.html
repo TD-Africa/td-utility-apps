@@ -420,10 +420,12 @@
   }
   .li-f-platform{flex:1 1 180px;}
   .li-f-serial  {flex:1 1 210px;}
+  .li-f-itemno  {flex:0 1 120px;}
   .li-f-term    {flex:0 1 120px;}
   .li-f-start,.li-f-end{flex:0 1 146px;}
   .li-grid:not(.show-asset) .li-f-platform,
   .li-grid:not(.show-asset) .li-f-serial,
+  .li-grid:not(.show-asset) .li-f-itemno,
   .li-grid:not(.show-term) .li-f-term,
   .li-grid:not(.show-term) .li-f-start,
   .li-grid:not(.show-term) .li-f-end{display:none;}
@@ -1213,7 +1215,8 @@ function applyFilters(list){
     if(!withinDateRange(o[f.dateField || 'dateRaised'], f.from, f.to)) return false;
     if(q){
       const hay = [o.customerName, o.quoteNumber, o.placeholderRef, o.productLine,
-        o.partnerName, o.businessUnit, o.salesRep, o.soNumber, o.invoiceNumber]
+        o.partnerName, o.businessUnit, o.salesRep, o.soNumber, o.invoiceNumber,
+        o.opportunityId]
         .join(' ').toLowerCase();
       if(hay.indexOf(q) === -1) return false;
     }
@@ -1643,6 +1646,7 @@ function snapshotLineItemRows(){
       duration: row.querySelector('.li-dur').value,
       platform: row.querySelector('.li-platform').value,
       serialNumber: row.querySelector('.li-serial').value,
+      itemNo: row.querySelector('.li-itemno').value,
       startDate: row.querySelector('.li-start').value,
       endDate: row.querySelector('.li-end').value
     };
@@ -3802,6 +3806,7 @@ function lineItemRowHtml(rowId, prefill){
     '<div class="li-detail">' +
       detail('platform', 'platform', 'Platform', 'type="text" maxlength="60" placeholder="e.g. Huawei OceanStor"', p.platform) +
       detail('serial', 'serial', 'Serial number', 'type="text" maxlength="120" placeholder="e.g. 2102351BSN10K2000123"', p.serialNumber) +
+      detail('itemno', 'itemno', 'Item No', 'type="text" maxlength="40" placeholder="e.g. 001"', p.itemNo) +
       detail('term', 'dur', 'Term', 'type="text" maxlength="40" placeholder="e.g. 12 months"', p.duration) +
       detail('start', 'start', 'Start date', 'type="date"', p.startDate) +
       detail('end', 'end', 'End date', 'type="date"', p.endDate) +
@@ -3918,6 +3923,7 @@ function collectLineItems(){
     const duration = row.querySelector('.li-dur').value.trim();
     const platform = row.querySelector('.li-platform').value.trim();
     const serialNumber = row.querySelector('.li-serial').value.trim();
+    const itemNo = row.querySelector('.li-itemno').value.trim();
     const startDate = row.querySelector('.li-start').value;
     const endDate = row.querySelector('.li-end').value;
     /* Identified by what it is, not by what it costs — a zero price is a valid
@@ -3933,7 +3939,7 @@ function collectLineItems(){
         cifPrice: cifPrice, cifSubtotal: qty * cifPrice,
         /* Descriptive only — none of these touches a figure. */
         duration: duration, platform: platform, serialNumber: serialNumber,
-        startDate: startDate, endDate: endDate
+        startDate: startDate, endDate: endDate, itemNo: itemNo
       });
     }
   });
@@ -3953,7 +3959,8 @@ function seedUsesTerm(seed){
 }
 function seedUsesAssetDetail(seed){
   return (seed || []).some(function(li){
-    return String(li.platform || '').trim() || String(li.serialNumber || '').trim();
+    return String(li.platform || '').trim() || String(li.serialNumber || '').trim() ||
+      String(li.itemNo || '').trim();
   });
 }
 
@@ -3973,8 +3980,9 @@ function lineItemsBlock(scrollClass, seed){
           'Adds an FOB and a CIF unit price to every line. Both are recorded and printed on the quote with their own subtotals and totals. The B2B price remains the quote\'s value.') +
         check('li-show-term', 'Lines have a term or cover period', showTerm,
           'Adds a term and a start and end date to every line, for software, subscriptions and support cover. They print on the quote and never change the price.') +
-        check('li-show-asset', 'Lines have a platform or serial number', showAsset,
-          'Adds a platform and a serial number to every line, for renewals and support against equipment already installed.') +
+        check('li-show-asset', 'Lines have a platform, serial or item number', showAsset,
+          'Adds a platform, a serial number and your own Item No to every line — for renewals and ' +
+          'support against equipment already installed, and for tracking individual lines by your own numbering.') +
       '</div>' +
       '<div id="li-grid" class="li-grid' + (showAlt ? ' show-alt' : '') +
         (showTerm ? ' show-term' : '') + (showAsset ? ' show-asset' : '') + '">' +
@@ -4250,6 +4258,12 @@ function renderDetailModal(){
         '<div>' +
           '<div class="detail-block"><h4>Opportunity details</h4>' +
             kv('Status', statusPill(o)) +
+            /* Shown on every record, not only where a linked quote happens to
+               exist — it is a reference people look up and quote back, and a
+               field you are asked to fill in has to be visible afterwards. */
+            kv('Deal ID', o.opportunityId
+              ? '<span class="mono">' + escapeHtml(o.opportunityId) + '</span>'
+              : '<span style="color:var(--danger);">Not set</span>') +
             kv('Pipeline', Number(o.pipeline) ? PIPELINE_META[Number(o.pipeline)].label : 'Closed') +
             kv('Business Unit', o.businessUnit ? escapeHtml(o.businessUnit) : '<span style="color:var(--danger);">Not set</span>') +
             kv('Order Type', escapeHtml(o.orderType || '—')) +
@@ -4402,6 +4416,7 @@ function vatOf(o){
 
 function lineItemDetailText(li){
   const bits = [];
+  if(li.itemNo) bits.push('Item No: ' + li.itemNo);
   if(li.platform) bits.push('Platform: ' + li.platform);
   if(li.serialNumber) bits.push('S/N: ' + li.serialNumber);
   if(li.duration) bits.push('Term: ' + li.duration);
@@ -4499,8 +4514,19 @@ function renderDuplicateModal(){
     modalHead('Duplicate for another partner — ' + escapeHtml(src.customerName), 'Source: ' + escapeHtml(displayRef(src))) +
     '<form id="duplicate-form"><div class="modal-body">' +
       modalErrorBlock() +
-      '<div class="field-hint" style="margin-bottom:14px;">Creates a brand new quote with its own TDQ number for the same customer, but its own partner, pricing and terms. Both share one <b>Deal ID</b> (' +
-        escapeHtml(src.opportunityId || 'assigned on save') + ') so reporting counts the deal once, at the higher quote.</div>' +
+      '<div class="field-hint" style="margin-bottom:14px;">Creates a brand new quote with its own TDQ number ' +
+        'for the same customer, but its own partner, pricing and terms. Both share one <b>Deal ID</b>' +
+        (src.opportunityId
+          ? ' (<span class="mono">' + escapeHtml(src.opportunityId) + '</span>), carried over from the ' +
+            'source, so reporting counts the deal once, at the higher quote.'
+          : ', so reporting counts the deal once, at the higher quote. This quote predates Deal IDs and ' +
+            'has none, so enter the reference the deal is tracked under below — it is applied to both.') +
+        '</div>' +
+      (src.opportunityId
+        ? ''
+        : '<div class="field"><label>Deal ID</label>' +
+          '<input type="text" id="dup-deal-id" maxlength="40" required ' +
+            'placeholder="The reference this deal is already tracked under"></div>') +
       '<div class="field-row">' +
         '<div class="field"><label>Customer / End User name</label>' +
           '<input type="text" id="dup-customer" value="' + escapeHtml(src.customerName) + '" required></div>' +
@@ -4549,6 +4575,7 @@ function plainTextQuoteBody(o, lineItems){
     '',
     'Please find our quote ' + displayRef(o) + ' for your review' +
       (expiry ? ', valid until ' + fmtDate(expiry) + '.' : '.'),
+    (o.opportunityId ? 'Deal ID: ' + o.opportunityId : ''),
     '',
     lines.map(function(li){
       const sub = lineItemDetailText(li);
@@ -4561,7 +4588,11 @@ function plainTextQuoteBody(o, lineItems){
       ? 'Total on FOB terms: ' + fmtMoney(altTotal(lines, 'fobSubtotal'), o.currency) + '\n' : '') +
     (seedHasPrice(lines, 'cifSubtotal')
       ? 'Total on CIF terms: ' + fmtMoney(altTotal(lines, 'cifSubtotal'), o.currency) + '\n' : '') +
-    'Total: ' + fmtMoney(o.value, o.currency),
+    (vatOf(o).applies
+      ? 'Total excluding VAT: ' + fmtMoney(vatOf(o).net, o.currency) + '\n' +
+        'VAT at ' + vatOf(o).rate + '%: ' + fmtMoney(vatOf(o).amount, o.currency) + '\n' +
+        'Total payable: ' + fmtMoney(o.value, o.currency)
+      : 'Total: ' + fmtMoney(o.value, o.currency)),
     '',
     'The formatted quote document is attached.',
     '',
@@ -5085,7 +5116,7 @@ async function exportWithLineItemsCsv(){
     });
     const rows = [['Reference', 'Customer', 'Business Group', 'Business Unit', 'Sales rep', 'Status',
       'Pipeline', 'Currency', 'Line #', 'Description', 'SKU',
-      'Platform', 'Serial number', 'Term', 'Start date', 'End date', 'Qty',
+      'Item No', 'Platform', 'Serial number', 'Term', 'Start date', 'End date', 'Qty',
       'FOB price', 'FOB subtotal', 'CIF price', 'CIF subtotal',
       'B2B price', 'B2B subtotal', 'Quote total (B2B)', 'FOB total', 'CIF total']];
     sortOpportunities(list).forEach(function(o){
@@ -5095,10 +5126,10 @@ async function exportWithLineItemsCsv(){
       const tail = [Number(o.value) || 0, Number(o.fobValue) || 0, Number(o.cifValue) || 0];
       if(!items.length){
         rows.push(base.concat(['', o.productLine || '(no line items)',
-          '', '', '', '', '', '', '', '', '', '', '', '', ''], tail));
+          '', '', '', '', '', '', '', '', '', '', '', '', '', ''], tail));
       }else{
         items.forEach(function(li){
-          rows.push(base.concat([li.seq, li.description, li.sku,
+          rows.push(base.concat([li.seq, li.description, li.sku, li.itemNo || '',
             li.platform || '', li.serialNumber || '', li.duration || '',
             li.startDate || '', li.endDate || '', li.qty,
             li.fobPrice || 0, li.fobSubtotal || 0, li.cifPrice || 0, li.cifSubtotal || 0,
@@ -5205,6 +5236,9 @@ const HEADER_ALIASES = {
                      'revise quote', 'update quote'],
   dealId:           ['deal id', 'deal', 'deal reference', 'opportunity id'],
   vatRate:          ['vat %', 'vat', 'vat rate', 'vat percent', 'vat percentage'],
+  /* Deliberately not 's/n' or 'serial': those belong to the serial number, and
+     one alias may only ever name one field. */
+  itemNo:           ['item no', 'item number', 'item ref', 'line no', 'line number', 'tracking no'],
   platform:         ['platform', 'platform name', 'solution platform'],
   serialNumber:     ['serial number', 'serial', 'serial no', 'serial nos', 'sn', 's/n', 'device serial'],
   startDate:        ['start date', 'start', 'cover start', 'commencement date', 'effective date'],
@@ -5346,6 +5380,7 @@ function parseBulkRow(row, headerMap, rowIndex){
   const duration = String(get('duration') || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   const platform = String(get('platform') || '').replace(/\s+/g, ' ').trim().slice(0, 60);
   const serialNumber = String(get('serialNumber') || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const itemNo = String(get('itemNo') || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   /* Accepts whatever the spreadsheet wrote — the same reader the quote dates
      already use — and normalises to yyyy-MM-dd. A value that cannot be read is
      named rather than dropped, since a wrong cover period would print on a
@@ -5423,7 +5458,7 @@ function parseBulkRow(row, headerMap, rowIndex){
       fobPrice: fob.value, fobSubtotal: quantity * fob.value,
       cifPrice: cif.value, cifSubtotal: quantity * cif.value,
       duration: duration, platform: platform, serialNumber: serialNumber,
-      startDate: startDate.value, endDate: endDate.value
+      startDate: startDate.value, endDate: endDate.value, itemNo: itemNo
     },
     currency: (String(get('currency') || 'NGN').trim().toUpperCase() === 'USD') ? 'USD' : 'NGN',
     dateRaised: dateRaised,
@@ -5621,7 +5656,8 @@ function processBulkRows(rows){
         '</div>'
       : '');
 
-  previewEl.innerHTML = '<table><thead><tr><th>Row(s)</th><th>Opportunity Ref</th><th>Customer</th><th>Partner</th>' +
+  previewEl.innerHTML = '<table><thead><tr><th>Row(s)</th><th>Opportunity Ref</th><th>Customer</th>' +
+    '<th>Deal ID</th><th>Partner</th>' +
       '<th>Business Group</th><th>Business Unit</th><th>Rep</th><th>Line items</th>' +
       '<th class="num-cell">Total</th><th>P</th><th>Status</th></tr></thead><tbody>' +
     results.slice(0, 200).map(function(r){
@@ -5634,6 +5670,8 @@ function processBulkRows(rows){
               ? '<span class="mono" style="font-size:11px;">' + escapeHtml(r.opportunityRef) + '</span>'
               : '<span style="color:var(--text-faint);">— own quote</span>')) + '</td>' +
         '<td>' + escapeHtml(r.data.customerName || '') + '</td>' +
+        '<td><span class="mono" style="font-size:11px;">' +
+          escapeHtml(r.data.opportunityId || '—') + '</span></td>' +
         '<td>' + escapeHtml(r.data.partnerName || '—') + '</td>' +
         '<td>' + escapeHtml(r.data.businessGroup || '') + '</td>' +
         '<td>' + escapeHtml(r.data.businessUnit || '') + '</td>' +
@@ -5719,7 +5757,7 @@ function downloadBulkTemplate(){
   const headers = ['Quote Number', 'Deal ID', 'VAT %',
     'Customer Name', 'Partner Name', 'Business Group', 'Business Unit', 'Order Type',
     'Contact Person', 'Contact Email', 'Opportunity Ref', 'Item Description', 'SKU', 'Quantity',
-    'Unit Price', 'FOB Price', 'CIF Price', 'Duration', 'Platform', 'Serial Number',
+    'Unit Price', 'FOB Price', 'CIF Price', 'Duration', 'Platform', 'Serial Number', 'Item No',
     'Start Date', 'End Date', 'Currency', 'Date Raised', 'Expected Close Date',
     'Sales Rep', 'Probability', 'Pipeline', 'Validity', 'Notes'];
   const today = todayStr();
@@ -5732,22 +5770,22 @@ function downloadBulkTemplate(){
   })();
   const rows = [
     ['', 'TDA-1001', '7.5', 'Zenith Retail Ltd', '', 'Mobile', 'Samsung Mobile', 'Hardware', 'Chuka Obi', 'chuka@zenithretail.com',
-      '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
+      '', 'Samsung Galaxy A15 (bulk)', 'SM-A155F', '200', '85000', '', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '60', '2', '30', 'At negotiation stage'],
     ['', 'TDA-1002', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware/Service', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+      'Q-NORTHGATE-01', 'Smart Home Hub', 'SCE-HUB-01', '10', '120000', '', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['', 'TDA-1002', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Service', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
+      'Q-NORTHGATE-01', 'Installation & Setup', '', '1', '200000', '', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', ''],
     ['', 'TDA-1002', '', 'Northgate Systems', '', 'Modern Lifestyle Solution (MLS)', 'Samsung CE', 'Hardware', 'Bola Ade', 'bola@northgate.com',
-      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
+      'Q-NORTHGATE-01', 'Mounting bracket (included at no charge)', 'SCE-BRK-01', '10', '0', '', '', '', '', '', '', '', '', 'NGN', today, '', 'Amaka Obi', '50', '3', '30', 'Zero-price line — bundled at no cost'],
     /* FOB, CIF and Duration are optional — leave them blank, as above, unless
        the quote is priced on those terms or the line is a subscription. */
     ['', 'TDA-1003', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Hardware', 'Femi Coker', 'femi@globalnetworks.com',
-      'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', '', '', '', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
+      'Q-GLOBALNET-01', 'Huawei Enterprise Switches', 'HW-SW-4500', '15', '450000', '395000', '428000', '', '', '', '', '', '', 'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Quoted on FOB, CIF and B2B terms'],
     /* Platform, Serial Number, Start Date and End Date are optional too, and
        describe the line rather than pricing it. */
     ['', 'TDA-1003', '', 'Global Networks Ltd', 'Signal Alliance', 'Enterprise Beta', 'Huawei', 'Software', 'Femi Coker', 'femi@globalnetworks.com',
       'Q-GLOBALNET-01', 'Network management licence', 'HW-NMS-12', '15', '60000', '', '', '12 months',
-      'Huawei eSight', '2102351BSN10K2000123', today, nextYear,
+      'Huawei eSight', '2102351BSN10K2000123', 'ITM-001', today, nextYear,
       'NGN', today, '', 'Chidi Nwosu', '55', '2', '30', 'Term and cover period print on the quote; they do not multiply the price']
   ];
   /* Deliberately no worked example of a revision in the template. A sample row
@@ -5786,7 +5824,7 @@ function quoteSheetRows(o, lines){
   if(o.note) rows.push(['Note', o.note]);
   rows.push(blank);
 
-  const head = ['S/N', 'Description', 'SKU / Code', 'Platform', 'Serial number',
+  const head = ['S/N', 'Item No', 'Description', 'SKU / Code', 'Platform', 'Serial number',
     'Term', 'Start date', 'End date', 'Qty'];
   if(showFob) head.push('FOB unit', 'FOB subtotal');
   if(showCif) head.push('CIF unit', 'CIF subtotal');
@@ -5794,8 +5832,9 @@ function quoteSheetRows(o, lines){
   rows.push(head);
 
   lines.forEach(function(li, i){
-    const row = [i + 1, li.description, li.sku || '', li.platform || '', li.serialNumber || '',
-      li.duration || '', li.startDate || '', li.endDate || '', Number(li.qty) || 0];
+    const row = [i + 1, li.itemNo || '', li.description, li.sku || '', li.platform || '',
+      li.serialNumber || '', li.duration || '', li.startDate || '', li.endDate || '',
+      Number(li.qty) || 0];
     if(showFob) row.push(Number(li.fobPrice) || 0, Number(li.fobSubtotal) || 0);
     if(showCif) row.push(Number(li.cifPrice) || 0, Number(li.cifSubtotal) || 0);
     row.push(Number(li.unitPrice) || 0, Number(li.subtotal) || 0);
@@ -6651,6 +6690,9 @@ function wireSecondaryForms(){
             businessUnit: document.getElementById('dup-bu').value,
             orderType: document.getElementById('dup-order-type').value,
             deliveryTerms: document.getElementById('dup-delivery').value.trim(),
+            /* Only present when the source predates Deal IDs; otherwise the
+               server carries the source's across. */
+            opportunityId: (document.getElementById('dup-deal-id') || {value: ''}).value.trim(),
             note: src.note || '',
             currency: document.getElementById('f-currency').value,
             lineItems: lineItems
